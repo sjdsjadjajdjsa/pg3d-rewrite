@@ -172,6 +172,8 @@ class Exporter:
         self.col = Gltf("collision")
         self.vis.doc["samplers"].append({"magFilter": 9729, "minFilter": 9987, "wrapS": 10497, "wrapT": 10497})
         self.mesh_cache = {}     # (mesh key) -> MeshHandler data
+        self.node_by_transform = {}  # (file, path_id) of a Unity Transform -> glTF node
+        self.pending_skins = []  # (node index, SkinnedMeshRenderer, mesh data)
         self.vis_meshes = {}     # (mesh key, submesh range, materials) -> gltf mesh index
         self.col_meshes = {}
         self.materials = {}      # material key -> gltf material index
@@ -217,7 +219,10 @@ class Exporter:
                     for tris in h.get_triangles():
                         t = np.array(tris, dtype=np.uint32).reshape(-1, 3)[:, [0, 2, 1]]
                         subs.append(t)
-                    data = dict(name=mesh.m_Name, pos=pos, nrm=nrm, uv0=uv0, uv1=uv1, subs=subs, acc={})
+                    joints, weights = skin_weights(h, vc)
+                    bindposes = [unity_matrix(m) for m in (getattr(mesh, "m_BindPose", None) or [])]
+                    data = dict(name=mesh.m_Name, pos=pos, nrm=nrm, uv0=uv0, uv1=uv1, subs=subs, acc={},
+                                joints=joints, weights=weights, bindposes=bindposes)
             except Exception as e:
                 self.stats["mesh_errors"] += 1
                 print(f"  mesh {getattr(mesh, 'm_Name', '?')}: {e!r}"[:200], file=sys.stderr)
@@ -429,10 +434,13 @@ class Exporter:
             except Exception:
                 pass
         mesh_idx = self.visual(comps)
-        static_batched, extras = False, None
+        static_batched, extras, skinned = False, None, None
         if isinstance(mesh_idx, tuple):
-            mesh_idx, static_batched, extras = mesh_idx
+            mesh_idx, static_batched, extras, skinned = mesh_idx
         idx = self.vis.node(**node)
+        self.node_by_transform[obj_key(t)] = idx
+        if skinned is not None:
+            self.pending_skins.append((idx, skinned[0], skinned[1]))
         children = []
         if mesh_idx is not None:
             if static_batched:
@@ -466,11 +474,10 @@ class Exporter:
             mf = deref(comps["MeshFilter"][0])
             mesh_ptr = mf.m_Mesh if mf is not None else None
         elif "SkinnedMeshRenderer" in comps:
-            # Skinned meshes (weapon + arms, characters) are exported in their bind pose,
-            # placed at the renderer's transform. No bones/animation yet.
+            # Skinned meshes (weapon + arms, characters): exported with their skeleton
+            # (glTF skin) so animations can move them.
             mr = deref(comps["SkinnedMeshRenderer"][0])
             mesh_ptr = mr.m_Mesh if mr is not None else None
-            self.stats["skinned_as_static"] += 1
         else:
             return None
         if mr is None or mesh_ptr is None or not getattr(mr, "m_Enabled", True):
@@ -486,9 +493,15 @@ class Exporter:
         mats = list(mr.m_Materials)
         mat_keys = tuple(ptr_key(m) for m in mats)
         extras = self.lightmap_extras(mr, md)
-        key = (id(md), first, count, mat_keys, extras is not None)
+        is_skinned = (type(mr).__name__ == "SkinnedMeshRenderer" and md["joints"] is not None
+                      and len(getattr(mr, "m_Bones", []) or []) > 0)
+        key = (id(md), first, count, mat_keys, extras is not None, is_skinned)
         if key not in self.vis_meshes:
             attrs = self.vertex_accessors(self.vis, md, True)
+            if is_skinned:
+                attrs = dict(attrs,
+                             JOINTS_0=self.vis.accessor(md["joints"], "VEC4", 34962),
+                             WEIGHTS_0=self.vis.accessor(md["weights"], "VEC4", 34962))
             if extras is not None and "TEXCOORD_1" not in attrs and "TEXCOORD_0" in attrs:
                 # Unity falls back to the first UV set for lightmapping
                 attrs = dict(attrs, TEXCOORD_1=attrs["TEXCOORD_0"])
@@ -512,7 +525,26 @@ class Exporter:
         m = self.vis_meshes[key]
         if extras is not None:
             self.stats["lightmapped_renderers"] += 1
-        return None if m is None else (m, static, extras)
+        if is_skinned:
+            self.stats["skinned"] += 1
+        return None if m is None else (m, static, extras, (mr, md) if is_skinned else None)
+
+    def finalize_skins(self):
+        """Turn recorded SkinnedMeshRenderers into glTF skins (needs all nodes to exist)."""
+        S = np.diag([-1.0, 1.0, 1.0, 1.0])  # our X-mirroring as a matrix
+        for node_idx, smr, md in self.pending_skins:
+            joints = []
+            for b in smr.m_Bones:
+                joints.append(self.node_by_transform.get(ptr_key(b)))
+            if not joints or any(j is None for j in joints) or len(md["bindposes"]) < len(joints):
+                self.stats["skin_errors"] += 1
+                continue
+            # Unity bindpose = bone.worldToLocal * renderer.localToWorld at bind time, which is
+            # exactly glTF's inverse bind matrix; convert it to our mirrored space: S * M * S.
+            ibm = np.array([(S @ md["bindposes"][i] @ S).T.flatten() for i in range(len(joints))], np.float32)
+            g = self.vis.doc
+            g.setdefault("skins", []).append({"joints": joints, "inverseBindMatrices": self.vis.accessor(ibm, "MAT4")})
+            g["nodes"][node_idx]["skin"] = len(g["skins"]) - 1
 
     # ---- colliders / lights
     def collect_colliders(self, name, comps, world):
@@ -562,6 +594,7 @@ class Exporter:
                             "baked": int(getattr(l, "m_Lightmapping", getattr(getattr(l, "m_BakingOutput", None), "lightmapBakeType", 0)) or 0)})
 
     def save(self, info):
+        self.finalize_skins()
         self.vis.save(self.out)
         self.col.save(self.out)
         (self.out / "colliders.json").write_text(json.dumps(self.colliders))
@@ -589,6 +622,37 @@ def texture_float_rgb(tex):
     except Exception as e:
         print(f"  lightmap {tex.m_Name} fmt {fmt}: {e!r}"[:200], file=sys.stderr)
         return None
+
+
+def obj_key(o):
+    r = o.object_reader
+    return (r.assets_file.name, r.path_id)
+
+
+def unity_matrix(m):
+    return np.array([[m.e00, m.e01, m.e02, m.e03], [m.e10, m.e11, m.e12, m.e13],
+                     [m.e20, m.e21, m.e22, m.e23], [m.e30, m.e31, m.e32, m.e33]], dtype=np.float64)
+
+
+def skin_weights(h, vc):
+    """Per-vertex bone indices/weights padded to 4 (glTF JOINTS_0 / WEIGHTS_0), or (None, None)."""
+    bi = getattr(h, "m_BoneIndices", None)
+    if not bi or len(bi) < vc:
+        return None, None
+    joints = np.zeros((vc, 4), np.uint16)
+    weights = np.zeros((vc, 4), np.float32)
+    bw = getattr(h, "m_BoneWeights", None)
+    for v in range(vc):
+        idx = list(bi[v])[:4]
+        joints[v, :len(idx)] = idx
+        if bw and len(bw) >= vc:
+            w = list(bw[v])[:4]
+            weights[v, :len(w)] = w
+        else:
+            weights[v, 0] = 1.0  # one bone per vertex
+    s = weights.sum(axis=1, keepdims=True)
+    weights = np.where(s > 0, weights / np.maximum(s, 1e-9), np.array([1, 0, 0, 0], np.float32))
+    return joints, weights
 
 
 def safe(s):

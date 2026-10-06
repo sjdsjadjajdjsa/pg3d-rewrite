@@ -100,8 +100,129 @@ def export_model(row, idx):
     if not ex.col.doc["nodes"]:
         ex.col.node(name="empty")
     ex.col.doc["scenes"][0]["nodes"] = list(range(len(ex.col.doc["nodes"])))
-    ex.save({"weapon": name, "animations": animation_lengths(assets, f"{name}_Inner")})
+    clips = export_animations(ex, assets, f"{name}_Inner")
+    ex.save({"weapon": name, "animations": animation_lengths(assets, f"{name}_Inner"), "clips": clips})
     print(f"model {name}: {json.dumps(dict(ex.stats))}")
+
+
+FPS = 30.0
+
+
+def _vals(v, n):
+    return [v.x, v.y, v.z, v.w][:n] if n == 4 else [v.x, v.y, v.z]
+
+
+def sample_curve(keys, times, n):
+    """Evaluate a Unity AnimationCurve (cubic Hermite keys) at `times`. Returns (len, n)."""
+    t = np.array([k.time for k in keys])
+    p = np.array([_vals(k.value, n) for k in keys], dtype=np.float64)
+    vin = np.array([_vals(k.inSlope, n) for k in keys], dtype=np.float64)
+    vout = np.array([_vals(k.outSlope, n) for k in keys], dtype=np.float64)
+    out = np.empty((len(times), n))
+    for i, x in enumerate(times):
+        if x <= t[0] or len(t) == 1:
+            out[i] = p[0]
+            continue
+        if x >= t[-1]:
+            out[i] = p[-1]
+            continue
+        j = int(np.searchsorted(t, x, side="right")) - 1
+        dt = t[j + 1] - t[j]
+        u = (x - t[j]) / dt
+        m0, m1 = vout[j] * dt, vin[j + 1] * dt
+        h00, h10, h01, h11 = 2*u**3 - 3*u**2 + 1, u**3 - 2*u**2 + u, -2*u**3 + 3*u**2, u**3 - u**2
+        v = h00 * p[j] + h10 * m0 + h01 * p[j + 1] + h11 * m1
+        # infinite slopes mean "stepped" keys in Unity
+        step = ~np.isfinite(m0) | ~np.isfinite(m1)
+        out[i] = np.where(step, p[j], v)
+    return out
+
+
+def euler_to_quat(deg):
+    """Unity euler angles (degrees, applied Z then X then Y) -> quaternions (x, y, z, w)."""
+    r = np.radians(deg) / 2
+    cx, cy, cz = np.cos(r[:, 0]), np.cos(r[:, 1]), np.cos(r[:, 2])
+    sx, sy, sz = np.sin(r[:, 0]), np.sin(r[:, 1]), np.sin(r[:, 2])
+    # q = qy * qx * qz
+    w = cy * cx * cz + sy * sx * sz
+    x = cy * sx * cz + sy * cx * sz
+    y = sy * cx * cz - cy * sx * sz
+    z = cy * cx * sz - sy * sx * cz
+    return np.stack([x, y, z, w], axis=1)
+
+
+def export_animations(ex, assets, inner_name):
+    """Convert the legacy Animation clips on `inner_name` into glTF animations."""
+    anim = None
+    for o in assets.objects:
+        if o.type.name == "Animation":
+            a = o.read()
+            go = em.deref(a.m_GameObject)
+            if go is not None and go.m_Name == inner_name:
+                anim = (a, go)
+                break
+    if anim is None:
+        return []
+    a, go = anim
+    t = next(em.deref(getattr(c, "component", c)) for c in go.m_Component
+             if getattr(c, "component", c).deref().type.name == "Transform")
+    root = ex.node_by_transform.get(em.obj_key(t))
+    if root is None:
+        return []
+    doc = ex.vis.doc
+
+    def resolve(path):
+        node = root
+        for part in [x for x in path.split("/") if x]:
+            kids = doc["nodes"][node].get("children", [])
+            hit = next((k for k in kids if doc["nodes"][k]["name"] == part), None)
+            if hit is None:
+                hit = next((k for k in kids if doc["nodes"][k]["name"].lower() == part.lower()), None)
+            if hit is None:
+                return None
+            node = hit
+        return node
+
+    names = []
+    for ptr in a.m_Animations:
+        clip = em.deref(ptr)
+        if clip is None:
+            continue
+        length = clip_length(clip)
+        times = np.arange(0.0, length + 1e-6, 1.0 / FPS)
+        if len(times) == 0 or times[-1] < length - 1e-4:
+            times = np.append(times, length)
+        tacc = ex.vis.accessor(times.astype(np.float32), "SCALAR", minmax=True)
+        samplers, channels = [], []
+
+        def add(node, path, values, kind):
+            samplers.append({"input": tacc, "output": ex.vis.accessor(values.astype(np.float32), kind),
+                             "interpolation": "LINEAR"})
+            channels.append({"sampler": len(samplers) - 1, "target": {"node": node, "path": path}})
+
+        for cv in clip.m_RotationCurves or []:
+            node = resolve(cv.path)
+            if node is not None and cv.curve.m_Curve:
+                q = sample_curve(cv.curve.m_Curve, times, 4)
+                q /= np.maximum(np.linalg.norm(q, axis=1, keepdims=True), 1e-9)
+                add(node, "rotation", q * np.array([1, -1, -1, 1]), "VEC4")
+        for cv in getattr(clip, "m_EulerCurves", None) or []:
+            node = resolve(cv.path)
+            if node is not None and cv.curve.m_Curve:
+                q = euler_to_quat(sample_curve(cv.curve.m_Curve, times, 3))
+                add(node, "rotation", q * np.array([1, -1, -1, 1]), "VEC4")
+        for cv in clip.m_PositionCurves or []:
+            node = resolve(cv.path)
+            if node is not None and cv.curve.m_Curve:
+                add(node, "translation", sample_curve(cv.curve.m_Curve, times, 3) * np.array([-1, 1, 1]), "VEC3")
+        for cv in clip.m_ScaleCurves or []:
+            node = resolve(cv.path)
+            if node is not None and cv.curve.m_Curve:
+                add(node, "scale", sample_curve(cv.curve.m_Curve, times, 3), "VEC3")
+        if channels:
+            doc.setdefault("animations", []).append({"name": clip.m_Name, "samplers": samplers, "channels": channels})
+            names.append(clip.m_Name)
+    return names
 
 
 def clip_length(clip):
