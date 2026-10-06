@@ -23,10 +23,49 @@ pub struct Marker {
     pub position: Vec3,
 }
 
-#[derive(Deserialize)]
-struct Info {
+/// Contents of info.json written by the exporter.
+#[derive(Deserialize, Resource, Default, Clone)]
+pub struct MapInfo {
     #[serde(default)]
-    markers: Vec<Marker>,
+    pub markers: Vec<Marker>,
+    /// Lightmap PNGs are stored divided by this; multiply back via lightmap_exposure.
+    #[serde(default = "one")]
+    pub lightmap_scale: f32,
+    #[serde(default)]
+    pub render: RenderSettings,
+    #[serde(default)]
+    pub lights: Vec<LightDef>,
+}
+
+fn one() -> f32 {
+    1.0
+}
+
+/// Unity RenderSettings of the scene (ambient light, fog). Colours are gamma-space.
+#[derive(Deserialize, Default, Clone)]
+pub struct RenderSettings {
+    pub ambient_sky: Option<[f32; 3]>,
+    #[serde(default)]
+    pub ambient_intensity: Option<f32>,
+    #[serde(default)]
+    pub fog: bool,
+    pub fog_color: Option<[f32; 3]>,
+    /// 1 = linear, 2 = exponential, 3 = exponential squared
+    pub fog_mode: Option<u32>,
+    pub fog_start: Option<f32>,
+    pub fog_end: Option<f32>,
+    pub fog_density: Option<f32>,
+}
+
+/// A Unity Light. type: 0 spot, 1 directional, 2 point.
+#[derive(Deserialize, Clone)]
+pub struct LightDef {
+    pub name: String,
+    #[serde(rename = "type")]
+    pub kind: u32,
+    pub color: [f32; 3],
+    pub intensity: f32,
+    pub direction: Vec3,
 }
 
 /// One collider from the original level (Unity BoxCollider, SphereCollider, ...).
@@ -63,14 +102,8 @@ pub struct Trigger {
 impl Plugin for MapPlugin {
     fn build(&self, app: &mut App) {
         app.insert_resource(ClearColor(Color::srgb(0.45, 0.65, 0.9)))
-            // The original maps are mostly lit by pre-baked lightmaps, which we don't
-            // import yet, so use a strong flat ambient light plus one "sun".
-            .insert_resource(GlobalAmbientLight {
-                color: Color::WHITE,
-                brightness: 1500.0,
-                ..default()
-            })
             .init_resource::<MapMarkers>()
+            .init_resource::<MapInfo>()
             .add_systems(PreStartup, load_markers)
             .add_systems(Startup, (spawn_map, spawn_colliders));
     }
@@ -82,9 +115,12 @@ fn map_dir(data: &DataDir, map: &CurrentMap) -> std::path::PathBuf {
 
 fn load_markers(mut commands: Commands, data: Res<DataDir>, map: Res<CurrentMap>) {
     let path = map_dir(&data, &map).join("info.json");
-    match std::fs::read_to_string(&path).map(|s| serde_json::from_str::<Info>(&s)) {
-        Ok(Ok(info)) => commands.insert_resource(MapMarkers(info.markers)),
-        Ok(Err(e)) => warn!("{}: {e}", path.display()),
+    match std::fs::read_to_string(&path).map(|s| serde_json::from_str::<MapInfo>(&s)) {
+        Ok(Ok(info)) => {
+            commands.insert_resource(MapMarkers(info.markers.clone()));
+            commands.insert_resource(info);
+        }
+        Ok(Err(e)) => error!("{}: {e}", path.display()),
         Err(e) => error!("{}: {e} (did you export the map?)", path.display()),
     }
 }
@@ -95,15 +131,6 @@ fn spawn_map(mut commands: Commands, assets: Res<AssetServer>, map: Res<CurrentM
     commands.spawn((
         Name::new(format!("map {}", map.0)),
         WorldAssetRoot(assets.load(GltfAssetLabel::Scene(0).from_asset(path))),
-    ));
-
-    commands.spawn((
-        DirectionalLight {
-            illuminance: 4_000.0,
-            shadow_maps_enabled: true,
-            ..default()
-        },
-        Transform::from_xyz(30.0, 60.0, 20.0).looking_at(Vec3::ZERO, Vec3::Y),
     ));
 }
 

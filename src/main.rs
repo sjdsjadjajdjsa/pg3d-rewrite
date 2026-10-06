@@ -6,12 +6,15 @@
 //!       PG3D_DATA=/path/to/export.
 //!
 //! Controls: click = capture mouse, Esc = release, WASD move, Space jump,
+//!           left mouse = fire, R = reload, 1-6 / wheel = switch weapon,
 //!           V = toggle walk / fly camera, F12 = screenshot.
 
 mod camera;
+mod lighting;
 mod map;
 mod player;
 mod screenshot;
+mod weapons;
 
 use avian3d::prelude::*;
 use bevy::prelude::*;
@@ -48,9 +51,11 @@ fn main() {
         .insert_resource(map::CurrentMap(map_name))
         .add_plugins((
             map::MapPlugin,
+            lighting::LightingPlugin,
             player::PlayerPlugin,
             camera::CameraPlugin,
             screenshot::ScreenshotPlugin,
+            weapons::WeaponsPlugin,
         ))
         .run();
 }

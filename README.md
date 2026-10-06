@@ -11,14 +11,17 @@ installed copy of the game by the research project next door
 ## Run
 
 ```sh
-# once per map, in ../pixel-gun-3d-re:
+# once, in ../pixel-gun-3d-re:
 tools/venv/bin/python scripts/export_map.py arena
+tools/venv/bin/python scripts/find_behaviours.py WeaponSounds > private/index/weaponsounds.tsv
+tools/venv/bin/python scripts/export_weapons.py
 
 # here:
 cargo run -- arena
 ```
 
 Controls: click = capture mouse, Esc = release, WASD = move, Space = jump,
+left mouse = fire (hold), R = reload, 1-6 / mouse wheel = switch weapon,
 V = toggle walk / fly camera (fly: Space/Ctrl up/down, Shift fast), F12 = screenshot.
 
 ## Layout
@@ -29,6 +32,8 @@ V = toggle walk / fly camera (fly: Space/Ctrl up/down, Shift fast), F12 = screen
 | `src/map.rs` | loads `map.gltf` (visuals), `collision.gltf` + `colliders.json` (physics), `info.json` (spawn points) |
 | `src/player.rs` | first-person walking; constants say which values were recovered from the game and which are guesses |
 | `src/camera.rs` | mouse look, walk/fly camera |
+| `src/lighting.rs` | makes it look like the original: baked lightmaps, fog, ambient, sun, no tone mapping |
+| `src/weapons.rs` | loadout, first-person weapon model, shooting (hitscan), reloading, HUD |
 | `src/screenshot.rs` | F12 screenshots, `PG3D_AUTOSHOT` for automated checks |
 
 Debug environment variables: `PG3D_TRACE=1` (log player position), `PG3D_AUTOWALK=1`

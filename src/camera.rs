@@ -49,7 +49,7 @@ pub struct PlayerCamera {
     pub sensitivity: f32,
 }
 
-fn spawn_camera(mut commands: Commands) {
+pub fn spawn_camera(mut commands: Commands) {
     // PG3D_CAM="x,y,z,tx,ty,tz" overrides the start position (x,y,z) and look target (t*).
     let start = std::env::var("PG3D_CAM")
         .ok()

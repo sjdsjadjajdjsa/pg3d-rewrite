@@ -20,6 +20,8 @@ pub const RADIUS: f32 = 0.4;
 pub const CENTER_Y: f32 = -0.1;
 /// Steepest walkable slope, degrees (Unity slopeLimit).
 pub const SLOPE_LIMIT_DEG: f32 = 80.0;
+/// Highest ledge we walk up without jumping (Unity stepOffset).
+pub const STEP_OFFSET: f32 = 0.6;
 
 // --- RECOVERED: physics settings + FirstPersonControlSharp fields ----------------
 /// Physics.gravity (globalgamemanagers PhysicsManager).
@@ -105,6 +107,7 @@ fn move_player(
     player: Single<(Entity, &mut Transform, &mut Player, &Children)>,
     colliders: Query<&Collider>,
     move_and_slide: MoveAndSlide,
+    spatial: SpatialQuery,
 ) {
     let (entity, mut transform, mut p, children) = player.into_inner();
     let Some((collider_entity, collider)) =
@@ -149,30 +152,68 @@ fn move_player(
     }
 
     // --- move and slide along whatever we hit
+    let filter = SpatialQueryFilter::from_mask(Layer::World).with_excluded_entities([entity, collider_entity]);
     let min_ground_normal_y = SLOPE_LIMIT_DEG.to_radians().cos();
-    let mut grounded = false;
     // while moving up (jumping) we can't be standing on anything
     let rising = p.velocity.y > 0.0;
-    let out = move_and_slide.move_and_slide(
-        collider,
-        transform.translation + Vec3::Y * CENTER_Y,
-        Quat::IDENTITY,
-        p.velocity,
-        time.delta(),
-        &MoveAndSlideConfig::default(),
-        // collide with the level only: not with ourselves, not with trigger volumes
-        &SpatialQueryFilter::from_mask(Layer::World).with_excluded_entities([entity, collider_entity]),
-        |hit| {
-            if !rising && hit.normal.y >= min_ground_normal_y {
+    let start = transform.translation + Vec3::Y * CENTER_Y;
+    let slide = |from: Vec3, velocity: Vec3, grounded: &mut bool| {
+        move_and_slide.move_and_slide(
+            collider,
+            from,
+            Quat::IDENTITY,
+            velocity,
+            time.delta(),
+            &MoveAndSlideConfig::default(),
+            // collide with the level only: not with ourselves, not with trigger volumes
+            &filter,
+            |hit| {
+                if !rising && hit.normal.y >= min_ground_normal_y {
+                    *grounded = true;
+                }
+                MoveAndSlideHitResponse::Accept
+            },
+        )
+    };
+    let mut grounded = false;
+    let out = slide(start, p.velocity, &mut grounded);
+    let mut end = out.position;
+    let mut projected = out.projected_velocity;
+
+    // --- step up small ledges (Unity CharacterController.stepOffset):
+    // if a wall stopped us while walking on the ground, try the same move from
+    // STEP_OFFSET higher, then drop back down onto whatever is there.
+    let wanted = Vec2::new(p.velocity.x, p.velocity.z) * dt;
+    let got = Vec2::new(end.x - start.x, end.z - start.z);
+    if p.grounded && !rising && wanted.length() > 1e-4 && got.length() < wanted.length() * 0.9 {
+        let up = spatial
+            .cast_shape(collider, start, Quat::IDENTITY, Dir3::Y, &ShapeCastConfig::from_max_distance(STEP_OFFSET), &filter)
+            .map_or(STEP_OFFSET, |h| h.distance);
+        let mut g = false;
+        let high = slide(start + Vec3::Y * up, Vec3::new(p.velocity.x, 0.0, p.velocity.z), &mut g).position;
+        let down = spatial.cast_shape(
+            collider,
+            high,
+            Quat::IDENTITY,
+            Dir3::NEG_Y,
+            &ShapeCastConfig::from_max_distance(up + 0.05),
+            &filter,
+        );
+        if let Some(hit) = down {
+            let landed = high - Vec3::Y * hit.distance;
+            let got_high = Vec2::new(landed.x - start.x, landed.z - start.z);
+            if hit.normal1.y.abs() >= min_ground_normal_y && got_high.length() > got.length() + 1e-3 {
+                end = landed;
+                projected = Vec3::new(p.velocity.x, 0.0, p.velocity.z);
                 grounded = true;
             }
-            MoveAndSlideHitResponse::Accept
-        },
-    );
-    transform.translation = out.position - Vec3::Y * CENTER_Y;
+        }
+    }
+
+    transform.translation = end - Vec3::Y * CENTER_Y;
     if !grounded || p.velocity.y > 0.0 {
         // keep vertical speed from the slide result (e.g. stop when hitting a ceiling)
-        p.velocity.y = out.projected_velocity.y;
+        p.velocity.y = projected.y;
     }
     p.grounded = grounded;
 }
