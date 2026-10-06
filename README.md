@@ -1,0 +1,39 @@
+# Pixel Gun 3D — static reverse engineering
+
+Offline, static study of Pixel Gun 3D (PC edition, Unity 2022.3.76f1, IL2CPP)
+to recover its code structure (classes, functions, game systems).
+
+## Layout
+
+| Path       | What                                                        | In git? |
+|------------|-------------------------------------------------------------|---------|
+| `tools/`   | Downloaded tools (Cpp2IL, Ghidra plugins, Python venv)      | no      |
+| `private/` | Everything extracted from the game (Cpp2IL output, Ghidra project, bundles) | no |
+| `scripts/` | Our own helper scripts                                      | yes     |
+| `notes/`   | Our own notes / findings                                    | yes     |
+
+Game install (read-only, never modify, never copy into git):
+`~/.local/share/Steam/steamapps/common/Pixel Gun 3D PC Edition/`
+
+## Pipeline
+
+1. `tools/cpp2il/cpp2il --game-path <install> --exe-name "Pixel Gun 3D" --use-processor attributeinjector --output-as diffable-cs --output-to private/cpp2il/cs`
+   (and `--output-as dummydll --output-to private/cpp2il/dummydll` for DLLs you can open in ILSpy/dnSpy).
+2. `python3 scripts/cs_index.py` → `private/index/{types,methods,fields}.tsv` + `summary.md`.
+3. Ghidra project `private/ghidra/PixelGun3D` (import + auto-analysis, headless).
+4. `scripts/apply_names.sh` → runs `scripts/ghidra/ApplyCpp2IL.java`: names every method
+   `Namespace::Class::Method`, adds C# signatures as comments, creates `/Il2Cpp/*_o` structs.
+
+5. `tools/venv/bin/python scripts/bundle_index.py` → `private/index/bundles.json` (which bundle holds which internal file).
+6. `tools/venv/bin/python scripts/export_map.py <map>` → `private/export/maps/<map>/` (glTF + colliders + spawn
+   markers) for the Rust/Bevy rewrite in `../pixel-gun-3d-rs`. `--list` shows the 626 map names.
+
+Obfuscated identifiers (CJK glyphs) get token aliases: `T_<token>` types, `m_<token>` methods,
+`f_<token>` fields. The token matches the `[Token]` in the Cpp2IL C# output.
+
+## Rules
+
+- Game files and anything derived from them **never get committed**. `tools/` and
+  `private/` are git-ignored.
+- Static analysis only: no debuggers, hooks, Frida or Cheat Engine on the running
+  game; never touch its servers or accounts.
