@@ -66,10 +66,13 @@ def export_stats(rows, gen):
     print(f"weapons.json: {len(weapons)} weapons")
 
 
-def export_model(row, idx):
-    path, _cls, name, pid = row
+def export_prefab(row, idx, out, gltf_name, anim_holder, skip=()):
+    """Export the GameObject owning MonoBehaviour `row` (index.tsv row) as <out>/<gltf_name>.gltf,
+    with skins and the legacy animations of the child called `anim_holder`.
+    Returns (exporter, animation clip names)."""
+    path, _cls, _name, pid = row
     full = os.path.join(GAME, path)
-    # load the weapon bundle plus everything it depends on (shared textures, shaders)
+    # load the bundle plus everything it depends on (shared meshes, textures, clips)
     seen, queue = {full}, [full]
     while queue:
         assets = UnityPy.load(queue.pop())
@@ -87,9 +90,9 @@ def export_model(row, idx):
     if mb is None:
         mb = next(o for o in assets.objects if o.path_id == int(pid))
     go = mb.read(check_read=False).m_GameObject.read()
-    out = OUT / name
     ex = em.Exporter(assets, out)
-    ex.vis.name = "weapon"
+    ex.vis.name = gltf_name
+    ex.skip_names = set(skip)
     root_t = next(em.deref(getattr(c, "component", c)) for c in go.m_Component
                   if getattr(c, "component", c).deref().type.name == "Transform")
     n = ex.walk(root_t, np.eye(4))
@@ -100,7 +103,13 @@ def export_model(row, idx):
     if not ex.col.doc["nodes"]:
         ex.col.node(name="empty")
     ex.col.doc["scenes"][0]["nodes"] = list(range(len(ex.col.doc["nodes"])))
-    clips = export_animations(ex, assets, f"{name}_Inner")
+    clips = export_animations(ex, assets, anim_holder)
+    return ex, assets, clips
+
+
+def export_model(row, idx):
+    name = row[2]
+    ex, assets, clips = export_prefab(row, idx, OUT / name, "weapon", f"{name}_Inner")
     ex.save({"weapon": name, "animations": animation_lengths(assets, f"{name}_Inner"), "clips": clips})
     print(f"model {name}: {json.dumps(dict(ex.stats))}")
 
@@ -153,22 +162,24 @@ def euler_to_quat(deg):
 
 def export_animations(ex, assets, inner_name):
     """Convert the legacy Animation clips on `inner_name` into glTF animations."""
-    anim = None
+    # several prefabs can contain an object with this name: take the one we exported
+    anim, root = None, None
     for o in assets.objects:
-        if o.type.name == "Animation":
-            a = o.read()
-            go = em.deref(a.m_GameObject)
-            if go is not None and go.m_Name == inner_name:
-                anim = (a, go)
-                break
+        if o.type.name != "Animation":
+            continue
+        a = o.read()
+        go = em.deref(a.m_GameObject)
+        if go is None or go.m_Name != inner_name:
+            continue
+        t = next(em.deref(getattr(c, "component", c)) for c in go.m_Component
+                 if getattr(c, "component", c).deref().type.name == "Transform")
+        root = ex.node_by_transform.get(em.obj_key(t))
+        if root is not None:
+            anim = (a, go)
+            break
     if anim is None:
         return []
     a, go = anim
-    t = next(em.deref(getattr(c, "component", c)) for c in go.m_Component
-             if getattr(c, "component", c).deref().type.name == "Transform")
-    root = ex.node_by_transform.get(em.obj_key(t))
-    if root is None:
-        return []
     doc = ex.vis.doc
 
     def resolve(path):

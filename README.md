@@ -32,6 +32,10 @@ Game install (read-only, never modify, never copy into git):
    `tools/venv/bin/python scripts/export_weapons.py [Weapon2 ...]` → `private/export/weapons/` (stats of all
    ~1650 weapons + first-person models and animation timings of selected ones).
 
+8. `tools/venv/bin/python scripts/find_behaviours.py MeleeBot ShootingBot FiringShotBot KamikadzeBot MeleeShootBot
+   ShootingBossBot StalkerBot > private/index/bots.tsv`, then `tools/venv/bin/python scripts/export_bots.py`
+   → `private/export/bots/` (stats of all ~250 campaign enemies + models/animations of selected ones).
+
 Other helpers: `scripts/dump_behaviour.py` (any MonoBehaviour's fields as JSON), `scripts/find_text.py`
 (find a string in the asset files), `scripts/probe_settings.py` (colour space, physics, time settings).
 

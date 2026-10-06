@@ -35,7 +35,7 @@ OUT_ROOT = ROOT / "private/export/maps"
 
 MAIN_TEX = ("_MainTex", "_BaseMap", "_Albedo", "_Diffuse", "_Texture")
 MAIN_COLOR = ("_Color", "_BaseColor", "_TintColor", "_MainColor")
-MARKER_RE = re.compile(r"spawn|createzone|respawn|point", re.I)
+MARKER_RE = re.compile(r"spawn|createzone|creationzone|respawn|point", re.I)
 
 
 # ---------------------------------------------------------------- loading
@@ -180,6 +180,7 @@ class Exporter:
         self.textures = {}       # texture key -> gltf texture index
         self.colliders = []
         self.lights = []
+        self.skip_names = set()  # GameObject names to leave out (with their children)
         self.markers = []        # spawn zones etc. (empty GameObjects with telling names)
         self.lightmaps = []      # lightmap index -> png path (or None)
         self.lightmap_scale = 1.0
@@ -419,7 +420,7 @@ class Exporter:
         go = deref(t.m_GameObject)
         if go is None:
             return None
-        if not getattr(go, "m_IsActive", True):
+        if not getattr(go, "m_IsActive", True) or go.m_Name in self.skip_names:
             self.stats["inactive_skipped"] += 1
             return None
         tr, rot, sc = unity_trs_to_gltf(t)
