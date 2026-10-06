@@ -179,6 +179,9 @@ class Exporter:
         self.colliders = []
         self.lights = []
         self.markers = []        # spawn zones etc. (empty GameObjects with telling names)
+        self.lightmaps = []      # lightmap index -> png path (or None)
+        self.lightmap_scale = 1.0
+        self.render = {}
         self.stats = collections.Counter()
 
     # ---- mesh data
@@ -227,8 +230,11 @@ class Exporter:
             attrs = {"POSITION": g.accessor(md["pos"], "VEC3", 34962, minmax=True)}
             # Normals also for collision meshes: without them Bevy generates flat normals by
             # un-indexing the mesh, and the physics engine then can't build a triangle mesh.
-            if md["nrm"] is not None:
-                attrs["NORMAL"] = g.accessor(md["nrm"].astype(np.float32), "VEC3", 34962)
+            nrm = md["nrm"]
+            if nrm is None and not with_uv:
+                nrm = np.tile(np.array([0, 1, 0], np.float32), (len(md["pos"]), 1))
+            if nrm is not None:
+                attrs["NORMAL"] = g.accessor(nrm.astype(np.float32), "VEC3", 34962)
             if with_uv:
                 if md["uv0"] is not None:
                     attrs["TEXCOORD_0"] = g.accessor(md["uv0"], "VEC2", 34962)
@@ -321,7 +327,9 @@ class Exporter:
                 if deref_is_null(t.m_Father):
                     roots.append(t)
             elif obj.type.name == "LightmapSettings":
-                self.stats["lightmaps"] = len(getattr(obj.read(), "m_Lightmaps", []) or [])
+                self.export_lightmaps(obj.read())
+            elif obj.type.name == "RenderSettings":
+                self.render_settings(obj.read())
         roots.sort(key=lambda t: root_order(t))
         for t in roots:
             n = self.walk(t, np.eye(4))
@@ -330,6 +338,70 @@ class Exporter:
         if not self.col.doc["nodes"]:
             self.col.node(name="empty")
         self.col.doc["scenes"][0]["nodes"] = list(range(len(self.col.doc["nodes"])))
+
+    # ---- baked lighting
+    def export_lightmaps(self, settings):
+        """Write each baked lightmap as a PNG.
+
+        The game uses Unity's *gamma* colour space: lighting is multiplied in gamma space.
+        Bevy works in linear space, so we store lightmap^2.2 (≈ linear) divided by a
+        per-map scale, encoded as sRGB PNG. The game multiplies it back with
+        StandardMaterial::lightmap_exposure = scale (see info.json "lightmap_scale").
+        """
+        maps = []
+        for i, lm in enumerate(settings.m_Lightmaps or []):
+            tex = deref(lm.m_Lightmap)
+            if tex is None:
+                maps.append(None)
+                continue
+            rgb = texture_float_rgb(tex)
+            if rgb is None:
+                maps.append(None)
+                self.stats["lightmap_errors"] += 1
+                continue
+            maps.append(np.power(np.clip(rgb, 0, None), 2.2))
+        peak = max([float(np.percentile(m, 99.9)) for m in maps if m is not None] or [1.0])
+        self.lightmap_scale = max(1.0, float(np.ceil(peak)))
+        from PIL import Image
+        for i, m in enumerate(maps):
+            if m is None:
+                self.lightmaps.append(None)
+                continue
+            v = np.clip(m / self.lightmap_scale, 0, 1)
+            srgb = np.where(v <= 0.0031308, v * 12.92, 1.055 * np.power(v, 1 / 2.4) - 0.055)
+            img = Image.fromarray((srgb * 255 + 0.5).astype(np.uint8), "RGB")
+            name = f"textures/lightmap_{i}.png"
+            img.save(self.out / name)
+            self.lightmaps.append(name)
+        self.stats["lightmaps"] = sum(1 for m in self.lightmaps if m)
+
+    def render_settings(self, rs):
+        def col(c):
+            return [c.r, c.g, c.b] if c is not None else None
+        self.render = {
+            "ambient_mode": getattr(rs, "m_AmbientMode", None),
+            "ambient_sky": col(getattr(rs, "m_AmbientSkyColor", None)),
+            "ambient_equator": col(getattr(rs, "m_AmbientEquatorColor", None)),
+            "ambient_ground": col(getattr(rs, "m_AmbientGroundColor", None)),
+            "ambient_intensity": getattr(rs, "m_AmbientIntensity", 1.0),
+            "fog": bool(getattr(rs, "m_Fog", False)),
+            "fog_color": col(getattr(rs, "m_FogColor", None)),
+            "fog_mode": getattr(rs, "m_FogMode", None),
+            "fog_start": getattr(rs, "m_LinearFogStart", None),
+            "fog_end": getattr(rs, "m_LinearFogEnd", None),
+            "fog_density": getattr(rs, "m_FogDensity", None),
+        }
+
+    def lightmap_extras(self, mr, md):
+        """glTF node extras telling the game which lightmap + UV rect this renderer uses."""
+        idx = getattr(mr, "m_LightmapIndex", 0xFFFF)
+        if idx >= 0xFFFE or idx >= len(self.lightmaps) or not self.lightmaps[idx]:
+            return None
+        so = getattr(mr, "m_LightmapTilingOffset", None) or mr.m_LightmapScaleOffset
+        # Unity: lm_uv = uv * (x, y) + (z, w), V pointing up. We flip V (v' = 1 - v), which
+        # turns the V range into [1 - y - w, 1 - w]. Bevy: uv = mix(min, max, uv_1).
+        return {"lightmap": self.lightmaps[idx],
+                "lightmap_rect": [so.z, 1 - so.y - so.w, so.z + so.x, 1 - so.w]}
 
     def scene_objects(self, scene_path):
         for sf in iter_serialized(self.env):
@@ -357,9 +429,9 @@ class Exporter:
             except Exception:
                 pass
         mesh_idx = self.visual(comps)
-        static_batched = False
+        static_batched, extras = False, None
         if isinstance(mesh_idx, tuple):
-            mesh_idx, static_batched = mesh_idx
+            mesh_idx, static_batched, extras = mesh_idx
         idx = self.vis.node(**node)
         children = []
         if mesh_idx is not None:
@@ -368,9 +440,11 @@ class Exporter:
                 # child node that cancels this node's world transform
                 inv = np.linalg.inv(world)
                 children.append(self.vis.node(name=go.m_Name + "_static", mesh=mesh_idx,
-                                              matrix=inv.T.flatten().tolist()))
+                                              matrix=inv.T.flatten().tolist(), extras=extras))
             else:
                 self.vis.doc["nodes"][idx]["mesh"] = mesh_idx
+                if extras:
+                    self.vis.doc["nodes"][idx]["extras"] = extras
         self.collect_colliders(go.m_Name, comps, world)
         if MARKER_RE.search(go.m_Name):
             self.markers.append({"name": go.m_Name, "position": world[:3, 3].tolist()})
@@ -387,15 +461,21 @@ class Exporter:
         return idx
 
     def visual(self, comps):
-        if "MeshRenderer" not in comps or "MeshFilter" not in comps:
-            if "SkinnedMeshRenderer" in comps:
-                self.stats["skinned_skipped"] += 1
+        if "MeshRenderer" in comps and "MeshFilter" in comps:
+            mr = deref(comps["MeshRenderer"][0])
+            mf = deref(comps["MeshFilter"][0])
+            mesh_ptr = mf.m_Mesh if mf is not None else None
+        elif "SkinnedMeshRenderer" in comps:
+            # Skinned meshes (weapon + arms, characters) are exported in their bind pose,
+            # placed at the renderer's transform. No bones/animation yet.
+            mr = deref(comps["SkinnedMeshRenderer"][0])
+            mesh_ptr = mr.m_Mesh if mr is not None else None
+            self.stats["skinned_as_static"] += 1
+        else:
             return None
-        mr = deref(comps["MeshRenderer"][0])
-        mf = deref(comps["MeshFilter"][0])
-        if mr is None or mf is None or not getattr(mr, "m_Enabled", True):
+        if mr is None or mesh_ptr is None or not getattr(mr, "m_Enabled", True):
             return None
-        md = self.mesh_data(mf.m_Mesh)
+        md = self.mesh_data(mesh_ptr)
         if md is None:
             return None
         sbi = getattr(mr, "m_StaticBatchInfo", None)
@@ -405,9 +485,13 @@ class Exporter:
             first, count, static = sbi.firstSubMesh, sbi.subMeshCount, True
         mats = list(mr.m_Materials)
         mat_keys = tuple(ptr_key(m) for m in mats)
-        key = (id(md), first, count, mat_keys)
+        extras = self.lightmap_extras(mr, md)
+        key = (id(md), first, count, mat_keys, extras is not None)
         if key not in self.vis_meshes:
             attrs = self.vertex_accessors(self.vis, md, True)
+            if extras is not None and "TEXCOORD_1" not in attrs and "TEXCOORD_0" in attrs:
+                # Unity falls back to the first UV set for lightmapping
+                attrs = dict(attrs, TEXCOORD_1=attrs["TEXCOORD_0"])
             prims = []
             for i in range(count):
                 si = first + i
@@ -426,7 +510,9 @@ class Exporter:
                 self.vis.doc["meshes"].pop()
         self.stats["renderers"] += 1
         m = self.vis_meshes[key]
-        return None if m is None else (m, static)
+        if extras is not None:
+            self.stats["lightmapped_renderers"] += 1
+        return None if m is None else (m, static, extras)
 
     # ---- colliders / lights
     def collect_colliders(self, name, comps, world):
@@ -479,11 +565,31 @@ class Exporter:
         self.vis.save(self.out)
         self.col.save(self.out)
         (self.out / "colliders.json").write_text(json.dumps(self.colliders))
-        info.update(stats=dict(self.stats), markers=self.markers, lights=self.lights)
+        info.update(stats=dict(self.stats), lightmap_scale=self.lightmap_scale, render=self.render,
+                    markers=self.markers, lights=self.lights)
         (self.out / "info.json").write_text(json.dumps(info, indent=1))
 
 
 # ---------------------------------------------------------------- small helpers
+
+def texture_float_rgb(tex):
+    """Texture2D -> float32 HxWx3 array, top row first. Handles half/float HDR formats
+    exactly and falls back to UnityPy's 8-bit decoder for everything else."""
+    fmt = int(tex.m_TextureFormat)
+    w, h = tex.m_Width, tex.m_Height
+    try:
+        raw = tex.image_data
+        if fmt == 17:   # RGBAHalf
+            a = np.frombuffer(raw, dtype=np.float16, count=w * h * 4).reshape(h, w, 4)[:, :, :3]
+        elif fmt == 20:  # RGBAFloat
+            a = np.frombuffer(raw, dtype=np.float32, count=w * h * 4).reshape(h, w, 4)[:, :, :3]
+        else:
+            return np.asarray(tex.image.convert("RGB"), dtype=np.float32) / 255.0
+        return np.ascontiguousarray(a[::-1]).astype(np.float32)  # Unity stores bottom row first
+    except Exception as e:
+        print(f"  lightmap {tex.m_Name} fmt {fmt}: {e!r}"[:200], file=sys.stderr)
+        return None
+
 
 def safe(s):
     return "".join(ch if ch.isalnum() or ch in "-_" else "_" for ch in s)[:60] or "tex"

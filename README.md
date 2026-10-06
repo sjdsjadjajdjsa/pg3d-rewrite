@@ -28,6 +28,13 @@ Game install (read-only, never modify, never copy into git):
 6. `tools/venv/bin/python scripts/export_map.py <map>` → `private/export/maps/<map>/` (glTF + colliders + spawn
    markers) for the Rust/Bevy rewrite in `../pixel-gun-3d-rs`. `--list` shows the 626 map names.
 
+7. `tools/venv/bin/python scripts/find_behaviours.py WeaponSounds > private/index/weaponsounds.tsv`, then
+   `tools/venv/bin/python scripts/export_weapons.py [Weapon2 ...]` → `private/export/weapons/` (stats of all
+   ~1650 weapons + first-person models and animation timings of selected ones).
+
+Other helpers: `scripts/dump_behaviour.py` (any MonoBehaviour's fields as JSON), `scripts/find_text.py`
+(find a string in the asset files), `scripts/probe_settings.py` (colour space, physics, time settings).
+
 Obfuscated identifiers (CJK glyphs) get token aliases: `T_<token>` types, `m_<token>` methods,
 `f_<token>` fields. The token matches the `[Token]` in the Cpp2IL C# output.
 
