@@ -29,11 +29,13 @@ fn manual_shot(mut commands: Commands, keys: Res<ButtonInput<KeyCode>>, mut n: L
 
 fn auto_shot(mut commands: Commands, frames: Res<FrameCount>, mut exit: MessageWriter<AppExit>) {
     let Ok(path) = std::env::var("PG3D_AUTOSHOT") else { return };
+    // PG3D_AUTOSHOT_FRAME picks the frame (default 300); quit 60 frames later
+    let at: u32 = std::env::var("PG3D_AUTOSHOT_FRAME").ok().and_then(|v| v.parse().ok()).unwrap_or(300);
     match frames.0 {
-        300 => {
+        f if f == at => {
             commands.spawn(Screenshot::primary_window()).observe(save_to_disk(path));
         }
-        360 => {
+        f if f == at + 60 => {
             exit.write(AppExit::Success);
         }
         _ => {}

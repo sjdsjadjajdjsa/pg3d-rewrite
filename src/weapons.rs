@@ -16,10 +16,11 @@ use bevy::{
     input::mouse::AccumulatedMouseScroll,
     prelude::*,
     window::{CursorGrabMode, CursorOptions},
+    world_serialization::WorldInstanceReady,
 };
 use serde::Deserialize;
 
-use crate::{DataDir, camera::PlayerCamera, map::Layer};
+use crate::{DataDir, camera::PlayerCamera, map::Layer, player::Player};
 
 /// Weapons given to the player, in slot order (keys 1..6). Only ones that were exported load.
 const LOADOUT: [&str; 6] = ["Weapon2", "Weapon1", "Weapon9", "Weapon3", "Weapon5", "Weapon11"];
@@ -93,6 +94,9 @@ impl UnityVec3 {
 struct WeaponInfo {
     #[serde(default)]
     animations: HashMap<String, f32>,
+    /// glTF animation names, in file order (GltfAssetLabel::Animation(i))
+    #[serde(default)]
+    clips: Vec<String>,
 }
 
 pub struct Weapon {
@@ -105,6 +109,8 @@ pub struct Weapon {
     pub clip: i32,
     pub reserve: i32,
     pub spread: f32,
+    /// animation clips in weapon.gltf (Idle, Walk, Shoot, Reload, ...)
+    pub clips: Vec<String>,
 }
 
 #[derive(Resource, Default)]
@@ -115,6 +121,8 @@ pub struct Loadout {
     reloading: f32,
     kick: f32,
     view_model: Option<Entity>,
+    /// one-shot animation the view model should play next ("Shoot", "Reload")
+    play: Option<&'static str>,
 }
 
 impl Loadout {
@@ -126,6 +134,15 @@ impl Loadout {
 /// Root of the first-person weapon model.
 #[derive(Component)]
 struct ViewModel;
+
+/// The view model's animation graph: clip name -> node.
+#[derive(Component)]
+struct ViewModelAnims {
+    graph: Handle<AnimationGraph>,
+    nodes: HashMap<String, AnimationNodeIndex>,
+    /// entity holding the AnimationPlayer, found once the glTF scene is spawned
+    player: Option<Entity>,
+}
 
 /// Bullet hole marker, fades out.
 #[derive(Component)]
@@ -167,6 +184,7 @@ fn load_loadout(mut commands: Commands, data: Res<DataDir>) {
             clip,
             reserve: (def.maxAmmo - clip).max(0),
             spread: 0.0,
+            clips: info.clips.clone(),
         });
     }
     info!(
@@ -182,6 +200,7 @@ fn spawn_view_model_camera(
     main: Single<Entity, With<PlayerCamera>>,
     mut loadout: ResMut<Loadout>,
     assets: Res<AssetServer>,
+    mut graphs: ResMut<Assets<AnimationGraph>>,
 ) {
     commands.entity(*main).with_children(|c| {
         c.spawn((
@@ -194,7 +213,7 @@ fn spawn_view_model_camera(
         ));
     });
     if let Some(w) = loadout.current() {
-        let e = spawn_view_model(&mut commands, *main, &assets, w);
+        let e = spawn_view_model(&mut commands, *main, &assets, &mut graphs, w);
         loadout.view_model = Some(e);
     }
 }
@@ -208,20 +227,60 @@ fn view_model_transform(gun_position: Vec3) -> Transform {
     Transform::from_translation(rot * gun_position).with_rotation(rot)
 }
 
-fn spawn_view_model(commands: &mut Commands, camera: Entity, assets: &AssetServer, w: &Weapon) -> Entity {
+fn spawn_view_model(
+    commands: &mut Commands,
+    camera: Entity,
+    assets: &AssetServer,
+    graphs: &mut Assets<AnimationGraph>,
+    w: &Weapon,
+) -> Entity {
     let name = &w.name;
-    let scene = assets.load(GltfAssetLabel::Scene(0).from_asset(format!("weapons/{name}/weapon.gltf")));
+    let path = format!("weapons/{name}/weapon.gltf");
+    let scene = assets.load(GltfAssetLabel::Scene(0).from_asset(path.clone()));
+    let (graph, indices) = AnimationGraph::from_clips(
+        (0..w.clips.len()).map(|i| assets.load(GltfAssetLabel::Animation(i).from_asset(path.clone()))),
+    );
+    let anims = ViewModelAnims {
+        graph: graphs.add(graph),
+        nodes: w.clips.iter().cloned().zip(indices).collect(),
+        player: None,
+    };
     let e = commands
         .spawn((
             Name::new(format!("view model {name}")),
             ViewModel,
+            anims,
             WorldAssetRoot(scene),
             view_model_transform(w.def.gunPosition.to_bevy()),
             RenderLayers::layer(VIEW_MODEL_LAYER),
         ))
+        .observe(hook_up_animation_player)
         .id();
     commands.entity(camera).add_child(e);
     e
+}
+
+/// When the weapon's glTF scene has spawned, give its AnimationPlayer our graph and
+/// start the idle loop.
+fn hook_up_animation_player(
+    ready: On<WorldInstanceReady>,
+    mut commands: Commands,
+    children: Query<&Children>,
+    mut roots: Query<&mut ViewModelAnims>,
+    mut players: Query<&mut AnimationPlayer>,
+) {
+    let Ok(mut anims) = roots.get_mut(ready.entity) else { return };
+    for child in children.iter_descendants(ready.entity) {
+        if let Ok(mut player) = players.get_mut(child) {
+            commands.entity(child).insert(AnimationGraphHandle(anims.graph.clone()));
+            if let Some(idle) = anims.nodes.get("Idle") {
+                player.play(*idle).repeat();
+            }
+            anims.player = Some(child);
+            info!("view model animations ready: {:?}", anims.nodes.keys().collect::<Vec<_>>());
+            break;
+        }
+    }
 }
 
 /// glTF meshes are spawned later as children; move them onto the view model layer and
@@ -253,6 +312,7 @@ fn switch_weapon(
     mut loadout: ResMut<Loadout>,
     camera: Single<Entity, With<PlayerCamera>>,
     assets: Res<AssetServer>,
+    mut graphs: ResMut<Assets<AnimationGraph>>,
 ) {
     let n = loadout.weapons.len();
     if n == 0 {
@@ -279,7 +339,7 @@ fn switch_weapon(
     if let Some(old) = loadout.view_model.take() {
         commands.entity(old).despawn();
     }
-    let e = spawn_view_model(&mut commands, *camera, &assets, &loadout.weapons[next]);
+    let e = spawn_view_model(&mut commands, *camera, &assets, &mut graphs, &loadout.weapons[next]);
     loadout.view_model = Some(e);
 }
 
@@ -305,7 +365,8 @@ fn fire(
     let Some(w) = loadout.weapons.get_mut(cur) else { return };
     w.spread = (w.spread - w.def.downKoof * dt).max(0.0);
 
-    let wants = mouse.pressed(MouseButton::Left) && cursor.grab_mode != CursorGrabMode::None;
+    let autofire = std::env::var("PG3D_AUTOFIRE").is_ok(); // automated tests
+    let wants = autofire || (mouse.pressed(MouseButton::Left) && cursor.grab_mode != CursorGrabMode::None);
     if !wants || loadout.cooldown > 0.0 || loadout.reloading > 0.0 {
         return;
     }
@@ -313,6 +374,7 @@ fn fire(
     if !melee && w.clip <= 0 {
         if w.reserve > 0 {
             loadout.reloading = w.reload_time;
+            loadout.play = Some("Reload");
         }
         return;
     }
@@ -327,6 +389,7 @@ fn fire(
     let interval = w.fire_interval;
     loadout.cooldown = interval;
     loadout.kick = 1.0;
+    loadout.play = Some("Shoot");
 
     let (mesh, mat) = impact_assets
         .get_or_insert_with(|| {
@@ -375,18 +438,55 @@ fn reload(keys: Res<ButtonInput<KeyCode>>, time: Res<Time>, mut loadout: ResMut<
     let Some(w) = loadout.weapons.get(cur) else { return };
     if keys.just_pressed(KeyCode::KeyR) && w.def.isMelee == 0 && w.clip < w.def.ammoInClip && w.reserve > 0 {
         loadout.reloading = w.reload_time;
+        loadout.play = Some("Reload");
     }
 }
 
-/// Simple procedural motion until the original animations are imported:
-/// kick back when firing, dip down while reloading.
-fn animate_view_model(loadout: Res<Loadout>, mut q: Query<&mut Transform, With<ViewModel>>) {
+/// Drives the original weapon animations: one-shot Shoot/Reload when requested, Walk
+/// while moving on the ground, Idle otherwise. Weapons without clips get a small
+/// procedural kick instead.
+fn animate_view_model(
+    mut loadout: ResMut<Loadout>,
+    player: Single<&Player>,
+    mut roots: Query<(&ViewModelAnims, &mut Transform), With<ViewModel>>,
+    mut players: Query<&mut AnimationPlayer>,
+) {
+    let request = loadout.play.take();
     let Some(w) = loadout.current() else { return };
     let base = view_model_transform(w.def.gunPosition.to_bevy());
-    let reload_dip = if loadout.reloading > 0.0 { 0.15 } else { 0.0 };
-    for mut t in &mut q {
-        t.translation = base.translation + Vec3::new(0.0, -reload_dip, 0.06 * loadout.kick);
-        t.rotation = base.rotation * Quat::from_rotation_x(-0.08 * loadout.kick);
+    let moving = player.grounded && Vec2::new(player.velocity.x, player.velocity.z).length() > 0.5;
+    for (anims, mut t) in &mut roots {
+        let animated = anims.player.and_then(|p| players.get_mut(p).ok());
+        let Some(mut ap) = animated else {
+            // no clips (yet): procedural kick / reload dip
+            let dip = if loadout.reloading > 0.0 { 0.15 } else { 0.0 };
+            t.translation = base.translation + Vec3::new(0.0, -dip, 0.06 * loadout.kick);
+            t.rotation = base.rotation * Quat::from_rotation_x(-0.08 * loadout.kick);
+            continue;
+        };
+        *t = base;
+        let node = |n: &str| anims.nodes.get(n).copied();
+        if let Some(name) = request {
+            if let Some(n) = node(name) {
+                ap.stop_all();
+                // clip lengths already equal the gameplay timings (fire interval, reload time)
+                ap.play(n).replay();
+                continue;
+            }
+        }
+        let busy = ["Shoot", "Reload"].iter().filter_map(|n| node(n)).any(|n| {
+            ap.animation(n).is_some_and(|a| !a.is_finished())
+        });
+        if busy {
+            continue;
+        }
+        let want = if moving { node("Walk").or(node("Idle")) } else { node("Idle") };
+        if let Some(n) = want {
+            if !ap.is_playing_animation(n) || ap.animation(n).is_some_and(|a| a.is_finished()) {
+                ap.stop_all();
+                ap.play(n).repeat();
+            }
+        }
     }
 }
 
