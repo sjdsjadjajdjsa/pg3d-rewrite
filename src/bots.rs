@@ -1,0 +1,537 @@
+//! Campaign-style enemies ("bots"): zombies that spawn at the map's EnemyCreationZone
+//! markers, chase the player, hit them, take damage and die.
+//!
+//! Data: <data>/bots/ from ../pixel-gun-3d-re/scripts/export_bots.py
+//!   bots.json          the original BaseBot settings (health, damagePerHit, ...)
+//!   <Bot>/bot.gltf     model, skeleton and animations (Zombie_Walk, Zombie_Attack, ...)
+//!
+//! Behaviour is our own simple version of RilisoftBot.BaseBot / MeleeBot:
+//!   idle -> (player within detectRadius) chase -> (within attackDistance) attack
+//!   -> health <= 0: death animation, removed, respawn later.
+
+use std::collections::HashMap;
+
+use avian3d::prelude::*;
+use bevy::{prelude::*, world_serialization::WorldInstanceReady};
+use serde::Deserialize;
+
+use crate::{
+    DataDir,
+    map::{Layer, MapMarkers},
+    player::{GRAVITY, Player},
+};
+
+/// Bot types we spawn, picked at random. Only exported ones are used.
+const ROSTER: [&str; 3] = ["Enemy1_go", "Enemy2_go", "Enemy3_go"];
+/// How many bots are alive at once (GUESS: the original uses per-level wave settings).
+const MAX_ALIVE: usize = 6;
+/// Seconds between spawns while below MAX_ALIVE.
+const SPAWN_INTERVAL: f32 = 2.5;
+/// Player health. GUESS: the original value is obfuscated; classic campaign had 9 hearts.
+pub const PLAYER_MAX_HEALTH: f32 = 9.0;
+/// Seconds the dead body stays before it is removed.
+const CORPSE_TIME: f32 = 2.0;
+
+pub struct BotsPlugin;
+
+impl Plugin for BotsPlugin {
+    fn build(&self, app: &mut App) {
+        app.add_message::<BotDamage>()
+            .insert_resource(PlayerStats { health: PLAYER_MAX_HEALTH, protected: 0.0, score: 0, kills: 0, respawn_in: 0.0 })
+            .add_systems(Startup, (load_bot_defs, spawn_hud))
+            .add_systems(FixedUpdate, (bot_brain, bot_move).chain())
+            .add_systems(
+                Update,
+                (spawner, apply_damage, bot_death, bot_animation, player_death, update_hud, auto_aim),
+            );
+    }
+}
+
+/// The original BaseBot fields we use (names kept).
+#[derive(Deserialize, Clone, Debug, Default)]
+#[serde(default)]
+#[allow(non_snake_case)]
+pub struct BotDef {
+    pub health: f32,
+    pub damagePerHit: f32,
+    pub attackDistance: f32,
+    /// movement speed while chasing (m/s, see notes)
+    pub attackingSpeed: f32,
+    /// movement speed while wandering
+    pub notAttackingSpeed: f32,
+    pub detectRadius: f32,
+    pub scorePerKill: i32,
+}
+
+#[derive(Deserialize, Default)]
+struct BotInfo {
+    #[serde(default)]
+    animations: HashMap<String, f32>,
+    #[serde(default)]
+    clips: Vec<String>,
+}
+
+struct BotType {
+    name: String,
+    def: BotDef,
+    clips: Vec<String>,
+    attack_time: f32,
+}
+
+#[derive(Resource, Default)]
+struct BotTypes(Vec<BotType>);
+
+#[derive(Resource)]
+pub struct PlayerStats {
+    pub health: f32,
+    /// seconds of spawn protection left
+    pub protected: f32,
+    pub score: i32,
+    pub kills: i32,
+    /// seconds until respawn while dead
+    pub respawn_in: f32,
+}
+
+/// "This bot took `amount` damage" (sent by weapons).
+#[derive(Message)]
+pub struct BotDamage {
+    pub bot: Entity,
+    pub amount: f32,
+}
+
+/// Put on bot colliders; points at the bot's root entity.
+#[derive(Component)]
+pub struct BotPart(pub Entity);
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum BotState {
+    Idle,
+    Chase,
+    Attack,
+    Dead,
+}
+
+#[derive(Component)]
+struct Bot {
+    kind: usize,
+    health: f32,
+    state: BotState,
+    velocity: Vec3,
+    grounded: bool,
+    /// time until the next hit lands (while attacking) / corpse is removed (dead)
+    timer: f32,
+    /// wander target while idle
+    wander: Vec3,
+    /// we have no navigation mesh yet: when blocked, walk sideways for a moment
+    stuck: f32,
+    detour: Vec3,
+    detour_time: f32,
+}
+
+#[derive(Component)]
+struct BotAnims {
+    graph: Handle<AnimationGraph>,
+    nodes: HashMap<String, AnimationNodeIndex>,
+    player: Option<Entity>,
+    playing: Option<String>,
+}
+
+#[derive(Component)]
+struct HudHealth;
+
+fn load_bot_defs(mut commands: Commands, data: Res<DataDir>) {
+    let dir = data.0.join("bots");
+    let all: HashMap<String, BotDef> = std::fs::read_to_string(dir.join("bots.json"))
+        .ok()
+        .and_then(|s| serde_json::from_str(&s).ok())
+        .unwrap_or_default();
+    let mut types = BotTypes::default();
+    for name in ROSTER {
+        let Some(def) = all.get(name) else { continue };
+        let Some(info) = std::fs::read_to_string(dir.join(name).join("info.json"))
+            .ok()
+            .and_then(|s| serde_json::from_str::<BotInfo>(&s).ok())
+        else {
+            continue;
+        };
+        let attack_time = info.animations.get("Zombie_Attack").copied().unwrap_or(1.5);
+        types.0.push(BotType { name: name.to_string(), def: def.clone(), clips: info.clips, attack_time });
+    }
+    if types.0.is_empty() {
+        warn!("no bots exported (run export_bots.py)");
+    } else {
+        info!("bot types: {}", types.0.iter().map(|t| format!("{} hp={}", t.name, t.def.health)).collect::<Vec<_>>().join(", "));
+    }
+    commands.insert_resource(types);
+}
+
+fn spawn_points(markers: &MapMarkers) -> Vec<Vec3> {
+    let pts: Vec<Vec3> =
+        markers.0.iter().filter(|m| m.name.starts_with("EnemyCreationZone")).map(|m| m.position).collect();
+    if !pts.is_empty() {
+        return pts;
+    }
+    // maps without enemy zones: use the multiplayer spawn points
+    markers.0.iter().filter(|m| m.name.contains("CreateZone")).map(|m| m.position).collect()
+}
+
+fn rand01(seed: f32) -> f32 {
+    (seed.sin() * 43758.547).fract().abs()
+}
+
+#[allow(clippy::too_many_arguments)]
+fn spawner(
+    mut commands: Commands,
+    time: Res<Time>,
+    types: Res<BotTypes>,
+    markers: Res<MapMarkers>,
+    assets: Res<AssetServer>,
+    mut graphs: ResMut<Assets<AnimationGraph>>,
+    bots: Query<&Bot>,
+    player: Single<&Transform, With<Player>>,
+    mut next: Local<f32>,
+) {
+    if types.0.is_empty() || std::env::var("PG3D_NOBOTS").is_ok() {
+        return;
+    }
+    *next -= time.delta_secs();
+    let alive = bots.iter().filter(|b| b.state != BotState::Dead).count();
+    if *next > 0.0 || alive >= MAX_ALIVE {
+        return;
+    }
+    *next = SPAWN_INTERVAL;
+    if std::env::var("PG3D_TRACE").is_ok() {
+        info!("spawning bot ({} alive)", alive);
+    }
+    let pts = spawn_points(&markers);
+    // pick a spawn point not right next to the player
+    let t = time.elapsed_secs();
+    let mut candidates: Vec<Vec3> = pts.iter().copied().filter(|p| p.distance(player.translation) > 8.0).collect();
+    if candidates.is_empty() {
+        candidates = pts;
+    }
+    if candidates.is_empty() {
+        return;
+    }
+    let pos = candidates[(rand01(t * 1.7) * candidates.len() as f32) as usize % candidates.len()];
+    let kind = (rand01(t * 3.1) * types.0.len() as f32) as usize % types.0.len();
+    let ty = &types.0[kind];
+
+    let path = format!("bots/{}/bot.gltf", ty.name);
+    let (graph, indices) = AnimationGraph::from_clips(
+        (0..ty.clips.len()).map(|i| assets.load(GltfAssetLabel::Animation(i).from_asset(path.clone()))),
+    );
+    let anims = BotAnims {
+        graph: graphs.add(graph),
+        nodes: ty.clips.iter().cloned().zip(indices).collect(),
+        player: None,
+        playing: None,
+    };
+    let root = commands
+        .spawn((
+            Name::new(ty.name.clone()),
+            Bot {
+                kind,
+                health: ty.def.health,
+                state: BotState::Idle,
+                velocity: Vec3::ZERO,
+                grounded: false,
+                timer: 0.0,
+                wander: pos,
+                stuck: 0.0,
+                detour: Vec3::ZERO,
+                detour_time: 0.0,
+            },
+            anims,
+            WorldAssetRoot(assets.load(GltfAssetLabel::Scene(0).from_asset(path))),
+            Transform::from_translation(pos + Vec3::Y * 0.5),
+            RigidBody::Kinematic,
+            CustomPositionIntegration,
+            TransformInterpolation,
+        ))
+        .observe(hook_up_bot_animations)
+        .id();
+    // hit box: NavMeshAgent of the prefab is 0.5 m radius, 2 m tall, origin at the feet
+    commands.entity(root).with_children(|c| {
+        c.spawn((
+            BotPart(root),
+            Collider::capsule(0.45, 1.0),
+            Transform::from_xyz(0.0, 1.0, 0.0),
+            CollisionLayers::new(Layer::Enemy, LayerMask::ALL),
+        ));
+    });
+}
+
+fn hook_up_bot_animations(
+    ready: On<WorldInstanceReady>,
+    mut commands: Commands,
+    children: Query<&Children>,
+    mut roots: Query<&mut BotAnims>,
+    players: Query<(), With<AnimationPlayer>>,
+) {
+    let Ok(mut anims) = roots.get_mut(ready.entity) else { return };
+    for child in children.iter_descendants(ready.entity) {
+        if players.contains(child) {
+            commands.entity(child).insert(AnimationGraphHandle(anims.graph.clone()));
+            anims.player = Some(child);
+            break;
+        }
+    }
+}
+
+/// Decide what each bot wants to do.
+fn bot_brain(
+    time: Res<Time>,
+    types: Res<BotTypes>,
+    mut stats: ResMut<PlayerStats>,
+    player: Single<&Transform, (With<Player>, Without<Bot>)>,
+    mut bots: Query<(&Transform, &mut Bot)>,
+) {
+    let dt = time.delta_secs();
+    stats.protected = (stats.protected - dt).max(0.0);
+    let trace = std::env::var("PG3D_TRACE").is_ok() && (time.elapsed_secs() % 2.0) < dt;
+    if trace {
+        info!("player health {:.1} score {}", stats.health, stats.score);
+    }
+    for (t, mut b) in &mut bots {
+        if trace {
+            info!("bot {} {:?} hp={:.1} pos={:.1} grounded={}", types.0[b.kind].name, b.state, b.health, t.translation, b.grounded);
+        }
+        if b.state == BotState::Dead {
+            continue;
+        }
+        let def = &types.0[b.kind].def;
+        let to_player = player.translation - t.translation;
+        let flat = Vec2::new(to_player.x, to_player.z).length();
+        let player_alive = stats.health > 0.0;
+        b.state = if !player_alive {
+            BotState::Idle
+        } else if flat <= def.attackDistance.max(1.0) * 0.8 {
+            BotState::Attack
+        } else if flat <= def.detectRadius || b.state == BotState::Chase {
+            BotState::Chase // once a zombie has seen you it keeps coming
+        } else {
+            BotState::Idle
+        };
+        if b.state == BotState::Attack {
+            b.timer -= dt;
+            if b.timer <= 0.0 {
+                b.timer = types.0[b.kind].attack_time;
+                if stats.protected <= 0.0 {
+                    stats.health -= def.damagePerHit;
+                }
+            }
+        } else {
+            b.timer = types.0[b.kind].attack_time * 0.5; // first hit lands mid-swing
+        }
+        if b.state == BotState::Idle && t.translation.distance(b.wander) < 1.0 {
+            let s = time.elapsed_secs() + t.translation.x;
+            b.wander = t.translation + Vec3::new(rand01(s) * 10.0 - 5.0, 0.0, rand01(s * 1.3) * 10.0 - 5.0);
+        }
+    }
+}
+
+/// Walk towards the target with the same move-and-slide as the player.
+#[allow(clippy::type_complexity)]
+fn bot_move(
+    time: Res<Time>,
+    types: Res<BotTypes>,
+    player: Single<&Transform, (With<Player>, Without<Bot>)>,
+    mut bots: Query<(Entity, &mut Transform, &mut Bot, &Children)>,
+    colliders: Query<&Collider>,
+    move_and_slide: MoveAndSlide,
+) {
+    let dt = time.delta_secs();
+    for (e, mut t, mut b, children) in &mut bots {
+        let Some((ce, col)) = children.iter().find_map(|c| colliders.get(c).ok().map(|x| (c, x))) else { continue };
+        let def = &types.0[b.kind].def;
+        let (target, speed) = match b.state {
+            BotState::Chase => (player.translation, def.attackingSpeed.max(0.5)),
+            BotState::Idle => (b.wander, def.notAttackingSpeed.max(0.5) * 0.5),
+            BotState::Attack => (player.translation, 0.0),
+            BotState::Dead => (t.translation, 0.0),
+        };
+        let mut dir = target - t.translation;
+        dir.y = 0.0;
+        let mut dir = dir.normalize_or_zero();
+        if b.detour_time > 0.0 {
+            b.detour_time -= dt;
+            dir = b.detour;
+        }
+        if dir != Vec3::ZERO {
+            // the models face +Z
+            let want = Quat::from_rotation_arc(Vec3::Z, dir);
+            t.rotation = t.rotation.slerp(want, (dt * 8.0).min(1.0));
+        }
+        b.velocity.x = dir.x * speed;
+        b.velocity.z = dir.z * speed;
+        b.velocity.y = if b.grounded { -2.0 } else { (b.velocity.y - GRAVITY * dt).max(-17.0) };
+        let mut grounded = false;
+        let out = move_and_slide.move_and_slide(
+            col,
+            t.translation + Vec3::Y,
+            Quat::IDENTITY,
+            b.velocity,
+            time.delta(),
+            &MoveAndSlideConfig::default(),
+            &SpatialQueryFilter::from_mask(Layer::World).with_excluded_entities([e, ce]),
+            |hit| {
+                if hit.normal.y > 0.5 {
+                    grounded = true;
+                }
+                MoveAndSlideHitResponse::Accept
+            },
+        );
+        let before = t.translation;
+        t.translation = out.position - Vec3::Y;
+        b.grounded = grounded;
+        // blocked by a wall? (moved less than a third of what we wanted)
+        let moved = Vec2::new(t.translation.x - before.x, t.translation.z - before.z).length();
+        if speed > 0.0 && moved < speed * dt * 0.33 {
+            b.stuck += dt;
+            if b.stuck > 0.4 && b.detour_time <= 0.0 {
+                // turn 70-110 degrees left or right and walk that way for a bit
+                let s = time.elapsed_secs() * 7.3 + e.index().index() as f32;
+                let angle = (if rand01(s) < 0.5 { 1.0 } else { -1.0 }) * (1.2 + rand01(s * 2.1) * 0.7);
+                b.detour = Quat::from_rotation_y(angle) * dir;
+                b.detour_time = 1.0 + rand01(s * 3.7);
+                b.stuck = 0.0;
+            }
+        } else {
+            b.stuck = 0.0;
+        }
+        if t.translation.y < -100.0 {
+            b.health = 0.0; // fell out of the map
+        }
+    }
+}
+
+fn apply_damage(
+    mut hits: MessageReader<BotDamage>,
+    types: Res<BotTypes>,
+    mut stats: ResMut<PlayerStats>,
+    mut bots: Query<&mut Bot>,
+) {
+    for hit in hits.read() {
+        let Ok(mut b) = bots.get_mut(hit.bot) else { continue };
+        if b.state == BotState::Dead {
+            continue;
+        }
+        b.health -= hit.amount;
+        b.state = BotState::Chase; // shot bots always come for you
+        if b.health <= 0.0 {
+            b.state = BotState::Dead;
+            b.timer = CORPSE_TIME;
+            stats.score += types.0[b.kind].def.scorePerKill;
+            stats.kills += 1;
+            info!("killed {} (score {})", types.0[b.kind].name, stats.score);
+        }
+    }
+}
+
+fn bot_death(
+    mut commands: Commands,
+    time: Res<Time>,
+    mut bots: Query<(Entity, &mut Bot, &Children)>,
+    parts: Query<(), With<BotPart>>,
+) {
+    for (e, mut b, children) in &mut bots {
+        if b.health <= 0.0 && b.state != BotState::Dead {
+            b.state = BotState::Dead;
+            b.timer = CORPSE_TIME;
+        }
+        if b.state != BotState::Dead {
+            continue;
+        }
+        // stop being shootable as soon as it dies
+        for c in children.iter().filter(|c| parts.contains(*c)) {
+            commands.entity(c).despawn();
+        }
+        b.timer -= time.delta_secs();
+        if b.timer <= 0.0 {
+            commands.entity(e).despawn();
+        }
+    }
+}
+
+fn bot_animation(mut bots: Query<(&Bot, &mut BotAnims)>, mut players: Query<&mut AnimationPlayer>) {
+    for (b, mut a) in &mut bots {
+        let Some(mut ap) = a.player.and_then(|p| players.get_mut(p).ok()) else { continue };
+        let moving = Vec2::new(b.velocity.x, b.velocity.z).length() > 0.1;
+        let (want, repeat) = match b.state {
+            BotState::Dead => ("Zombie_Dead", false),
+            BotState::Attack => ("Zombie_Attack", true),
+            _ if moving => ("Zombie_Walk", true),
+            _ => ("Idle", true),
+        };
+        if a.playing.as_deref() == Some(want) {
+            continue;
+        }
+        let Some(node) = a.nodes.get(want).copied() else { continue };
+        ap.stop_all();
+        let anim = ap.play(node);
+        if repeat {
+            anim.repeat();
+        }
+        a.playing = Some(want.to_string());
+    }
+}
+
+/// At 0 health: wait 3 seconds, then respawn at the spawn point with full health.
+fn player_death(
+    time: Res<Time>,
+    mut stats: ResMut<PlayerStats>,
+    player: Single<(&mut Transform, &mut Player)>,
+) {
+    if stats.health > 0.0 {
+        return;
+    }
+    if stats.respawn_in <= 0.0 {
+        stats.respawn_in = 3.0;
+        info!("player died (score {}, kills {})", stats.score, stats.kills);
+    }
+    stats.respawn_in -= time.delta_secs();
+    if stats.respawn_in <= 0.0 {
+        let (mut t, mut p) = player.into_inner();
+        t.translation = p.spawn;
+        p.velocity = Vec3::ZERO;
+        stats.health = PLAYER_MAX_HEALTH;
+        stats.respawn_in = 0.0;
+        stats.protected = 3.0; // GUESS: spawn protection time
+    }
+}
+
+fn spawn_hud(mut commands: Commands) {
+    commands.spawn((
+        Node { position_type: PositionType::Absolute, left: px(24.0), bottom: px(20.0), ..default() },
+        children![(HudHealth, Text::new(""), TextFont { font_size: FontSize::Px(26.0), ..default() }, TextColor(Color::WHITE))],
+    ));
+}
+
+fn update_hud(stats: Res<PlayerStats>, mut text: Single<&mut Text, With<HudHealth>>) {
+    text.0 = if stats.health > 0.0 {
+        let hearts = stats.health.ceil().max(0.0) as usize;
+        format!("{} {:.0}/{:.0}   score {}   kills {}", "♥".repeat(hearts), stats.health, PLAYER_MAX_HEALTH, stats.score, stats.kills)
+    } else {
+        format!("YOU DIED - respawn in {:.0}   score {}", stats.respawn_in.max(0.0).ceil(), stats.score)
+    };
+}
+
+/// PG3D_AUTOAIM=1 (automated tests): turn the camera to the nearest living bot.
+fn auto_aim(
+    bots: Query<(&GlobalTransform, &Bot)>,
+    mut camera: Single<&mut Transform, With<crate::camera::PlayerCamera>>,
+) {
+    if std::env::var("PG3D_AUTOAIM").is_err() {
+        return;
+    }
+    let eye = camera.translation;
+    let target = bots
+        .iter()
+        .filter(|(_, b)| b.state != BotState::Dead)
+        .map(|(t, _)| t.translation() + Vec3::Y * 1.2)
+        .min_by(|a, b| a.distance(eye).total_cmp(&b.distance(eye)));
+    if let Some(p) = target {
+        camera.look_at(p, Vec3::Y);
+    }
+}

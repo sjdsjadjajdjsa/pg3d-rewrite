@@ -9,6 +9,7 @@
 //!           left mouse = fire, R = reload, 1-6 / wheel = switch weapon,
 //!           V = toggle walk / fly camera, F12 = screenshot.
 
+mod bots;
 mod camera;
 mod lighting;
 mod map;
@@ -56,6 +57,7 @@ fn main() {
             camera::CameraPlugin,
             screenshot::ScreenshotPlugin,
             weapons::WeaponsPlugin,
+            bots::BotsPlugin,
         ))
         .run();
 }

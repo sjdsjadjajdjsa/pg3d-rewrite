@@ -91,6 +91,10 @@ pub enum Layer {
     #[default]
     World,
     Trigger,
+    /// bots / enemies: hit by bullets, not part of the level
+    Enemy,
+    /// the local player's own capsule (bullets start inside it, so they must skip it)
+    Player,
 }
 
 /// A trigger volume from the original level, e.g. "DeadCollider" (kill zone).

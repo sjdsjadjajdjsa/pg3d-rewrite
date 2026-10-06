@@ -88,7 +88,11 @@ fn spawn_player(mut commands: Commands, markers: Res<MapMarkers>) {
             CollidingEntities::default(),
         ))
         .with_children(|c| {
-            c.spawn((Collider::capsule(RADIUS, cylinder), Transform::from_xyz(0.0, CENTER_Y, 0.0)));
+            c.spawn((
+                Collider::capsule(RADIUS, cylinder),
+                Transform::from_xyz(0.0, CENTER_Y, 0.0),
+                CollisionLayers::new(Layer::Player, LayerMask::ALL),
+            ));
         });
 }
 

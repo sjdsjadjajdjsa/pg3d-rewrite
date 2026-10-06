@@ -20,7 +20,13 @@ use bevy::{
 };
 use serde::Deserialize;
 
-use crate::{DataDir, camera::PlayerCamera, map::Layer, player::Player};
+use crate::{
+    DataDir,
+    bots::{BotDamage, BotPart},
+    camera::PlayerCamera,
+    map::Layer,
+    player::Player,
+};
 
 /// Weapons given to the player, in slot order (keys 1..6). Only ones that were exported load.
 const LOADOUT: [&str; 6] = ["Weapon2", "Weapon1", "Weapon9", "Weapon3", "Weapon5", "Weapon11"];
@@ -72,6 +78,12 @@ pub struct WeaponDef {
     pub downKoof: f32,
     pub radiusRoundMelee: f32,
     pub shootDistanceIfZoom: f32,
+    /// pellets per shot for shotguns
+    pub countShots: i32,
+    /// damage per bullet; index = weapon upgrade tier (we use tier 0)
+    pub damageByTier: Vec<f32>,
+    /// random damage variation in percent (x = min, y = max)
+    pub damageRange: UnityVec2,
     /// offset of the weapon prefab from the camera (Unity coordinates)
     pub gunPosition: UnityVec3,
 }
@@ -81,6 +93,12 @@ pub struct UnityVec3 {
     pub x: f32,
     pub y: f32,
     pub z: f32,
+}
+
+#[derive(Deserialize, Clone, Copy, Debug, Default)]
+pub struct UnityVec2 {
+    pub x: f32,
+    pub y: f32,
 }
 
 impl UnityVec3 {
@@ -355,8 +373,14 @@ fn fire(
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
     mut impact_assets: Local<Option<(Handle<Mesh>, Handle<StandardMaterial>)>>,
+    bot_parts: Query<&BotPart>,
+    mut hits: MessageWriter<BotDamage>,
+    alive: Res<crate::bots::PlayerStats>,
 ) {
     let dt = time.delta_secs();
+    if alive.health <= 0.0 {
+        return;
+    }
     // reborrow as a plain struct so we can use different fields at the same time
     let loadout = &mut *loadout;
     loadout.cooldown = (loadout.cooldown - dt).max(0.0);
@@ -381,7 +405,11 @@ fn fire(
     if !melee {
         w.clip -= 1;
     }
-    let pellets = if w.def.isShotGun != 0 { 8 } else { 1 }; // GUESS: pellet count not found yet
+    // Shotguns fire `countShots` pellets (15 for the starter shotgun: 15 x 0.215 damage
+    // = one full hit kills a 3 HP campaign zombie, which matches the original).
+    let pellets = if w.def.isShotGun != 0 { w.def.countShots.max(1) as u32 } else { 1 };
+    let base_damage = w.def.damageByTier.first().copied().unwrap_or(1.0);
+    let (dmin, dmax) = (w.def.damageRange.x, w.def.damageRange.y);
     let range = if melee { w.def.radiusRoundMelee.max(2.5) } else { 300.0 };
     // spread in degrees: base + accumulated recoil (GUESS: unit of tekKoof/upKoofFire)
     let spread_deg = w.def.tekKoof + w.spread + if pellets > 1 { 4.0 } else { 0.0 };
@@ -400,10 +428,16 @@ fn fire(
         })
         .clone();
     let origin = camera.translation();
-    let filter = SpatialQueryFilter::from_mask(Layer::World);
+    let filter = SpatialQueryFilter::from_mask([Layer::World, Layer::Enemy]);
     for i in 0..pellets {
         let dir = spread_dir(camera.rotation(), spread_deg, time.elapsed_secs(), i);
-        if let Some(hit) = spatial.cast_ray(origin, dir, range, true, &filter) {
+        let Some(hit) = spatial.cast_ray(origin, dir, range, true, &filter) else { continue };
+        if let Ok(part) = bot_parts.get(hit.entity) {
+            // random variation of +-damageRange percent, like the original
+            let r = (time.elapsed_secs() * 91.7 + i as f32 * 3.3).sin() * 0.5 + 0.5;
+            let amount = base_damage * (1.0 + (dmin + (dmax - dmin) * r) / 100.0);
+            hits.write(BotDamage { bot: part.0, amount });
+        } else {
             let p = origin + dir * hit.distance + hit.normal * 0.01;
             commands.spawn((Mesh3d(mesh.clone()), MeshMaterial3d(mat.clone()), Transform::from_translation(p), Impact(8.0)));
         }
