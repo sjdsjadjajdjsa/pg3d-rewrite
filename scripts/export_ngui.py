@@ -107,6 +107,17 @@ class Ngui:
                                    s["paddingLeft"], s["paddingRight"], s["paddingTop"], s["paddingBottom"]]
                        for s in d["mSprites"]}
             img = tex.read()
+            # 13th value: 1 if a 9-slice sprite's middle is fully transparent (a frame);
+            # NGUI never samples it, but a stretched GPU texture would smear the border in
+            alpha = img.image.convert("RGBA").getchannel("A")
+            for name, v in sprites.items():
+                x, y, w, h, bl, br, bt, bb = v[:8]
+                clear = 0
+                if bl + br + bt + bb > 0 and w - bl - br > 0 and h - bt - bb > 0:
+                    box = (int(x + bl), int(y + bt), int(x + w - br), int(y + h - bb))
+                    lo, hi = alpha.crop(box).getextrema()
+                    clear = 1 if hi < 16 else 0
+                v.append(clear)
             self.atlases[key] = {"name": o.read(check_read=False).m_GameObject.read().m_Name if False else key,
                                  "png": self.texture_png(tex, "atlases", out),
                                  "size": [img.m_Width, img.m_Height], "pixel_size": d.get("mPixelSize", 1.0),
