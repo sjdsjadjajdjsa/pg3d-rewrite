@@ -87,6 +87,9 @@ struct Item {
     isMelee: i32,
     speedModifier: f32,
     dpses: Vec<f32>,
+    /// shotguns: pellets per shot (countShots), each doing dpses
+    isShotGun: i32,
+    countShots: i32,
     /// effect lines under the stats ("Automatic", "Zoom", ...)
     InShopEffects: Vec<i32>,
     /// from the game's balance tables (balance.json, filled in at load)
@@ -158,7 +161,9 @@ impl Item {
     /// our approximation of the shop's Efficiency number (the live game gets it from its
     /// servers): damage per second at tier 0
     fn efficiency(&self) -> i32 {
-        self.dpses.first().copied().unwrap_or(0.0).round().max(1.0) as i32
+        // per pellet for shotguns: OBSERVED Shotgun (0.3 x 15 pellets) shows 5
+        let pellets = if self.isShotGun != 0 { self.countShots.max(1) as f32 } else { 1.0 };
+        (self.dpses.first().copied().unwrap_or(0.0) * pellets).round().max(1.0) as i32
     }
 }
 
