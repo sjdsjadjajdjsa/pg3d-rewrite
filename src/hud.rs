@@ -15,12 +15,18 @@ pub struct HudPlugin;
 
 impl Plugin for HudPlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(Startup, spawn_hud).add_systems(Update, (damage_flash, hit_arrows));
+        app.add_systems(Startup, spawn_hud).add_systems(Update, (damage_flash, hit_arrows, heal_flash));
     }
 }
 
 #[derive(Component)]
 struct Vignette;
+
+/// Green screen tint when health goes up (OBSERVED in clip d_rec8: ~0.5 s, strongest at
+/// the edges, after picking up a health bonus).
+#[derive(Component)]
+struct HealTint;
+const HEAL_FADE: f32 = 0.5;
 
 /// Seconds the hit flash and arrows take to fade.
 const HIT_FADE: f32 = 1.0;
@@ -71,6 +77,13 @@ fn spawn_hud(mut commands: Commands, mut images: ResMut<Assets<Image>>) {
     commands.spawn((
         Vignette,
         vignette(0.0),
+        Node { position_type: PositionType::Absolute, width: percent(100.0), height: percent(100.0), ..default() },
+        GlobalZIndex(-1),
+        Pickable::IGNORE,
+    ));
+    commands.spawn((
+        HealTint,
+        heal_tint(0.0),
         Node { position_type: PositionType::Absolute, width: percent(100.0), height: percent(100.0), ..default() },
         GlobalZIndex(-1),
         Pickable::IGNORE,
@@ -142,4 +155,34 @@ fn hit_arrows(
         tf.rotation = Rot2::radians(ang);
         img.color.set_alpha(0.9 * (1.0 - a.age / HIT_FADE));
     }
+}
+
+fn heal_flash(
+    time: Res<Time>,
+    stats: Res<PlayerStats>,
+    mut prev: Local<Option<f32>>,
+    mut left: Local<f32>,
+    mut tint: Single<&mut BackgroundGradient, With<HealTint>>,
+) {
+    if prev.is_some_and(|p| stats.health > p + 0.01) {
+        *left = HEAL_FADE;
+    }
+    *prev = Some(stats.health);
+    if *left <= 0.0 {
+        return;
+    }
+    *left = (*left - time.delta_secs()).max(0.0);
+    // rises quickly, then fades
+    let t = 1.0 - *left / HEAL_FADE;
+    let a = if t < 0.2 { t / 0.2 } else { (1.0 - t) / 0.8 };
+    **tint = heal_tint(a * 0.55);
+}
+
+fn heal_tint(alpha: f32) -> BackgroundGradient {
+    let green = |a: f32| Color::srgba(0.1, 0.8, 0.1, a);
+    BackgroundGradient::from(RadialGradient::new(
+        UiPosition::CENTER,
+        RadialGradientShape::FarthestCorner,
+        vec![ColorStop::new(green(alpha * 0.25), percent(0.0)), ColorStop::new(green(alpha), percent(100.0))],
+    ))
 }

@@ -219,10 +219,11 @@ fn update(
         n.icons_for = names;
     }
     let dead = stats.health <= 0.0 || over.0;
-    // the bar slides to the new value instead of jumping (OBSERVED: ~150 %/s in clip d_rec4)
+    // the bar slides to the new value instead of jumping (OBSERVED: ~120-150 %/s in clips
+    // d_rec4 and d_rec8)
     let target = (stats.health / PLAYER_MAX_HEALTH).clamp(0.0, 1.0);
     let cur = shown.unwrap_or(target);
-    let step = 1.5 * time.delta_secs();
+    let step = 1.3 * time.delta_secs();
     let k = cur + (target - cur).clamp(-step, step);
     *shown = Some(k);
     let ammo: Vec<String> = loadout

@@ -13,8 +13,10 @@ use crate::{
     weapons::Loadout,
 };
 
-/// GUESS: amounts and respawn time are not recovered yet.
-const HEALTH_AMOUNT: f32 = 3.0;
+/// OBSERVED (reference clip d_rec8): a health pickup gives back half of max health
+/// (32% -> 82%, and 51% -> full).
+const HEALTH_AMOUNT: f32 = PLAYER_MAX_HEALTH * 0.5;
+/// GUESS: respawn time is not recovered yet.
 const RESPAWN_SECS: f32 = 15.0;
 const PICKUP_RADIUS: f32 = 1.3;
 
@@ -125,15 +127,16 @@ fn collect(
                 true
             }
             Kind::Ammo => {
-                // one extra magazine for every gun (GUESS)
-                let mut any = false;
-                for w in &mut loadout.weapons {
-                    if w.def.isMelee == 0 && w.reserve < w.def.maxAmmo {
+                // one extra magazine for the gun in hand only (OBSERVED in clip d_rec8:
+                // 50/50 -> 50/100 on the selected gun, the other slots unchanged)
+                let cur = loadout.current;
+                match loadout.weapons.get_mut(cur) {
+                    Some(w) if w.def.isMelee == 0 && w.reserve < w.def.maxAmmo => {
                         w.reserve = (w.reserve + w.def.ammoInClip).min(w.def.maxAmmo);
-                        any = true;
+                        true
                     }
+                    _ => false,
                 }
-                any
             }
             _ => false,
         };
