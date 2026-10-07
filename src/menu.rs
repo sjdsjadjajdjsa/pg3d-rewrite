@@ -205,7 +205,13 @@ fn setup_lobby(
             "icon_loading",
         ];
         let hide_paths = [
-            "RightAnchor/EventCenterButton",
+            // a downloaded event's button; the Event Center button sits in the same spot
+            "RightAnchor/TemplateEventLobbyButtonLoader",
+            // tournaments and the special-offer button need the online services
+            "BotBtnsLayout_Online/BtnCompetition",
+            "SettingsBtnsLayout/BtnSpecial",
+            "BtnBattle_A/Normal/NotifRewardForModes",
+            "panel_Boosters/Layout/FirstPurchaseGiftLobbyButton",
             "RightAnchor/ConfrontationEvent_LobbyButton",
             "LeftAnchor/LobbyTopBtnsLayout/OfferwallButton2",
         ];
@@ -229,6 +235,36 @@ fn setup_lobby(
             let hits: Vec<usize> = (0..s.nodes.len()).filter(|&i| s.path(i).ends_with(suffix)).collect();
             for i in hits {
                 s.set_text(i, text);
+            }
+        }
+        // WidgetLayout closes the gap the hidden Tournament button leaves
+        if let Some(i) = s.find_path("BotBtnsLayout_Online/BtnClan") {
+            s.set_pos(i, Vec2::new(-200.0, 0.0));
+        }
+        if let Some(i) = s.find_path("panel_Boosters/Layout/DiscordButton") {
+            s.set_pos(i, Vec2::new(0.0, -120.0)); // OBSERVED: same 60 step as the two above
+        }
+        // Pixel Pass: no season running offline, so the "Season over!" look of the original
+        // (State_OnSeasonEnd, crown instead of the next reward), level 1, 0 of 150 points
+        if let Some(pp) = s.find("PixelPassLobbyButton") {
+            for (name, on) in [("State_OnSeasonEnd(OFF)", true), ("Last_Cell_Reward", false), ("crown_icon", true), ("Golden_Shield", false)] {
+                if let Some(i) = s.find_in(pp, name) {
+                    s.set_active(i, on);
+                }
+            }
+            // each label has shadow copies below it ("Level_Label (1)", "Progress_Label (2)")
+            for i in s.subtree(pp) {
+                let name = s.nodes[i].name.clone();
+                if name.starts_with("Level_Label") {
+                    s.set_text(i, "1");
+                } else if name.starts_with("Progress_Label") {
+                    s.set_text(i, "0/150");
+                } else if name == "notifications" {
+                    s.set_active(i, false);
+                }
+            }
+            if let Some(i) = s.find_in(pp, "ProgressBarCont").and_then(|c| s.find_in(c, "fill")) {
+                s.set_fill(i, 0.0);
             }
         }
         // XP bar: 0 of 100 at level 1 (the yellow "addition" part animates newly won XP)

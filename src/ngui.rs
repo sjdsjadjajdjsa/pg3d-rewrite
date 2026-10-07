@@ -111,6 +111,9 @@ pub struct LabelDef {
     pub effect_color: [f32; 4],
     pub effect_dist: [f32; 2],
     pub spacing: [f32; 2],
+    /// most lines the text may wrap to (0 = any)
+    #[serde(default)]
+    pub max_lines: i32,
     /// translation key (NGUI/I2 "term"); the text field is then just a placeholder
     #[serde(default)]
     pub key: String,
@@ -1076,14 +1079,37 @@ fn build_glyphs(
         x += g[6] + l.spacing[0] * font.size / l.size.max(1.0);
         *widths.last_mut().unwrap() = x;
     }
+    let (mut lines, mut widths) = (lines, widths);
     let mut s = l.size / font.size; // virtual units per font pixel
-    let line_h = font.size + l.spacing[1] * font.size / l.size.max(1.0);
+    let gap = l.spacing[1] * font.size / l.size.max(1.0);
+    let line_h = font.size + gap;
     let box_w = sr.width() / k;
     let box_h = sr.height() / k;
     let max_w = widths.iter().cloned().fold(0.0, f32::max) * s;
     let total_h = line_h * lines.len() as f32 * s;
     if l.overflow == 0 && (max_w > box_w || total_h > box_h) && max_w > 0.0 {
-        s *= (box_w / max_w).min(box_h / total_h).min(1.0);
+        // NGUI ShrinkContent: wrap the words to the label's width, and if that is too tall
+        // try again one font size smaller (UILabel.ProcessText)
+        let mut fitted = None;
+        if l.max_lines != 1 {
+            let mut fs = l.size.round();
+            while fs >= 1.0 && fitted.is_none() {
+                let sc = fs / font.size;
+                let (wl, ww) = wrap_lines(&lines, box_w / sc);
+                let n = wl.len() as f32;
+                let mw = ww.iter().cloned().fold(0.0, f32::max) * sc;
+                let h = (font.size * n + gap * (n - 1.0)) * sc;
+                let lines_ok = l.max_lines <= 0 || wl.len() <= l.max_lines as usize;
+                if mw <= box_w + 0.01 && h <= box_h + 0.01 && lines_ok {
+                    fitted = Some((sc, wl, ww));
+                }
+                fs -= 1.0;
+            }
+        }
+        match fitted {
+            Some((sc, wl, ww)) => (s, lines, widths) = (sc, wl, ww),
+            None => s *= (box_w / max_w).min(box_h / total_h).min(1.0),
+        }
     }
     let pv = pivot_offset(w.pivot);
     // NGUI "Automatic" alignment follows the pivot
@@ -1384,4 +1410,46 @@ impl UiMaterial for GlyphMaterial {
     fn fragment_shader() -> bevy::shader::ShaderRef {
         "embedded://pixel_gun_3d_rs/glyph.wgsl".into()
     }
+}
+
+/// Break lines at spaces so that none is wider than `max_w` font pixels (NGUIText.WrapText).
+/// Glyph x positions are moved to the start of their new line; widths are recomputed.
+#[allow(clippy::type_complexity)]
+fn wrap_lines(
+    lines: &[Vec<(char, Color, [f32; 7], f32)>],
+    max_w: f32,
+) -> (Vec<Vec<(char, Color, [f32; 7], f32)>>, Vec<f32>) {
+    let (mut out, mut widths) = (vec![], vec![]);
+    for line in lines {
+        let mut start = 0; // index of the first glyph of the current output line
+        let mut space: Option<usize> = None; // last space on the current output line
+        let mut j = 0;
+        while j < line.len() {
+            let (ch, _, g, x) = line[j];
+            let x0 = line[start].3;
+            if ch == ' ' {
+                space = Some(j);
+            } else if x + g[6] - x0 > max_w {
+                if let Some(sp) = space.filter(|&sp| sp > start) {
+                    out.push(line[start..sp].iter().map(|&(c, col, g, x)| (c, col, g, x - x0)).collect());
+                    widths.push(line[sp].3 - x0);
+                    start = sp + 1;
+                    space = None;
+                    j = start;
+                    continue;
+                }
+            }
+            j += 1;
+        }
+        if start < line.len() {
+            let x0 = line[start].3;
+            let last = line[line.len() - 1];
+            out.push(line[start..].iter().map(|&(c, col, g, x)| (c, col, g, x - x0)).collect());
+            widths.push(last.3 + last.2[6] - x0);
+        } else {
+            out.push(vec![]);
+            widths.push(0.0);
+        }
+    }
+    (out, widths)
 }
