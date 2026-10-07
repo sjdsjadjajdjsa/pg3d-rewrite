@@ -65,18 +65,15 @@ pub fn spawn_camera(mut commands: Commands, settings: Res<crate::settings::Setti
     ));
 }
 
+/// Clicking into the game captures the mouse (Esc opens the pause screen, see pause.rs).
 fn grab_cursor(
     mut cursor: Single<&mut CursorOptions>,
     mouse: Res<ButtonInput<MouseButton>>,
-    keys: Res<ButtonInput<KeyCode>>,
+    paused: Res<crate::pause::Paused>,
 ) {
-    if mouse.just_pressed(MouseButton::Left) {
+    if !paused.0 && mouse.just_pressed(MouseButton::Left) {
         cursor.grab_mode = CursorGrabMode::Locked;
         cursor.visible = false;
-    }
-    if keys.just_pressed(KeyCode::Escape) {
-        cursor.grab_mode = CursorGrabMode::None;
-        cursor.visible = true;
     }
 }
 

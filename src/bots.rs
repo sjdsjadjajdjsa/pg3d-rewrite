@@ -50,7 +50,7 @@ impl Plugin for BotsPlugin {
             .add_systems(FixedUpdate, (bot_brain, bot_move).chain())
             .add_systems(
                 Update,
-                (spawner, apply_damage, bot_death, bot_animation, player_death, update_hud, auto_aim),
+                (spawner, apply_damage, bot_death, bot_animation, player_death, update_hud, auto_aim, fade_banners),
             );
     }
 }
@@ -284,6 +284,9 @@ fn spawner(
     if wave.to_spawn == 0 && alive == 0 {
         if wave.break_left <= 0.0 {
             wave.break_left = if wave.number == 0 { 2.0 } else { WAVE_BREAK };
+            if wave.number > 0 {
+                banner(&mut commands, "WAVE CLEARED!", Color::srgb(0.3, 1.0, 0.3));
+            }
         }
         wave.break_left -= dt;
         if wave.break_left <= 0.0 {
@@ -291,6 +294,7 @@ fn spawner(
             wave.to_spawn = 4 + 2 * wave.number;
             wave.break_left = 0.0;
             info!("wave {} ({} zombies)", wave.number, wave.to_spawn);
+            banner(&mut commands, &format!("WAVE {}", wave.number), Color::srgb(1.0, 0.85, 0.1));
         }
         return;
     }
@@ -686,6 +690,48 @@ fn player_death(
         stats.health = PLAYER_MAX_HEALTH;
         stats.respawn_in = 0.0;
         stats.protected = 3.0; // GUESS: spawn protection time
+    }
+}
+
+/// Big centred message that fades out ("WAVE 2", "WAVE CLEARED!").
+#[derive(Component)]
+struct Banner(f32);
+
+fn banner(commands: &mut Commands, text: &str, color: Color) {
+    commands.spawn((
+        Banner(2.5),
+        Node {
+            position_type: PositionType::Absolute,
+            width: percent(100.0),
+            top: percent(28.0),
+            justify_content: JustifyContent::Center,
+            ..default()
+        },
+        children![(
+            Text::new(text),
+            TextFont { font_size: FontSize::Px(64.0), ..default() },
+            TextColor(color),
+            TextShadow { offset: Vec2::splat(3.0), color: Color::BLACK },
+        )],
+    ));
+}
+
+fn fade_banners(
+    mut commands: Commands,
+    time: Res<Time>,
+    mut q: Query<(Entity, &mut Banner, &Children)>,
+    mut texts: Query<&mut TextColor>,
+) {
+    for (e, mut b, kids) in &mut q {
+        b.0 -= time.delta_secs();
+        for k in kids.iter() {
+            if let Ok(mut c) = texts.get_mut(k) {
+                c.0.set_alpha(b.0.clamp(0.0, 1.0));
+            }
+        }
+        if b.0 <= 0.0 {
+            commands.entity(e).despawn();
+        }
     }
 }
 

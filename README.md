@@ -28,13 +28,14 @@ tools/venv/bin/python scripts/export_ngui.py resources.assets AllModesView modes
 tools/venv/bin/python scripts/export_previews.py
 tools/venv/bin/python scripts/export_ngui.py resources.assets SettingsWindow settings
 tools/venv/bin/python scripts/export_pickups.py
+tools/venv/bin/python scripts/export_ngui.py resources.assets SettingsPanel pause
 
 # here:
 cargo run            # start menu: pick a map
 cargo run -- arena   # straight into a map
 ```
 
-Controls: click = capture mouse, Esc = release, WASD = move, Space = jump,
+Controls: click = capture mouse, Esc = pause (settings, resume), WASD = move, Space = jump,
 left mouse = fire (hold), right mouse = zoom (scoped weapons), R = reload,
 1-9 / mouse wheel = switch weapon, F10 = back to the menu,
 V = toggle walk / fly camera (fly: Space/Ctrl up/down, Shift fast), F12 = screenshot.
@@ -56,6 +57,8 @@ V = toggle walk / fly camera (fly: Space/Ctrl up/down, Shift fast), F12 = screen
 | `src/menu.rs` | the original lobby (3D scene, character, music, re-drawn UI) → To Battle → the original game mode hub (Campaign / Sandbox) → map picker with the game's map pictures |
 | `src/ngui.rs` | re-implementation of NGUI (the original UI system): layout, anchors, sliced sprites, bitmap fonts, buttons |
 | `src/settings.rs` | saved settings (music / sound FX volume, mouse sensitivity) in ~/.config/pixel-gun-3d-rs/settings.json |
+| `src/settings_ui.rs` | the original settings window's sliders, shared by menu and pause screen |
+| `src/pause.rs` | Esc pause screen (original pause panel): stops the match, settings, resume |
 | `src/pickups.rs` | health and ammo pickups at the map's BonusCreationZone points |
 | `src/bots.rs` | campaign zombies in waves (wave n = 4 + 2n, harder types later): chase/attack/die, player health, score |
 | `src/screenshot.rs` | F12 screenshots, `PG3D_AUTOSHOT` for automated checks |
@@ -65,7 +68,7 @@ unfocused at the bottom of the window stack.
 
 Debug environment variables: `PG3D_TRACE=1` (log player position), `PG3D_AUTOWALK=1`
 (walk forward + jump automatically), `PG3D_AUTOFIRE=1` / `PG3D_AUTOAIM=1` (shoot / aim at bots
-automatically), `PG3D_NOBOTS=1`, `PG3D_HUNT=1` (zombies always chase), `PG3D_SPAWN=x,y,z` (player start), `PG3D_BOTS=Enemy3_go,...` (only these bots),
+automatically), `PG3D_NOBOTS=1`, `PG3D_HUNT=1` (zombies always chase), `PG3D_SPAWN=x,y,z` (player start), `PG3D_PAUSE=1` (open the pause screen after 2 s), `PG3D_BOTS=Enemy3_go,...` (only these bots),
 `PG3D_LOADOUT=Weapon2,Weapon61,...` (custom weapons), `PG3D_MENU_CLICK=BtnBattle_A` (press a lobby
 button after 2 s), `PG3D_CAM="x,y,z,tx,ty,tz"` (start in fly mode at a
 position looking at a target), `PG3D_AUTOSHOT=file.png` (screenshot after load, then quit).

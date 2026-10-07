@@ -6,7 +6,7 @@
 //!       game by ../pixel-gun-3d-re/scripts/export_map.py. Override the location with
 //!       PG3D_DATA=/path/to/export.
 //!
-//! Controls: click = capture mouse, Esc = release, WASD move, Space jump,
+//! Controls: click = capture mouse, Esc = pause, WASD move, Space jump,
 //!           left mouse = fire, R = reload, 1-6 / wheel = switch weapon,
 //!           V = toggle walk / fly camera, F12 = screenshot, F10 = back to menu.
 
@@ -23,6 +23,8 @@ mod player;
 mod projectiles;
 mod screenshot;
 mod settings;
+mod settings_ui;
+mod pause;
 mod sound;
 mod weapons;
 
@@ -119,6 +121,8 @@ fn main() {
             bots::BotsPlugin,
             projectiles::ProjectilesPlugin,
             pickups::PickupsPlugin,
+            crate::ngui::NguiPlugin,
+            pause::PausePlugin,
         ))
         .add_systems(Update, menu::back_to_menu)
         .add_systems(
