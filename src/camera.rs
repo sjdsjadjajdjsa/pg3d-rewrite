@@ -70,8 +70,12 @@ fn grab_cursor(
     mut cursor: Single<&mut CursorOptions>,
     mouse: Res<ButtonInput<MouseButton>>,
     paused: Res<crate::pause::Paused>,
+    stats: Option<Res<crate::bots::PlayerStats>>,
+    over: Option<Res<crate::results::MatchOver>>,
 ) {
-    if !paused.0 && mouse.just_pressed(MouseButton::Left) {
+    // not on the death / results screens: their buttons need the free pointer
+    let dead = stats.is_some_and(|s| s.health <= 0.0) || over.is_some_and(|o| o.0);
+    if !paused.0 && !dead && mouse.just_pressed(MouseButton::Left) {
         cursor.grab_mode = CursorGrabMode::Locked;
         cursor.visible = false;
     }

@@ -817,8 +817,18 @@ fn layout(
                     }
                 }
             }
-            let Some(area) = area else { continue };
+            let Some(area) = area else {
+                // nothing of it is shown any more (e.g. the pause Menu was closed): its old
+                // click area must go too, or it stays under the hidden aiming pointer
+                if let Some(e) = screen.hits[i] {
+                    commands.entity(e).insert(Visibility::Hidden);
+                }
+                continue;
+            };
             let sr = to_screen(area);
+            if visible && std::env::var("PG3D_TRACE_HITS").is_ok() {
+                info!("hit area {} {:?}", screen.path(i), sr);
+            }
             let z = panel_of(screen, i).0 * 1000 + 900;
             let e = *screen.hits[i].get_or_insert_with(|| {
                 let e = commands
@@ -1256,13 +1266,34 @@ fn build_glyphs(
     commands.entity(e).add_children(&ids);
 }
 
-fn hover(mut q: Query<(&Interaction, &mut BackgroundColor), (With<Hit>, Changed<Interaction>)>) {
+/// True while the mouse is locked for aiming in a match: the pointer is hidden, so the
+/// on-screen buttons must neither light up nor react to it (the shoot click would
+/// otherwise "press" whatever HUD button the hidden pointer happens to be over).
+fn aiming(cursors: &Query<&bevy::window::CursorOptions>) -> bool {
+    cursors.iter().any(|c| c.grab_mode != bevy::window::CursorGrabMode::None)
+}
+
+fn hover(
+    mut q: Query<(Ref<Interaction>, &mut BackgroundColor), With<Hit>>,
+    cursors: Query<&bevy::window::CursorOptions>,
+    mut was_aiming: Local<bool>,
+) {
+    let aim = aiming(&cursors);
+    let changed_mode = aim != *was_aiming;
+    *was_aiming = aim;
     for (i, mut bg) in &mut q {
-        bg.0 = match i {
-            Interaction::Pressed => Color::srgba(0.0, 0.0, 0.0, 0.15),
-            Interaction::Hovered => Color::srgba(1.0, 1.0, 1.0, 0.08),
-            Interaction::None => Color::NONE,
+        if !i.is_changed() && !changed_mode {
+            continue;
+        }
+        let want = match (*i, aim) {
+            (_, true) => Color::NONE,
+            (Interaction::Pressed, _) => Color::srgba(0.0, 0.0, 0.0, 0.15),
+            (Interaction::Hovered, _) => Color::srgba(1.0, 1.0, 1.0, 0.08),
+            (Interaction::None, _) => Color::NONE,
         };
+        if bg.0 != want {
+            bg.0 = want;
+        }
     }
 }
 
@@ -1270,7 +1301,11 @@ fn clicks(
     q: Query<(&Interaction, &Hit), Changed<Interaction>>,
     screens: Query<&NguiScreen>,
     mut out: MessageWriter<NguiClick>,
+    cursors: Query<&bevy::window::CursorOptions>,
 ) {
+    if aiming(&cursors) {
+        return;
+    }
     for (i, h) in &q {
         if *i == Interaction::Pressed {
             if let Ok(s) = screens.get(h.screen) {
