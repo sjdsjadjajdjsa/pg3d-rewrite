@@ -204,6 +204,8 @@ pub struct NguiScreen {
     pub pos_override: HashMap<usize, Vec2>,
     /// slider node -> current value 0..1
     pub slider_values: HashMap<usize, f32>,
+    /// filled sprite node -> fill amount 0..1 (horizontal fills grow from the left)
+    pub fill_override: HashMap<usize, f32>,
     dirty: bool,
     last_size: Vec2,
     /// label glyph cache key (node -> (text, size)) to avoid rebuilding glyphs
@@ -234,8 +236,9 @@ impl NguiScreen {
         parts.join("/")
     }
     pub fn set_active(&mut self, i: usize, on: bool) {
-        self.active_override.insert(i, on);
-        self.dirty = true;
+        if self.active_override.insert(i, on) != Some(on) {
+            self.dirty = true;
+        }
     }
     /// Set a slider's value (0..1) and move its thumb.
     pub fn set_slider(&mut self, i: usize, value: f32) {
@@ -260,6 +263,12 @@ impl NguiScreen {
     pub fn set_texture(&mut self, i: usize, image: Handle<Image>) {
         self.texture_override.insert(i, image);
         self.dirty = true;
+    }
+    pub fn set_fill(&mut self, i: usize, amount: f32) {
+        if self.fill_override.get(&i) != Some(&amount) {
+            self.fill_override.insert(i, amount);
+            self.dirty = true;
+        }
     }
     pub fn set_pos(&mut self, i: usize, pos: Vec2) {
         self.pos_override.insert(i, pos);
@@ -308,8 +317,11 @@ impl NguiScreen {
         base
     }
     pub fn set_text(&mut self, i: usize, text: impl Into<String>) {
-        self.text_override.insert(i, text.into());
-        self.dirty = true;
+        let text = text.into();
+        if self.text_override.get(&i) != Some(&text) {
+            self.text_override.insert(i, text);
+            self.dirty = true;
+        }
     }
     fn active(&self, i: usize) -> bool {
         *self.active_override.get(&i).unwrap_or(&self.nodes[i].active)
@@ -413,6 +425,7 @@ pub fn spawn_screen(commands: &mut Commands, assets: &AssetServer, data: &DataDi
         size_override: HashMap::new(),
         pos_override: HashMap::new(),
         slider_values: HashMap::new(),
+        fill_override: HashMap::new(),
         dirty: true,
         last_size: Vec2::ZERO,
         glyph_key: HashMap::new(),
@@ -646,7 +659,19 @@ fn layout(
             }
             let e = screen.entities[i].unwrap();
             if let Ok((mut node, mut vis, mut gz)) = nodes_q.get_mut(e) {
-                let dr = sprite_draw_rect(screen, &nd, sr);
+                let mut dr = sprite_draw_rect(screen, &nd, sr);
+                if let (Some(&f), Some(s)) = (screen.fill_override.get(&i), &nd.sprite)
+                    && s.kind == 3
+                    && s.fill_dir == 0
+                {
+                    let full = dr.width();
+                    dr.max.x = dr.min.x + full * f.clamp(0.0, 1.0);
+                    let r = s.atlas.as_ref().and_then(|a| screen.atlases.get(a)).and_then(|(_, a)| a.sprites.get(&s.name)).cloned();
+                    if let Some(r) = r {
+                        let rect = Rect::new(r[0], r[1], r[0] + r[2] * f.clamp(0.0, 1.0), r[1] + r[3]);
+                        commands.entity(e).entry::<ImageNode>().and_modify(move |mut img| img.rect = Some(rect));
+                    }
+                }
                 node.left = px(dr.min.x);
                 node.top = px(dr.min.y);
                 node.width = px(dr.width().max(0.0));

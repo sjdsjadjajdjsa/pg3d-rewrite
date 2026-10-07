@@ -15,7 +15,7 @@ use bevy::{
     camera::{Exposure, visibility::RenderLayers},
     render::render_resource::{Extent3d, TextureDimension, TextureFormat},
     core_pipeline::tonemapping::Tonemapping,
-    gltf::GltfExtras,
+    gltf::{GltfExtras, GltfMaterialExtras},
     light::IrradianceVolume,
     pbr::{DistanceFog, FogFalloff, Lightmap},
     prelude::*,
@@ -33,7 +33,7 @@ impl Plugin for LightingPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<HasProbes>()
             .add_systems(Startup, (setup_lights, setup_camera_look).after(crate::camera::spawn_camera))
-            .add_systems(Update, (attach_lightmaps, set_lightmap_exposure, gamma_blend_glass));
+            .add_systems(Update, (attach_lightmaps, set_lightmap_exposure, additive_materials, gamma_blend_glass).chain());
     }
 }
 
@@ -255,6 +255,23 @@ fn gamma_blend_glass(
         if let Some(mut m) = materials.get_mut(id) {
             let a = m.base_color.alpha();
             m.base_color.set_alpha((a * k).min(1.0));
+        }
+    }
+}
+
+/// Materials the exporter marks `"blend": "add"` (Unity Blend SrcAlpha One, e.g. the ice
+/// rink's light cones) add their colour on top of what's behind them.
+fn additive_materials(
+    q: Query<(&GltfMaterialExtras, &MeshMaterial3d<StandardMaterial>), Added<GltfMaterialExtras>>,
+    mut materials: ResMut<Assets<StandardMaterial>>,
+) {
+    for (extras, mat) in &q {
+        let add = serde_json::from_str::<serde_json::Value>(&extras.value)
+            .ok()
+            .is_some_and(|v| v.get("blend").and_then(|b| b.as_str()) == Some("add"));
+        if add && let Some(mut m) = materials.get_mut(&mat.0) {
+            m.alpha_mode = AlphaMode::Add;
+            m.unlit = true;
         }
     }
 }

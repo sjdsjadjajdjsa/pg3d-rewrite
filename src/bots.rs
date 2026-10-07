@@ -24,12 +24,17 @@ use crate::{
 
 /// Bot types we spawn are every exported bot folder in <data>/bots/ (picked at random).
 /// Zombies per wave. OBSERVED: the original Arena HUD shows 45 at the start of waves 1-3.
-const WAVE_SIZE: u32 = 45;
+pub const WAVE_SIZE: u32 = 45;
 /// How many bots are alive at once (GUESS: about 10 were on screen in the reference clips).
 const MAX_ALIVE: usize = 10;
 /// Pause between waves, seconds. OBSERVED (reference clip d_rec7, wave 2 -> 3): "Wave is
 /// over! Pick up the prize!" for 5 s, then a 5-4-3-2-1 countdown, then "New wave!".
 pub const WAVE_BREAK: f32 = 10.25;
+/// Seconds of "Invincibility" at the start (and after a respawn). OBSERVED in clip d_rec2:
+/// the HUD bar empties at 1/3 of its width per second and the panel vanishes with ~0.7 s of
+/// bar left, so the protection itself lasts ~2.3 s (the bar is drawn as if it were 3 s).
+pub const SPAWN_PROTECTION: f32 = 2.3;
+pub const SPAWN_PROTECTION_BAR: f32 = 3.0;
 /// Seconds between spawns while below MAX_ALIVE (GUESS: a 45-zombie wave took ~75 s).
 const SPAWN_INTERVAL: f32 = 1.2;
 /// Player health. GUESS: the original value is obfuscated; classic campaign had 9 hearts.
@@ -49,7 +54,7 @@ impl Plugin for BotsPlugin {
         app.add_message::<BotDamage>()
             .add_message::<PlayerHit>()
             .init_resource::<Wave>()
-            .insert_resource(PlayerStats { health: PLAYER_MAX_HEALTH, protected: 0.0, score: 0, kills: 0, respawn_in: 0.0 })
+            .insert_resource(PlayerStats { health: PLAYER_MAX_HEALTH, protected: SPAWN_PROTECTION, score: 0, kills: 0, respawn_in: 0.0 })
             .add_systems(Startup, load_bot_defs)
             .add_systems(FixedUpdate, (bot_brain, bot_move).chain())
             .add_systems(
@@ -705,7 +710,7 @@ fn player_death(
         p.velocity = Vec3::ZERO;
         stats.health = PLAYER_MAX_HEALTH;
         stats.respawn_in = 0.0;
-        stats.protected = 3.0; // GUESS: spawn protection time
+        stats.protected = SPAWN_PROTECTION;
     }
 }
 

@@ -22,7 +22,7 @@ pub struct InGameUiPlugin;
 impl Plugin for InGameUiPlugin {
     fn build(&self, app: &mut App) {
         app.add_systems(Startup, spawn)
-            .add_systems(Update, (setup, place_corners, update, update_arena_box, wave_messages, reload_ring, key_tips).chain());
+            .add_systems(Update, (setup, place_corners, update, update_arena_box, wave_messages, reload_ring, key_tips, invincibility).chain());
     }
 }
 
@@ -46,6 +46,9 @@ struct HudNodes {
     /// TipsPanel key hints: (Texture_Tip node, action)
     tips: Vec<(usize, crate::controls::Action)>,
     tips_for: Vec<String>,
+    /// GadgetsSFX/Immortality: the "Invincibility" panel (SfxBody) and its bar fill
+    immortal_body: Option<usize>,
+    immortal_fill: Option<usize>,
     /// InGameNotifications labels: "Wave is over! Pick up the prize!", "New wave!", and
     /// Wave1_And_Counter (the 5-4-3-2-1 countdown between waves)
     wave_done: Option<usize>,
@@ -100,7 +103,8 @@ fn update_arena_box(
     for (name, text) in [
         ("TimeSurvivalLabel", stats.score.to_string()),
         ("WaveSurvivalLabel", format!("Wave {}", wave.number.max(1))),
-        ("ScoreSurvivalLabel", wave.left.to_string()),
+        // before the first wave spawns the box already counts its zombies (OBSERVED)
+        ("ScoreSurvivalLabel", if wave.number == 0 { crate::bots::WAVE_SIZE.to_string() } else { wave.left.to_string() }),
     ] {
         if let Some(i) = s.find(name) {
             s.set_text(i, text);
@@ -128,7 +132,7 @@ fn setup(mut commands: Commands, mut screens: Query<(Entity, &mut NguiScreen), A
             let name = s.nodes[i].name.as_str();
             if (p == Some(camera) && i != interface && Some(i) != joystick)
                 || (p == Some(interface) && i != container)
-                || (p == Some(container) && !["WeaponToggles", "TopLeftAnchor", "InGameNotifications", "CenterAnchor SCOPE"].contains(&name))
+                || (p == Some(container) && !["WeaponToggles", "TopLeftAnchor", "InGameNotifications", "CenterAnchor SCOPE", "GadgetsSFX"].contains(&name))
             {
                 s.set_active(i, false);
             }
@@ -143,6 +147,17 @@ fn setup(mut commands: Commands, mut screens: Query<(Entity, &mut NguiScreen), A
             nodes.new_wave = s.find_in(t, "NewWave");
             nodes.counter = s.find_in(t, "Wave1_And_Counter");
             nodes.reload_label = s.find_in(t, "ReloadLabel");
+        }
+        if let Some(g) = s.find("GadgetsSFX") {
+            for i in s.subtree(g) {
+                if s.nodes[i].parent == Some(g) && s.nodes[i].name != "Immortality" {
+                    s.set_active(i, false);
+                }
+            }
+            if let Some(im) = s.find_in(g, "Immortality") {
+                nodes.immortal_body = s.find_in(im, "SfxBody");
+                nodes.immortal_fill = s.find_in(im, "fill");
+            }
         }
         if let Some(t) = s.find("CenterAnchor SCOPE") {
             // only the reload ring for now (our own crosshair is drawn by weapons.rs)
@@ -321,7 +336,9 @@ fn wave_messages(
     let done = between && elapsed < 5.0;
     let count = if between && !done { wave.break_left.ceil().clamp(1.0, 5.0) as u32 } else { 0 };
     let new = wave.number > 1 && wave.break_left <= 0.0 && wave.age < 1.25 && stats.health > 0.0;
-    let key = format!("{done} {count} {new}");
+    // "Wave 1" in the middle at the start of the match (OBSERVED: gone ~2 s in)
+    let first = wave.number == 0 && stats.health > 0.0;
+    let key = format!("{done} {count} {new} {first}");
     if *last == key {
         return;
     }
@@ -333,8 +350,8 @@ fn wave_messages(
         s.set_active(i, new);
     }
     if let Some(i) = n.counter {
-        s.set_active(i, count > 0);
-        s.set_text(i, count.to_string());
+        s.set_active(i, count > 0 || first);
+        s.set_text(i, if first { "Wave 1".to_string() } else { count.to_string() });
     }
 }
 
@@ -430,4 +447,19 @@ fn key_tips(
         s.set_size(*node, im.size_f32());
         false
     });
+}
+
+/// The original's "Invincibility" panel while spawn protection lasts: its gold bar empties
+/// from the right (see bots::SPAWN_PROTECTION).
+fn invincibility(stats: Res<PlayerStats>, hud: Res<Hud>, mut screens: Query<(&mut NguiScreen, &HudNodes)>) {
+    let Some(e) = hud.0 else { return };
+    let Ok((mut s, n)) = screens.get_mut(e) else { return };
+    let on = stats.protected > 0.0 && stats.health > 0.0;
+    if let Some(b) = n.immortal_body {
+        s.set_active(b, on);
+    }
+    if let (Some(f), true) = (n.immortal_fill, on) {
+        let left = stats.protected + (crate::bots::SPAWN_PROTECTION_BAR - crate::bots::SPAWN_PROTECTION);
+        s.set_fill(f, (left / crate::bots::SPAWN_PROTECTION_BAR * 100.0).round() / 100.0);
+    }
 }
