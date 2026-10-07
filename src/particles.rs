@@ -123,13 +123,13 @@ fn spawn_bursts(
     }
 }
 
+/// Cameras particles turn to face: the match camera, or the Armory preview's.
+type FacingCamera = Or<(With<crate::camera::PlayerCamera>, With<crate::armory_preview::PreviewCamera>)>;
+
 fn update_particles(
     mut commands: Commands,
     time: Res<Time>,
-    cameras: Query<
-        &GlobalTransform,
-        Or<(With<crate::camera::PlayerCamera>, With<crate::armory_preview::PreviewCamera>)>,
-    >,
+    cameras: Query<&GlobalTransform, FacingCamera>,
     mut q: Query<(Entity, &mut Particle, &mut Transform)>,
     mut materials: ResMut<Assets<StandardMaterial>>,
 ) {
