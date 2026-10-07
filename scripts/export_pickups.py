@@ -31,7 +31,7 @@ def main():
              if getattr(c, "component", c).deref().type.name == "Transform")
     ex = em.Exporter(env, OUT)
     ex.vis.name = "pickups"
-    ex.force_active = {"ammo", "health", "armor", "grenade", "mech"}
+    ex.force_active = {"ammo", "health", "armor", "grenade", "mech", "Coin"}
     n = ex.walk(t, np.eye(4))
     ex.vis.doc["nodes"][n].update(translation=[0, 0, 0], rotation=[0, 0, 0, 1], scale=[1, 1, 1])
     ex.vis.doc["scenes"][0]["nodes"].append(n)
