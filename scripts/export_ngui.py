@@ -238,7 +238,7 @@ class Ngui:
                 cobj = ch.deref()
                 walk(cobj.read().m_GameObject.read(), idx)
             # prefabs the game instantiates under this node at run time (--graft node=prefab)
-            if go.m_Name in self.grafts:
+            if go.m_Name in self.grafts and not t.m_Children:
                 gi = len(nodes)
                 walk(self.prefab_root(self.grafts[go.m_Name]), idx)
                 nodes[gi]["name"] += "(Clone)"

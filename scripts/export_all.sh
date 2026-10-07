@@ -31,7 +31,7 @@ $PY scripts/export_keys.py 2>/dev/null | grep -E "^keys"
 $PY scripts/export_previews.py 2>/dev/null | grep previews
 $PY scripts/export_ngui.py resources.assets SettingsWindow settings 2>/dev/null | grep -E '^settings'
 $PY scripts/export_ngui.py resources.assets SettingsPanel pause 2>/dev/null | grep -E '^pause'
-$PY scripts/export_ngui.py level6 "UI Root (2D)" results 2>/dev/null | grep -E '^results'
+$PY scripts/export_ngui.py level6 "UI Root (2D)" results --graft=ShopButton=BankShopViewPrefab 2>/dev/null | grep -E '^results'
 $PY scripts/export_ngui.py resources.assets InGameGUI ingame --graft=shopView=BankShopViewPrefab 2>/dev/null | grep -E '^ingame'
 $PY scripts/export_ngui.py resources.assets InGameGUIPart_Arena arenapart 2>/dev/null | grep -E "^arenapart"
 $PY scripts/export_pickups.py 2>/dev/null | grep -E '^pickups' | cut -c1-80
