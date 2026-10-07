@@ -37,7 +37,7 @@ const LOADOUT: [&str; 9] = [
     "Weapon3", "Weapon1", "Weapon9", "Weapon5", "Weapon61", "Weapon50", "Weapon2", "Weapon11", "Weapon75",
 ];
 /// Render layer used for the first-person weapon so it never clips into walls.
-const VIEW_MODEL_LAYER: usize = 1;
+pub const VIEW_MODEL_LAYER: usize = 1;
 
 pub struct WeaponsPlugin;
 
@@ -267,6 +267,14 @@ fn load_loadout(mut commands: Commands, data: Res<DataDir>, assets: Res<AssetSer
     commands.insert_resource(loadout);
 }
 
+/// The camera that draws the weapon (off while the pause Menu is open).
+#[derive(Component)]
+pub struct ViewModelCamera;
+
+/// The "+" crosshair (hidden while the pause Menu is open).
+#[derive(Component)]
+pub struct Crosshair;
+
 /// A second camera, attached to the main one, draws only the weapon on top of the world.
 fn spawn_view_model_camera(
     mut commands: Commands,
@@ -283,6 +291,7 @@ fn spawn_view_model_camera(
             Exposure { ev100: -0.263_034_4 },
             Tonemapping::None,
             RenderLayers::layer(VIEW_MODEL_LAYER),
+            ViewModelCamera,
         ));
     });
     if let Some(w) = loadout.current() {
@@ -631,6 +640,7 @@ fn fade_impacts(mut commands: Commands, time: Res<Time>, mut q: Query<(Entity, &
 fn spawn_hud(mut commands: Commands) {
     // crosshair
     commands.spawn((
+        Crosshair,
         Node { position_type: PositionType::Absolute, width: percent(100.0), height: percent(100.0), justify_content: JustifyContent::Center, align_items: AlignItems::Center, ..default() },
         children![(Text::new("+"), TextFont { font_size: FontSize::Px(28.0), ..default() }, TextColor(Color::WHITE))],
     ));

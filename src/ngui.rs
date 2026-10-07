@@ -709,7 +709,8 @@ fn layout(
                 *gz = GlobalZIndex(z);
             }
             if nd.label.is_some() && visible {
-                build_glyphs(&mut commands, &mut glyph_mats, screen, i, e, sr, k, palpha);
+                // labels under scaled parents are drawn smaller too (e.g. the pause Menu buttons, 0.79)
+                build_glyphs(&mut commands, &mut glyph_mats, screen, i, e, sr, k * placed[i].scale.y, palpha);
             }
             if visible {
                 build_frame(&mut commands, screen, i, e, sr, k, palpha);
