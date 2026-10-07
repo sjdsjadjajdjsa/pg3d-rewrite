@@ -42,6 +42,47 @@ impl Rebinding {
     }
 }
 
+/// One line of the key binding list: an action we let you rebind, or one the original shows
+/// locked (lock icon, "cantChangeOnKeyboard" in KeyMappingViewData) with its fixed key picture.
+#[derive(Clone, Copy)]
+enum Row {
+    Action(Action),
+    Fixed(&'static str, &'static str),
+}
+
+/// The General tab of the original (scripts/dump_keymapping.py), with what our game has:
+/// no Move Slowly, module/gadget, chart, booster, chat, emoji or graffiti keys. Free camera
+/// is ours.
+const ROWS: [Row; 18] = [
+    Row::Action(Action::Slot1),
+    Row::Action(Action::Slot2),
+    Row::Action(Action::Slot3),
+    Row::Action(Action::Slot4),
+    Row::Action(Action::Slot5),
+    Row::Action(Action::Slot6),
+    Row::Action(Action::Forward),
+    Row::Action(Action::Back),
+    Row::Action(Action::Left),
+    Row::Action(Action::Right),
+    Row::Fixed("View", "MouseMove"),
+    Row::Action(Action::Fire),
+    Row::Action(Action::Aim),
+    Row::Fixed("Switch Weapon", "MouseWheel"),
+    Row::Action(Action::Jump),
+    Row::Action(Action::Reload),
+    Row::Fixed("Pause", "Escape"),
+    Row::Action(Action::FreeCamera),
+];
+
+impl Row {
+    fn label(self) -> &'static str {
+        match self {
+            Row::Action(a) => a.label(),
+            Row::Fixed(l, _) => l,
+        }
+    }
+}
+
 const TABS: [&str; 3] = ["TabSetting", "TabMultimedia", "TabRebind"];
 
 /// Field of view range of the original's slider (SettingsTabSetting: UISliderCont 60..90).
@@ -94,7 +135,7 @@ fn setup_rebind(s: &mut NguiScreen, controls: &Controls) {
     }
     let Some(row) = s.find_in(page, "KeyActionView") else { return };
     let mut rows = vec![row];
-    for _ in 1..Action::ALL.len() {
+    for _ in 1..ROWS.len() {
         rows.push(s.clone_subtree(row));
     }
     for &r in &rows {
@@ -105,7 +146,9 @@ fn setup_rebind(s: &mut NguiScreen, controls: &Controls) {
             s.set_active(i, true);
         }
     }
-    place_rows(s, 0);
+    // PG3D_LIST_SCROLL=n (automated screenshots): start the list scrolled down n rows
+    let first = std::env::var("PG3D_LIST_SCROLL").ok().and_then(|v| v.parse().ok()).unwrap_or(0);
+    place_rows(s, first);
     show_bindings(s, controls);
 }
 
@@ -164,8 +207,17 @@ fn binding_icons(
             continue;
         }
         shown.insert(e, controls.clone());
-        for (r, a) in rows(&s).into_iter().zip(Action::ALL) {
-            let name = controls.get(a).unity_key_name();
+        for (r, row) in rows(&s).into_iter().zip(ROWS) {
+            let name = match row {
+                Row::Action(a) => controls.get(a).unity_key_name(),
+                Row::Fixed(_, k) => k.to_string(),
+            };
+            let fixed = matches!(row, Row::Fixed(..));
+            for (n, on) in [("state_CanChange", !fixed), ("state_CantChange", fixed)] {
+                if let Some(i) = s.find_in(r, n) {
+                    s.set_active(i, on);
+                }
+            }
             let rel = format!("ui/keys/kb_{name}.png");
             let size = png_size(&data.0.join(&rel));
             let (Some(scaler), Some(icon)) = (s.find_in(r, "ButtonIconScaler"), s.find_in(r, "ButtonIcon")) else { continue };
@@ -205,11 +257,11 @@ fn find(s: &NguiScreen, name: &str) -> Option<usize> {
 }
 
 fn show_bindings(s: &mut NguiScreen, controls: &Controls) {
-    for (r, a) in rows(s).into_iter().zip(Action::ALL) {
+    for (r, row) in rows(s).into_iter().zip(ROWS) {
         if let Some(i) = s.find_in(r, "ActionLabel") {
-            s.set_text(i, a.label());
+            s.set_text(i, row.label());
         }
-        if let Some(i) = s.find_in(r, "ButtonLabel") {
+        if let (Some(i), Row::Action(a)) = (s.find_in(r, "ButtonLabel"), row) {
             s.set_text(i, controls.get(a).label());
         }
     }
@@ -253,8 +305,9 @@ fn rebind_clicks(
         match c.name.as_str() {
             "KeyActionView" if state.waiting.is_none() && state.conflict.is_none() => {
                 let Some(k) = rows(&s).iter().position(|&r| r == c.node) else { continue };
-                state.waiting = Some((c.screen, Action::ALL[k], frame.0));
-                info!("key binding: waiting for a key for {:?}", Action::ALL[k]);
+                let Some(Row::Action(a)) = ROWS.get(k).copied() else { continue };
+                state.waiting = Some((c.screen, a, frame.0));
+                info!("key binding: waiting for a key for {a:?}");
                 popup(&mut s, Some("ChangeButtonWindow_Normal"));
             }
             "btn_apply" | "btn_cancel" if path.contains("ChangeButtonWindow_Used") => {
