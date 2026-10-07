@@ -222,6 +222,13 @@ fn setup_lobby(
             "RightAnchor/ConfrontationEvent_LobbyButton",
             "LeftAnchor/LobbyTopBtnsLayout/OfferwallButton2",
         ];
+        // left column buttons react through ButtonHandler/OnClickAction instead of an
+        // NGUI UIButton, so they have no click area of their own
+        for name in ["BtnArmory", "BtnStoreLobby_New", "BtnAghanim"] {
+            if let Some(i) = s.find(name) {
+                s.make_button(i);
+            }
+        }
         // PlatformDependentActive switches the Exit button on for desktop builds
         if let Some(i) = s.find_path("LobbyTopBtnsLayout/BtnExit") {
             s.set_active(i, true);
