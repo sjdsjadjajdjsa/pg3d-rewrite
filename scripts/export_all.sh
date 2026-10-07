@@ -33,6 +33,7 @@ $PY scripts/export_ngui.py resources.assets SettingsWindow settings 2>/dev/null 
 $PY scripts/export_ngui.py resources.assets SettingsPanel pause 2>/dev/null | grep -E '^pause'
 $PY scripts/export_ngui.py level6 "UI Root (2D)" results 2>/dev/null | grep -E '^results'
 $PY scripts/export_ngui.py resources.assets InGameGUI ingame 2>/dev/null | grep -E '^ingame'
+$PY scripts/export_ngui.py resources.assets InGameGUIPart_Arena arenapart 2>/dev/null | grep -E "^arenapart"
 $PY scripts/export_pickups.py 2>/dev/null | grep -E '^pickups' | cut -c1-80
 echo "== weapons"
 $PY scripts/export_weapons.py 2>/dev/null | grep -E '^(weapons|model)'

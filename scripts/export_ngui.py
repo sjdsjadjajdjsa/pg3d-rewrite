@@ -40,6 +40,7 @@ class Ngui:
         self.by_name = {os.path.basename(k): f for k, f in self.env.files.items()}
         self.level = self.by_name[level]
         self.gen = ew.typetree_generator()
+        self.filters = {}
         self.classes = {}
         self.atlases, self.fonts, self.textures = {}, {}, {}
 
@@ -78,6 +79,8 @@ class Ngui:
     def texture_png(self, tex_obj, folder, out):
         name = f"{tex_obj.read().m_Name}_{tex_obj.path_id & 0xffffff:x}"
         path = f"{folder}/{em_safe(name)}.png"
+        # Unity filter mode (0 = point: drawn with nearest-pixel sampling, e.g. GameAtlas)
+        self.filters[path] = tex_obj.read().m_TextureSettings.m_FilterMode
         if not (out / path).exists():
             (out / folder).mkdir(parents=True, exist_ok=True)
             tex_obj.read().image.save(out / path)
@@ -347,6 +350,7 @@ def main():
     (out / "ui.json").write_text(json.dumps(nodes))
     (out / "atlases.json").write_text(json.dumps({k: v for k, v in ng.atlases.items() if v}))
     (out / "fonts.json").write_text(json.dumps({k: v for k, v in ng.fonts.items() if v}))
+    (out / "filters.json").write_text(json.dumps(ng.filters))
     kinds = {}
     for n in nodes:
         kinds[n.get("kind", "-")] = kinds.get(n.get("kind", "-"), 0) + 1
