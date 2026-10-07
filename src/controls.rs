@@ -8,6 +8,13 @@ use bevy::{ecs::system::SystemParam, prelude::*};
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub enum Action {
+    /// weapon slots of the bar (the original's "Primary Category" ... "Premium Category")
+    Slot1,
+    Slot2,
+    Slot3,
+    Slot4,
+    Slot5,
+    Slot6,
     Forward,
     Back,
     Left,
@@ -20,7 +27,14 @@ pub enum Action {
 }
 
 impl Action {
-    pub const ALL: [Action; 9] = [
+    /// In the order of the original's key binding list (General).
+    pub const ALL: [Action; 15] = [
+        Action::Slot1,
+        Action::Slot2,
+        Action::Slot3,
+        Action::Slot4,
+        Action::Slot5,
+        Action::Slot6,
         Action::Forward,
         Action::Back,
         Action::Left,
@@ -32,8 +46,17 @@ impl Action {
         Action::FreeCamera,
     ];
 
+    /// The weapon slot actions, bar slots 1..6.
+    pub const SLOTS: [Action; 6] = [Action::Slot1, Action::Slot2, Action::Slot3, Action::Slot4, Action::Slot5, Action::Slot6];
+
     pub fn id(self) -> &'static str {
         match self {
+            Action::Slot1 => "slot1",
+            Action::Slot2 => "slot2",
+            Action::Slot3 => "slot3",
+            Action::Slot4 => "slot4",
+            Action::Slot5 => "slot5",
+            Action::Slot6 => "slot6",
             Action::Forward => "forward",
             Action::Back => "back",
             Action::Left => "left",
@@ -48,13 +71,20 @@ impl Action {
 
     pub fn label(self) -> &'static str {
         match self {
-            Action::Forward => "Move forward",
-            Action::Back => "Move back",
-            Action::Left => "Move left",
-            Action::Right => "Move right",
+            // the original's names (key binding window, PC version)
+            Action::Slot1 => "Primary Category",
+            Action::Slot2 => "Backup Category",
+            Action::Slot3 => "Melee Category",
+            Action::Slot4 => "Special Category",
+            Action::Slot5 => "Sniper Category",
+            Action::Slot6 => "Premium Category",
+            Action::Forward => "Forward",
+            Action::Back => "Back",
+            Action::Left => "Left",
+            Action::Right => "Right",
             Action::Jump => "Jump",
-            Action::Fire => "Shoot",
-            Action::Aim => "Aim (zoom)",
+            Action::Fire => "Attack",
+            Action::Aim => "Aim",
             Action::Reload => "Reload",
             Action::FreeCamera => "Free camera",
         }
@@ -62,6 +92,12 @@ impl Action {
 
     fn default_bind(self) -> Bind {
         match self {
+            Action::Slot1 => Bind::Key(KeyCode::Digit1),
+            Action::Slot2 => Bind::Key(KeyCode::Digit2),
+            Action::Slot3 => Bind::Key(KeyCode::Digit3),
+            Action::Slot4 => Bind::Key(KeyCode::Digit4),
+            Action::Slot5 => Bind::Key(KeyCode::Digit5),
+            Action::Slot6 => Bind::Key(KeyCode::Digit6),
             Action::Forward => Bind::Key(KeyCode::KeyW),
             Action::Back => Bind::Key(KeyCode::KeyS),
             Action::Left => Bind::Key(KeyCode::KeyA),

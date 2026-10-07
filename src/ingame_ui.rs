@@ -255,6 +255,8 @@ fn setup(mut commands: Commands, mut screens: Query<(Entity, &mut NguiScreen), A
                     // prefab's 128x64 (MEASURED: "2" box 45 px wide at 1920x1080, "L Ctrl" 115)
                     if let Some(tip) = child(&s, t, "GamepadTip").and_then(|g| child(&s, g, "Texture_Tip")) {
                         s.set_size(tip, Vec2::new(64.0, 64.0));
+                        // the bound key's picture (key_tips)
+                        nodes.tips.push((tip, crate::controls::Action::SLOTS[nodes.slots.len() - 1]));
                     }
                 }
             }

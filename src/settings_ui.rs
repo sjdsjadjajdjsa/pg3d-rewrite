@@ -20,7 +20,7 @@ pub struct SettingsUiPlugin;
 impl Plugin for SettingsUiPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<Rebinding>()
-            .add_systems(Update, (settings_sliders, tab_clicks, toggle_clicks, rebind_clicks, capture_key).chain());
+            .add_systems(Update, (settings_sliders, tab_clicks, toggle_clicks, rebind_clicks, capture_key, binding_icons, scroll_rows).chain());
     }
 }
 
@@ -87,7 +87,7 @@ fn setup_rebind(s: &mut NguiScreen, controls: &Controls) {
             if let Some(i) = s.find_in(t, n) {
                 s.set_active(i, on);
                 if let Some(l) = s.find_in(i, "NameLabel") {
-                    s.set_text(l, "Keyboard and mouse");
+                    s.set_text(l, "General");
                 }
             }
         }
@@ -97,9 +97,7 @@ fn setup_rebind(s: &mut NguiScreen, controls: &Controls) {
     for _ in 1..Action::ALL.len() {
         rows.push(s.clone_subtree(row));
     }
-    let h = s.nodes[row].widget.as_ref().map_or(48.0, |w| w.h);
-    for (k, &r) in rows.iter().enumerate() {
-        s.set_pos(r, Vec2::new(s.nodes[row].pos[0], s.nodes[row].pos[1] - h * k as f32));
+    for &r in &rows {
         if let Some(i) = s.find_in(r, "ButtonIconScaler") {
             s.set_active(i, false);
         }
@@ -107,7 +105,93 @@ fn setup_rebind(s: &mut NguiScreen, controls: &Controls) {
             s.set_active(i, true);
         }
     }
+    place_rows(s, 0);
     show_bindings(s, controls);
+}
+
+/// Rows that fit the list's clip area (ScrollView: 466 high, rows 48).
+const VISIBLE_ROWS: usize = 9;
+
+/// Show rows `first..first + VISIBLE_ROWS` stacked from the top of the list. (We don't clip
+/// NGUI panels, so the list scrolls a whole row at a time.)
+fn place_rows(s: &mut NguiScreen, first: usize) {
+    let rows = rows(s);
+    let Some(&top) = rows.first() else { return };
+    let h = s.nodes[top].widget.as_ref().map_or(48.0, |w| w.h);
+    let (x, y0) = (s.nodes[top].pos[0], s.nodes[top].pos[1]);
+    for (k, &r) in rows.iter().enumerate() {
+        let on = k >= first && k < first + VISIBLE_ROWS;
+        s.set_active(r, on);
+        s.set_pos(r, Vec2::new(x, y0 - h * (k as f32 - first as f32)));
+    }
+}
+
+/// Mouse wheel over the settings window while the key binding tab is open: scroll the list.
+fn scroll_rows(
+    scroll: Res<bevy::input::mouse::AccumulatedMouseScroll>,
+    mut screens: Query<(Entity, &mut NguiScreen, &InheritedVisibility)>,
+    mut first: Local<std::collections::HashMap<Entity, usize>>,
+) {
+    if scroll.delta.y == 0.0 {
+        return;
+    }
+    for (e, mut s, vis) in &mut screens {
+        let Some(page) = rebind_page(&s) else { continue };
+        if !vis.get() || !s.visible(page) {
+            continue;
+        }
+        let max = rows(&s).len().saturating_sub(VISIBLE_ROWS);
+        let f = first.entry(e).or_default();
+        let next = if scroll.delta.y > 0.0 { f.saturating_sub(1) } else { (*f + 1).min(max) };
+        if next != *f {
+            *f = next;
+            place_rows(&mut s, next);
+        }
+    }
+}
+
+/// The bound keys as the game's key pictures (kb_<Unity key name>.png, export_keys.py) at
+/// their own size, as KeyActionView shows them; keys without a picture keep the text label.
+fn binding_icons(
+    controls: Res<Controls>,
+    data: Res<crate::DataDir>,
+    assets: Res<AssetServer>,
+    mut screens: Query<(Entity, &mut NguiScreen)>,
+    mut shown: Local<std::collections::HashMap<Entity, Controls>>,
+) {
+    for (e, mut s) in &mut screens {
+        if rebind_page(&s).is_none() || shown.get(&e) == Some(&*controls) {
+            continue;
+        }
+        shown.insert(e, controls.clone());
+        for (r, a) in rows(&s).into_iter().zip(Action::ALL) {
+            let name = controls.get(a).unity_key_name();
+            let rel = format!("ui/keys/kb_{name}.png");
+            let size = png_size(&data.0.join(&rel));
+            let (Some(scaler), Some(icon)) = (s.find_in(r, "ButtonIconScaler"), s.find_in(r, "ButtonIcon")) else { continue };
+            s.set_active(scaler, size.is_some());
+            if let Some(i) = s.find_in(r, "ButtonLabel") {
+                s.set_active(i, size.is_none());
+            }
+            if let Some(size) = size {
+                s.set_texture(icon, assets.load(rel));
+                s.set_size(icon, size);
+            }
+        }
+    }
+}
+
+/// Width and height from a PNG file's header.
+fn png_size(path: &std::path::Path) -> Option<Vec2> {
+    use std::io::Read;
+    let mut b = [0u8; 24];
+    std::fs::File::open(path).ok()?.read_exact(&mut b).ok()?;
+    if &b[1..4] != b"PNG" {
+        return None;
+    }
+    let w = u32::from_be_bytes([b[16], b[17], b[18], b[19]]);
+    let h = u32::from_be_bytes([b[20], b[21], b[22], b[23]]);
+    Some(Vec2::new(w as f32, h as f32))
 }
 
 fn rows(s: &NguiScreen) -> Vec<usize> {

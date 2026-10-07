@@ -386,6 +386,7 @@ fn tag_view_model_meshes(
 fn switch_weapon(
     mut commands: Commands,
     keys: Res<ButtonInput<KeyCode>>,
+    input: crate::controls::Input,
     scroll: Res<AccumulatedMouseScroll>,
     mut loadout: ResMut<Loadout>,
     camera: Single<Entity, With<PlayerCamera>>,
@@ -399,21 +400,16 @@ fn switch_weapon(
     }
     // PG3D_SOAK (automated stability test): switch to the next weapon every 2.5 s
     let soak = std::env::var("PG3D_SOAK").is_ok() && (time.elapsed_secs() % 2.5) < time.delta_secs();
-    let digits = [
-        KeyCode::Digit1,
-        KeyCode::Digit2,
-        KeyCode::Digit3,
-        KeyCode::Digit4,
-        KeyCode::Digit5,
-        KeyCode::Digit6,
-        KeyCode::Digit7,
-        KeyCode::Digit8,
-        KeyCode::Digit9,
-    ];
     let mut next = loadout.current;
-    for (i, k) in digits.iter().enumerate() {
-        if keys.just_pressed(*k) && i < n {
+    // bar slots 1-6 follow the key bindings; extra weapons 7-9 are on the number keys
+    for (i, a) in crate::controls::Action::SLOTS.into_iter().enumerate() {
+        if input.just_pressed(a) && i < n {
             next = i;
+        }
+    }
+    for (i, k) in [KeyCode::Digit7, KeyCode::Digit8, KeyCode::Digit9].into_iter().enumerate() {
+        if keys.just_pressed(k) && i + 6 < n {
+            next = i + 6;
         }
     }
     if scroll.delta.y > 0.0 {
