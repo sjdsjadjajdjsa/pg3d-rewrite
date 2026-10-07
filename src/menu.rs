@@ -209,6 +209,10 @@ fn setup_lobby(
             "RightAnchor/ConfrontationEvent_LobbyButton",
             "LeftAnchor/LobbyTopBtnsLayout/OfferwallButton2",
         ];
+        // PlatformDependentActive switches the Exit button on for desktop builds
+        if let Some(i) = s.find_path("LobbyTopBtnsLayout/BtnExit") {
+            s.set_active(i, true);
+        }
         for i in 0..s.nodes.len() {
             let name = s.nodes[i].name.clone();
             let path = s.path(i);
@@ -226,6 +230,13 @@ fn setup_lobby(
             for i in hits {
                 s.set_text(i, text);
             }
+        }
+        // XP bar: 0 of 100 at level 1 (the yellow "addition" part animates newly won XP)
+        let bars: Vec<usize> = (0..s.nodes.len())
+            .filter(|&i| ["progbar_fill", "progbar_addition"].contains(&s.nodes[i].name.as_str()) && s.path(i).contains("PlayerExp_UI"))
+            .collect();
+        for i in bars {
+            s.set_fill(i, 0.0);
         }
     }
 }
@@ -335,10 +346,13 @@ fn lobby_clicks(
     assets: Res<AssetServer>,
     screens: Res<Screens>,
     pickers: Query<(), With<MapPicker>>,
+    mut exit: MessageWriter<AppExit>,
 ) {
     for c in clicks.read() {
         let n = c.name.as_str();
-        if n.starts_with("BtnBattle") && screens.modes.is_some() {
+        if n == "BtnExit" {
+            exit.write(AppExit::Success);
+        } else if n.starts_with("BtnBattle") && screens.modes.is_some() {
             show(&mut commands, screens.lobby, false);
             show(&mut commands, screens.modes, true);
         } else if n == "btn_back" {
