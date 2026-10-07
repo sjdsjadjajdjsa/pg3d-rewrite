@@ -21,12 +21,13 @@ tools/venv/bin/python scripts/export_bots.py
 tools/venv/bin/python scripts/export_navmesh.py arena
 
 # here:
-cargo run -- arena
+cargo run            # start menu: pick a map
+cargo run -- arena   # straight into a map
 ```
 
 Controls: click = capture mouse, Esc = release, WASD = move, Space = jump,
 left mouse = fire (hold), right mouse = zoom (scoped weapons), R = reload,
-1-8 / mouse wheel = switch weapon,
+1-9 / mouse wheel = switch weapon, F10 = back to the menu,
 V = toggle walk / fly camera (fly: Space/Ctrl up/down, Shift fast), F12 = screenshot.
 
 ## Layout
@@ -42,8 +43,13 @@ V = toggle walk / fly camera (fly: Space/Ctrl up/down, Shift fast), F12 = screen
 | `src/navmesh.rs` | path finding on the map's original navigation mesh |
 | `src/sound.rs` | original sound effects (3D for zombies) |
 | `src/particles.rs` | simple particles: muzzle flash and smoke |
+| `src/projectiles.rs` | rockets (player) and bullets (shooting enemies), explosions |
+| `src/menu.rs` | start menu listing the exported maps |
 | `src/bots.rs` | campaign zombies: spawning at EnemyCreationZone, chase/attack/die, player health, score |
 | `src/screenshot.rs` | F12 screenshots, `PG3D_AUTOSHOT` for automated checks |
+
+Automated runs (`PG3D_AUTOSHOT` set) ignore your real keyboard/mouse and open their window
+unfocused at the bottom of the window stack.
 
 Debug environment variables: `PG3D_TRACE=1` (log player position), `PG3D_AUTOWALK=1`
 (walk forward + jump automatically), `PG3D_AUTOFIRE=1` / `PG3D_AUTOAIM=1` (shoot / aim at bots

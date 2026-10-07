@@ -17,6 +17,7 @@ use serde::Deserialize;
 
 use crate::{
     DataDir,
+    projectiles::{Look, Owner, SpawnProjectile},
     map::{Layer, MapMarkers},
     player::{GRAVITY, Player},
 };
@@ -67,6 +68,25 @@ pub struct BotDef {
     pub scorePerKill: i32,
     /// NavMeshAgent.baseOffset: how far above the ground the bot floats (flying zombies)
     pub agentBaseOffset: f32,
+    /// MeleeBot / ShootingBot / ...
+    pub class: String,
+    /// ShootingBot: shoots from this distance, bullet speed (m/s), explosive bullets
+    pub rangeShootingDistance: f32,
+    pub speedBullet: f32,
+    pub isProjectileExplosion: i32,
+    pub radiusExplosion: f32,
+    /// colour / size of the bullet's particle in the original prefab
+    pub bulletColor: Option<[f32; 4]>,
+    pub bulletSize: f32,
+}
+
+impl BotDef {
+    fn shooter(&self) -> bool {
+        self.class.contains("Shooting") && self.speedBullet > 0.0
+    }
+    fn attack_range(&self) -> f32 {
+        if self.shooter() { self.rangeShootingDistance.max(3.0) } else { self.attackDistance.max(1.0) * 0.8 }
+    }
 }
 
 #[derive(Deserialize, Default)]
@@ -84,6 +104,8 @@ struct BotType {
     name: String,
     def: BotDef,
     clips: Vec<String>,
+    /// "Zombie_Attack", or "<Enemy>_shooting" for shooting bots
+    attack_clip: String,
     attack_time: f32,
     sounds: HashMap<String, Handle<AudioSource>>,
 }
@@ -120,6 +142,10 @@ enum BotState {
     Attack,
     Dead,
 }
+
+/// Marks living-or-dying bot roots (used by explosions to find targets).
+#[derive(Component)]
+pub struct BotMarker;
 
 #[derive(Component)]
 struct Bot {
@@ -183,9 +209,15 @@ fn load_bot_defs(mut commands: Commands, data: Res<DataDir>, assets: Res<AssetSe
         else {
             continue;
         };
-        let attack_time = info.animations.get("Zombie_Attack").copied().unwrap_or(1.5);
+        let attack_clip = info
+            .clips
+            .iter()
+            .find(|c| c.contains("Attack") || c.to_lowercase().contains("shooting"))
+            .cloned()
+            .unwrap_or_else(|| "Zombie_Attack".into());
+        let attack_time = info.animations.get(&attack_clip).copied().filter(|v| *v > 0.1).unwrap_or(1.5);
         let sounds = crate::sound::load_sounds(&assets, &format!("bots/{name}"), &info.sounds);
-        types.0.push(BotType { name: name.to_string(), def: def.clone(), clips: info.clips, attack_time, sounds });
+        types.0.push(BotType { name: name.to_string(), def: def.clone(), clips: info.clips, attack_clip, attack_time, sounds });
     }
     if types.0.is_empty() {
         warn!("no bots exported (run export_bots.py)");
@@ -203,6 +235,14 @@ fn spawn_points(markers: &MapMarkers) -> Vec<Vec3> {
     }
     // maps without enemy zones: use the multiplayer spawn points
     markers.0.iter().filter(|m| m.name.contains("CreateZone")).map(|m| m.position).collect()
+}
+
+/// Nothing solid between a bot's eyes and the player's eyes?
+fn can_see(spatial: &SpatialQuery, bot: Vec3, player: Vec3) -> bool {
+    let from = bot + Vec3::Y * 1.5;
+    let to = player + Vec3::Y * 0.6;
+    let Ok(dir) = Dir3::new(to - from) else { return true };
+    spatial.cast_ray(from, dir, from.distance(to), true, &SpatialQueryFilter::from_mask(Layer::World)).is_none()
 }
 
 fn rand01(seed: f32) -> f32 {
@@ -276,6 +316,7 @@ fn spawner(
                 repath: 0.0,
             },
             anims,
+            BotMarker,
             WorldAssetRoot(assets.load(GltfAssetLabel::Scene(0).from_asset(path))),
             Transform::from_translation(pos + Vec3::Y * (0.5 + ty.def.agentBaseOffset)),
             RigidBody::Kinematic,
@@ -320,6 +361,8 @@ fn bot_brain(
     mut stats: ResMut<PlayerStats>,
     player: Single<&Transform, (With<Player>, Without<Bot>)>,
     mut bots: Query<(&Transform, &mut Bot)>,
+    spatial: SpatialQuery,
+    mut shots: MessageWriter<SpawnProjectile>,
 ) {
     let dt = time.delta_secs();
     stats.protected = (stats.protected - dt).max(0.0);
@@ -340,7 +383,7 @@ fn bot_brain(
         let player_alive = stats.health > 0.0;
         b.state = if !player_alive {
             BotState::Idle
-        } else if flat <= def.attackDistance.max(1.0) * 0.8 {
+        } else if flat <= def.attack_range() && (!def.shooter() || can_see(&spatial, t.translation, player.translation)) {
             BotState::Attack
         } else if flat <= def.detectRadius || b.state == BotState::Chase || hunt() {
             BotState::Chase // once a zombie has seen you it keeps coming
@@ -352,6 +395,31 @@ fn bot_brain(
             if b.timer <= 0.0 {
                 b.timer = types.0[b.kind].attack_time;
                 let snd = &types.0[b.kind].sounds;
+                if def.shooter() {
+                    // fire a bullet from about chest height at the player's chest
+                    let from = t.translation + Vec3::Y * 1.3;
+                    let aim = player.translation + Vec3::Y * 0.3;
+                    if let Ok(dir) = Dir3::new(aim - from) {
+                        let c = def.bulletColor.unwrap_or([1.0, 0.3, 0.1, 1.0]);
+                        shots.write(SpawnProjectile {
+                            owner: Owner::Enemy,
+                            from: from + *dir * 0.6,
+                            dir,
+                            speed: def.speedBullet,
+                            life: 5.0,
+                            gravity: false,
+                            damage: def.damagePerHit,
+                            explosion_radius: if def.isProjectileExplosion != 0 { def.radiusExplosion.max(1.0) } else { 0.0 },
+                            look: Look::Ball {
+                                color: Color::srgba(c[0], c[1], c[2], 1.0),
+                                // particle size 1 looks like a ~0.25 m glowing ball in game (GUESS)
+                                radius: (def.bulletSize.max(0.3) * 0.18).clamp(0.08, 0.3),
+                            },
+                        });
+                        crate::sound::play(&mut commands, snd.get("shootingSound"), Some(t.translation), 1.0);
+                    }
+                    continue;
+                }
                 crate::sound::play(&mut commands, snd.get("attackSound"), Some(t.translation), 1.0);
                 if stats.protected <= 0.0 {
                     stats.health -= def.damagePerHit;
@@ -536,13 +604,17 @@ fn bot_death(
     }
 }
 
-fn bot_animation(mut bots: Query<(&Bot, &mut BotAnims)>, mut players: Query<&mut AnimationPlayer>) {
+fn bot_animation(
+    types: Res<BotTypes>,
+    mut bots: Query<(&Bot, &mut BotAnims)>,
+    mut players: Query<&mut AnimationPlayer>,
+) {
     for (b, mut a) in &mut bots {
         let Some(mut ap) = a.player.and_then(|p| players.get_mut(p).ok()) else { continue };
         let moving = Vec2::new(b.velocity.x, b.velocity.z).length() > 0.1;
         let (want, repeat) = match b.state {
             BotState::Dead => ("Zombie_Dead", false),
-            BotState::Attack => ("Zombie_Attack", true),
+            BotState::Attack => (types.0[b.kind].attack_clip.as_str(), true),
             _ if moving => ("Zombie_Walk", true),
             _ => ("Idle", true),
         };

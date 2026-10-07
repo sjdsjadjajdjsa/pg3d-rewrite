@@ -26,12 +26,15 @@ use crate::{
     camera::PlayerCamera,
     map::Layer,
     player::Player,
+    projectiles::{Look, Owner, SpawnProjectile},
 };
 
 /// Weapons given to the player, in slot order (keys 1..6). Only ones that were exported load.
 /// One per original category (1 primary, 2 backup, 3 melee, 4 special, 5 sniper,
 /// 6 heavy), then extras. PG3D_LOADOUT=Weapon2,Weapon61,... overrides it.
-const LOADOUT: [&str; 8] = ["Weapon3", "Weapon1", "Weapon9", "Weapon5", "Weapon61", "Weapon50", "Weapon2", "Weapon11"];
+const LOADOUT: [&str; 9] = [
+    "Weapon3", "Weapon1", "Weapon9", "Weapon5", "Weapon61", "Weapon50", "Weapon2", "Weapon11", "Weapon75",
+];
 /// Render layer used for the first-person weapon so it never clips into walls.
 const VIEW_MODEL_LAYER: usize = 1;
 
@@ -83,6 +86,9 @@ pub struct WeaponDef {
     pub shootDistanceIfZoom: f32,
     /// pellets per shot for shotguns
     pub countShots: i32,
+    /// rocket launchers: which "Rocket_<n>" prefab they fire and its blast radius
+    pub rocketNum: i32,
+    pub bazookaExplosionRadius: f32,
     /// damage per bullet; index = weapon upgrade tier (we use tier 0)
     pub damageByTier: Vec<f32>,
     /// random damage variation in percent (x = min, y = max)
@@ -135,6 +141,8 @@ pub struct Weapon {
     pub spread: f32,
     /// animation clips in weapon.gltf (Idle, Walk, Shoot, Reload, ...)
     pub clips: Vec<String>,
+    /// rocket launchers: the projectile they fire
+    pub rocket: Option<RocketDef>,
     pub sounds: HashMap<String, Handle<AudioSource>>,
 }
 
@@ -176,6 +184,40 @@ struct Impact(f32);
 #[derive(Component)]
 struct HudText;
 
+/// Original RocketSettings fields we use.
+#[derive(Deserialize, Clone, Debug, Default)]
+#[serde(default)]
+#[allow(non_snake_case)]
+pub struct RocketDef {
+    pub lifeTime: f32,
+    pub startForce: f32,
+    pub useGravity: i32,
+    #[serde(skip)]
+    pub model: String,
+}
+
+impl RocketDef {
+    /// The game computes velocity = Time.fixedDeltaTime * startForce / mass
+    /// (RocketSettings.CalcVelocity @ 0x181E33770). The rigidbody mass is not recovered;
+    /// 0.2 gives believable speeds (GUESS): 350 -> 35 m/s.
+    pub fn speed(&self) -> f32 {
+        (0.02 * self.startForce / 0.2).max(5.0)
+    }
+}
+
+fn rocket_def(data: &std::path::Path, num: i32) -> Option<RocketDef> {
+    let name = format!("Rocket_{num}");
+    let all: HashMap<String, RocketDef> =
+        serde_json::from_str(&std::fs::read_to_string(data.join("rockets/rockets.json")).ok()?).ok()?;
+    let mut r = all.get(&name)?.clone();
+    r.model = format!("rockets/{name}/rocket.gltf");
+    if !data.join(&r.model).exists() {
+        warn!("{name} model not exported (run export_rockets.py)");
+        return None;
+    }
+    Some(r)
+}
+
 fn load_loadout(mut commands: Commands, data: Res<DataDir>, assets: Res<AssetServer>) {
     let dir = data.0.join("weapons");
     let all: HashMap<String, WeaponDef> = match std::fs::read_to_string(dir.join("weapons.json"))
@@ -216,6 +258,7 @@ fn load_loadout(mut commands: Commands, data: Res<DataDir>, assets: Res<AssetSer
             reserve: (def.maxAmmo - clip).max(0),
             spread: 0.0,
             clips: info.clips.clone(),
+            rocket: (def.bazooka != 0).then(|| rocket_def(&data.0, def.rocketNum)).flatten(),
             sounds: crate::sound::load_sounds(&assets, &format!("weapons/{name}"), &info.sounds),
         });
     }
@@ -360,6 +403,7 @@ fn switch_weapon(
         KeyCode::Digit6,
         KeyCode::Digit7,
         KeyCode::Digit8,
+        KeyCode::Digit9,
     ];
     let mut next = loadout.current;
     for (i, k) in digits.iter().enumerate() {
@@ -399,6 +443,7 @@ fn fire(
     mut impact_assets: Local<Option<(Handle<Mesh>, Handle<StandardMaterial>)>>,
     bot_parts: Query<&BotPart>,
     mut hits: MessageWriter<BotDamage>,
+    mut rockets: MessageWriter<SpawnProjectile>,
     mut flashes: MessageWriter<crate::particles::Burst>,
     alive: Res<crate::bots::PlayerStats>,
 ) {
@@ -460,6 +505,22 @@ fn fire(
         })
         .clone();
     let origin = camera.translation();
+    if let Some(r) = &w.rocket {
+        let dir = spread_dir(camera.rotation(), spread_deg * 0.3, time.elapsed_secs(), 0);
+        rockets.write(SpawnProjectile {
+            owner: Owner::Player,
+            // start a little in front and below the eye, like from the launcher
+            from: origin + *dir * 0.8 - camera.up() * 0.15,
+            dir,
+            speed: r.speed(),
+            life: if r.lifeTime > 0.0 { r.lifeTime } else { 5.0 },
+            gravity: r.useGravity != 0,
+            damage: base_damage,
+            explosion_radius: w.def.bazookaExplosionRadius.max(1.0),
+            look: Look::Model(r.model.clone()),
+        });
+        return;
+    }
     let filter = SpatialQueryFilter::from_mask([Layer::World, Layer::Enemy]);
     for i in 0..pellets {
         let dir = spread_dir(camera.rotation(), spread_deg, time.elapsed_secs(), i);
