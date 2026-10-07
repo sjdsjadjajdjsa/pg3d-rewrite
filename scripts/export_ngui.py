@@ -340,6 +340,18 @@ class Ngui:
                     "floats": {(k if isinstance(k, str) else k.name): v for k, v in props.m_Floats},
                     "colors": {(k if isinstance(k, str) else k.name): [v.r, v.g, v.b, v.a] for k, v in props.m_Colors},
                 }
+        elif k == "UI2DSprite":
+            # a Unity Sprite (not an NGUI atlas sprite): exported as its own picture and
+            # drawn like a UITexture
+            sp = self.resolve(owner, d["mSprite"]) if d.get("mSprite", {}).get("m_PathID") else None
+            if sp is not None and sp.type.name == "Sprite":
+                spr = sp.read()
+                path = f"textures/{em_safe(spr.m_Name)}_{sp.path_id & 0xffffff:x}.png"
+                if not (out / path).exists():
+                    (out / "textures").mkdir(parents=True, exist_ok=True)
+                    spr.image.save(out / path)
+                node["texture"] = {"png": path, "uv": [0.0, 0.0, 1.0, 1.0]}
+                node["kind"] = "UITexture"
         elif k == "UIPanel":
             node["panel"] = {"alpha": d["mAlpha"], "depth": d["mDepth"], "clipping": d["mClipping"],
                              "clip": [d["mClipRange"]["x"], d["mClipRange"]["y"], d["mClipRange"]["z"], d["mClipRange"]["w"]]}
