@@ -12,6 +12,7 @@
 
 mod armory;
 mod armory_preview;
+mod beams;
 mod bots;
 mod camera;
 mod controls;
@@ -158,7 +159,7 @@ fn main() {
             pause::PausePlugin,
             results::ResultsPlugin,
         ))
-        .add_plugins((hud::HudPlugin, ingame_ui::InGameUiPlugin, explosives::ExplosivesPlugin, cursor::CursorPlugin))
+        .add_plugins((hud::HudPlugin, ingame_ui::InGameUiPlugin, explosives::ExplosivesPlugin, cursor::CursorPlugin, beams::BeamsPlugin))
         .add_systems(Update, (menu::back_to_menu, menu::test_click))
         .add_systems(
             PreUpdate,

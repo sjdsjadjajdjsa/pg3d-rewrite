@@ -73,7 +73,10 @@ pub struct WeaponDef {
     pub isMelee: i32,
     pub isShotGun: i32,
     pub bazooka: i32,
+    /// railguns: the shot passes through walls and every enemy on its line
     pub railgun: i32,
+    /// laser / freeze rays: a beam to what was hit
+    pub freezer: i32,
     pub isZooming: i32,
     pub fieldOfViewZomm: f32,
     /// movement speed multiplier while holding this weapon
@@ -469,6 +472,7 @@ fn fire(
     mut rockets: MessageWriter<SpawnProjectile>,
     mut flashes: MessageWriter<crate::particles::Burst>,
     alive: Res<crate::bots::PlayerStats>,
+    mut beams: MessageWriter<crate::beams::SpawnBeam>,
 ) {
     let dt = time.delta_secs();
     if alive.health <= 0.0 {
@@ -544,7 +548,36 @@ fn fire(
         });
         return;
     }
+    // ray weapons draw their beam from the gun (a little right of and below the eye)
+    let muzzle = origin + *camera.forward() * 0.6 + *camera.right() * 0.14 - *camera.up() * 0.12;
+    if w.def.railgun != 0 {
+        // the railgun's shot goes through walls and hits every enemy on its line, once each
+        let dir = spread_dir(camera.rotation(), spread_deg, time.elapsed_secs(), 0);
+        let enemies = SpatialQueryFilter::from_mask([Layer::Enemy]);
+        let mut done = vec![];
+        for hit in spatial.ray_hits(origin, dir, range, 64, true, &enemies) {
+            if let Ok(part) = bot_parts.get(hit.entity)
+                && !done.contains(&part.0)
+            {
+                done.push(part.0);
+                hits.write(BotDamage { bot: part.0, amount: base_damage });
+            }
+        }
+        beams.write(crate::beams::SpawnBeam { weapon: w.name.clone(), from: muzzle, to: origin + *dir * 150.0, life: None });
+        return;
+    }
     let filter = SpatialQueryFilter::from_mask([Layer::World, Layer::Enemy]);
+    if w.def.freezer != 0 {
+        // a ray to the first thing in the way, redrawn each shot while firing
+        let dir = spread_dir(camera.rotation(), spread_deg, time.elapsed_secs(), 0);
+        let end = spatial.cast_ray(origin, dir, range, true, &filter).map_or(range.min(120.0), |h| h.distance);
+        beams.write(crate::beams::SpawnBeam {
+            weapon: w.name.clone(),
+            from: muzzle,
+            to: origin + *dir * end,
+            life: Some(interval * 1.6),
+        });
+    }
     for i in 0..pellets {
         let dir = spread_dir(camera.rotation(), spread_deg, time.elapsed_secs(), i);
         let Some(hit) = spatial.cast_ray(origin, dir, range, true, &filter) else { continue };
