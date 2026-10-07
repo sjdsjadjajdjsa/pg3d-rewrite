@@ -13,8 +13,11 @@ mod bots;
 mod camera;
 mod lighting;
 mod map;
+mod navmesh;
+mod particles;
 mod player;
 mod screenshot;
+mod sound;
 mod weapons;
 
 use avian3d::prelude::*;
@@ -52,10 +55,13 @@ fn main() {
         .insert_resource(map::CurrentMap(map_name))
         .add_plugins((
             map::MapPlugin,
+            navmesh::NavMeshPlugin,
+            particles::ParticlesPlugin,
             lighting::LightingPlugin,
             player::PlayerPlugin,
             camera::CameraPlugin,
             screenshot::ScreenshotPlugin,
+            sound::SoundPlugin,
             weapons::WeaponsPlugin,
             bots::BotsPlugin,
         ))

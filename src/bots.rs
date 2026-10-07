@@ -29,6 +29,11 @@ const MAX_ALIVE: usize = 6;
 const SPAWN_INTERVAL: f32 = 2.5;
 /// Player health. GUESS: the original value is obfuscated; classic campaign had 9 hearts.
 pub const PLAYER_MAX_HEALTH: f32 = 9.0;
+/// PG3D_HUNT=1 (automated tests): zombies always know where you are instead of only
+/// chasing within the original detectRadius.
+fn hunt() -> bool {
+    std::env::var("PG3D_HUNT").is_ok()
+}
 /// Seconds the dead body stays before it is removed.
 const CORPSE_TIME: f32 = 2.0;
 
@@ -69,6 +74,9 @@ struct BotInfo {
     animations: HashMap<String, f32>,
     #[serde(default)]
     clips: Vec<String>,
+    /// attackSound, takeDamageSound (bite lands), damageSound (bot hurt), deathSound
+    #[serde(default)]
+    sounds: HashMap<String, String>,
 }
 
 struct BotType {
@@ -76,6 +84,7 @@ struct BotType {
     def: BotDef,
     clips: Vec<String>,
     attack_time: f32,
+    sounds: HashMap<String, Handle<AudioSource>>,
 }
 
 #[derive(Resource, Default)]
@@ -126,6 +135,10 @@ struct Bot {
     stuck: f32,
     detour: Vec3,
     detour_time: f32,
+    /// waypoints from the navigation mesh towards the current target
+    path: Vec<Vec3>,
+    /// seconds until the path is recalculated
+    repath: f32,
 }
 
 #[derive(Component)]
@@ -139,7 +152,7 @@ struct BotAnims {
 #[derive(Component)]
 struct HudHealth;
 
-fn load_bot_defs(mut commands: Commands, data: Res<DataDir>) {
+fn load_bot_defs(mut commands: Commands, data: Res<DataDir>, assets: Res<AssetServer>) {
     let dir = data.0.join("bots");
     let all: HashMap<String, BotDef> = std::fs::read_to_string(dir.join("bots.json"))
         .ok()
@@ -155,7 +168,8 @@ fn load_bot_defs(mut commands: Commands, data: Res<DataDir>) {
             continue;
         };
         let attack_time = info.animations.get("Zombie_Attack").copied().unwrap_or(1.5);
-        types.0.push(BotType { name: name.to_string(), def: def.clone(), clips: info.clips, attack_time });
+        let sounds = crate::sound::load_sounds(&assets, &format!("bots/{name}"), &info.sounds);
+        types.0.push(BotType { name: name.to_string(), def: def.clone(), clips: info.clips, attack_time, sounds });
     }
     if types.0.is_empty() {
         warn!("no bots exported (run export_bots.py)");
@@ -241,6 +255,8 @@ fn spawner(
                 stuck: 0.0,
                 detour: Vec3::ZERO,
                 detour_time: 0.0,
+                path: Vec::new(),
+                repath: 0.0,
             },
             anims,
             WorldAssetRoot(assets.load(GltfAssetLabel::Scene(0).from_asset(path))),
@@ -281,6 +297,7 @@ fn hook_up_bot_animations(
 
 /// Decide what each bot wants to do.
 fn bot_brain(
+    mut commands: Commands,
     time: Res<Time>,
     types: Res<BotTypes>,
     mut stats: ResMut<PlayerStats>,
@@ -308,7 +325,7 @@ fn bot_brain(
             BotState::Idle
         } else if flat <= def.attackDistance.max(1.0) * 0.8 {
             BotState::Attack
-        } else if flat <= def.detectRadius || b.state == BotState::Chase {
+        } else if flat <= def.detectRadius || b.state == BotState::Chase || hunt() {
             BotState::Chase // once a zombie has seen you it keeps coming
         } else {
             BotState::Idle
@@ -317,8 +334,11 @@ fn bot_brain(
             b.timer -= dt;
             if b.timer <= 0.0 {
                 b.timer = types.0[b.kind].attack_time;
+                let snd = &types.0[b.kind].sounds;
+                crate::sound::play(&mut commands, snd.get("attackSound"), Some(t.translation), 1.0);
                 if stats.protected <= 0.0 {
                     stats.health -= def.damagePerHit;
+                    crate::sound::play(&mut commands, snd.get("takeDamageSound"), None, 0.8);
                 }
             }
         } else {
@@ -340,6 +360,7 @@ fn bot_move(
     mut bots: Query<(Entity, &mut Transform, &mut Bot, &Children)>,
     colliders: Query<&Collider>,
     move_and_slide: MoveAndSlide,
+    nav: Res<crate::navmesh::NavMesh>,
 ) {
     let dt = time.delta_secs();
     for (e, mut t, mut b, children) in &mut bots {
@@ -351,7 +372,27 @@ fn bot_move(
             BotState::Attack => (player.translation, 0.0),
             BotState::Dead => (t.translation, 0.0),
         };
-        let mut dir = target - t.translation;
+        // follow the navigation mesh; recompute the route twice a second
+        let mut aim = target;
+        if speed > 0.0 && !nav.is_empty() {
+            b.repath -= dt;
+            if b.repath <= 0.0 {
+                b.repath = 0.5;
+                b.path = nav.find_path(t.translation, target).unwrap_or_default();
+            }
+            while let Some(&wp) = b.path.first() {
+                let d = Vec2::new(wp.x - t.translation.x, wp.z - t.translation.z).length();
+                if d < 0.4 && b.path.len() > 1 {
+                    b.path.remove(0);
+                } else {
+                    break;
+                }
+            }
+            if let Some(&wp) = b.path.first() {
+                aim = wp;
+            }
+        }
+        let mut dir = aim - t.translation;
         dir.y = 0.0;
         let mut dir = dir.normalize_or_zero();
         if b.detour_time > 0.0 {
@@ -407,19 +448,30 @@ fn bot_move(
 }
 
 fn apply_damage(
+    mut commands: Commands,
     mut hits: MessageReader<BotDamage>,
     types: Res<BotTypes>,
     mut stats: ResMut<PlayerStats>,
-    mut bots: Query<&mut Bot>,
+    mut bots: Query<(&mut Bot, &GlobalTransform)>,
+    mut hurt_sound_cooldown: Local<f32>,
+    time: Res<Time>,
 ) {
+    *hurt_sound_cooldown -= time.delta_secs();
     for hit in hits.read() {
-        let Ok(mut b) = bots.get_mut(hit.bot) else { continue };
+        let Ok((mut b, gt)) = bots.get_mut(hit.bot) else { continue };
         if b.state == BotState::Dead {
             continue;
         }
         b.health -= hit.amount;
         b.state = BotState::Chase; // shot bots always come for you
+        let snd = &types.0[b.kind].sounds;
+        if b.health > 0.0 && *hurt_sound_cooldown <= 0.0 {
+            // shotguns hit 15 times at once: one hurt sound is enough
+            *hurt_sound_cooldown = 0.1;
+            crate::sound::play(&mut commands, snd.get("damageSound"), Some(gt.translation()), 1.0);
+        }
         if b.health <= 0.0 {
+            crate::sound::play(&mut commands, snd.get("deathSound"), Some(gt.translation()), 1.0);
             b.state = BotState::Dead;
             b.timer = CORPSE_TIME;
             stats.score += types.0[b.kind].def.scorePerKill;

@@ -115,6 +115,9 @@ struct WeaponInfo {
     /// glTF animation names, in file order (GltfAssetLabel::Animation(i))
     #[serde(default)]
     clips: Vec<String>,
+    /// original sound field name -> wav file (shoot, reload, empty, ...)
+    #[serde(default)]
+    sounds: HashMap<String, String>,
 }
 
 pub struct Weapon {
@@ -129,6 +132,7 @@ pub struct Weapon {
     pub spread: f32,
     /// animation clips in weapon.gltf (Idle, Walk, Shoot, Reload, ...)
     pub clips: Vec<String>,
+    pub sounds: HashMap<String, Handle<AudioSource>>,
 }
 
 #[derive(Resource, Default)]
@@ -169,7 +173,7 @@ struct Impact(f32);
 #[derive(Component)]
 struct HudText;
 
-fn load_loadout(mut commands: Commands, data: Res<DataDir>) {
+fn load_loadout(mut commands: Commands, data: Res<DataDir>, assets: Res<AssetServer>) {
     let dir = data.0.join("weapons");
     let all: HashMap<String, WeaponDef> = match std::fs::read_to_string(dir.join("weapons.json"))
         .map(|s| serde_json::from_str(&s))
@@ -203,6 +207,7 @@ fn load_loadout(mut commands: Commands, data: Res<DataDir>) {
             reserve: (def.maxAmmo - clip).max(0),
             spread: 0.0,
             clips: info.clips.clone(),
+            sounds: crate::sound::load_sounds(&assets, &format!("weapons/{name}"), &info.sounds),
         });
     }
     info!(
@@ -267,6 +272,7 @@ fn spawn_view_model(
         .spawn((
             Name::new(format!("view model {name}")),
             ViewModel,
+            crate::particles::AssetDir(format!("weapons/{name}")),
             anims,
             WorldAssetRoot(scene),
             view_model_transform(w.def.gunPosition.to_bevy()),
@@ -375,6 +381,7 @@ fn fire(
     mut impact_assets: Local<Option<(Handle<Mesh>, Handle<StandardMaterial>)>>,
     bot_parts: Query<&BotPart>,
     mut hits: MessageWriter<BotDamage>,
+    mut flashes: MessageWriter<crate::particles::Burst>,
     alive: Res<crate::bots::PlayerStats>,
 ) {
     let dt = time.delta_secs();
@@ -399,9 +406,13 @@ fn fire(
         if w.reserve > 0 {
             loadout.reloading = w.reload_time;
             loadout.play = Some("Reload");
+            crate::sound::play(&mut commands, w.sounds.get("reload"), None, 0.8);
+        } else if mouse.just_pressed(MouseButton::Left) {
+            crate::sound::play(&mut commands, w.sounds.get("empty"), None, 0.8);
         }
         return;
     }
+    crate::sound::play(&mut commands, w.sounds.get("shoot"), None, 0.7);
     if !melee {
         w.clip -= 1;
     }
@@ -418,6 +429,9 @@ fn fire(
     loadout.cooldown = interval;
     loadout.kick = 1.0;
     loadout.play = Some("Shoot");
+    if let Some(vm) = loadout.view_model {
+        flashes.write(crate::particles::Burst(vm));
+    }
 
     let (mesh, mat) = impact_assets
         .get_or_insert_with(|| {
@@ -454,7 +468,7 @@ fn spread_dir(rot: Quat, deg: f32, t: f32, i: u32) -> Dir3 {
     Dir3::new(rot * local).unwrap_or(Dir3::NEG_Z)
 }
 
-fn reload(keys: Res<ButtonInput<KeyCode>>, time: Res<Time>, mut loadout: ResMut<Loadout>) {
+fn reload(mut commands: Commands, keys: Res<ButtonInput<KeyCode>>, time: Res<Time>, mut loadout: ResMut<Loadout>) {
     let loadout = &mut *loadout;
     let cur = loadout.current;
     if loadout.reloading > 0.0 {
@@ -473,6 +487,7 @@ fn reload(keys: Res<ButtonInput<KeyCode>>, time: Res<Time>, mut loadout: ResMut<
     if keys.just_pressed(KeyCode::KeyR) && w.def.isMelee == 0 && w.clip < w.def.ammoInClip && w.reserve > 0 {
         loadout.reloading = w.reload_time;
         loadout.play = Some("Reload");
+        crate::sound::play(&mut commands, w.sounds.get("reload"), None, 0.8);
     }
 }
 

@@ -18,6 +18,7 @@ tools/venv/bin/python scripts/export_weapons.py
 tools/venv/bin/python scripts/find_behaviours.py MeleeBot ShootingBot FiringShotBot KamikadzeBot \
     MeleeShootBot ShootingBossBot StalkerBot > private/index/bots.tsv
 tools/venv/bin/python scripts/export_bots.py
+tools/venv/bin/python scripts/export_navmesh.py arena
 
 # here:
 cargo run -- arena
@@ -37,10 +38,13 @@ V = toggle walk / fly camera (fly: Space/Ctrl up/down, Shift fast), F12 = screen
 | `src/camera.rs` | mouse look, walk/fly camera |
 | `src/lighting.rs` | makes it look like the original: baked lightmaps, fog, ambient, sun, no tone mapping |
 | `src/weapons.rs` | loadout, first-person weapon model + animations, shooting (hitscan), damage, reloading, HUD |
+| `src/navmesh.rs` | path finding on the map's original navigation mesh |
+| `src/sound.rs` | original sound effects (3D for zombies) |
+| `src/particles.rs` | simple particles: muzzle flash and smoke |
 | `src/bots.rs` | campaign zombies: spawning at EnemyCreationZone, chase/attack/die, player health, score |
 | `src/screenshot.rs` | F12 screenshots, `PG3D_AUTOSHOT` for automated checks |
 
 Debug environment variables: `PG3D_TRACE=1` (log player position), `PG3D_AUTOWALK=1`
 (walk forward + jump automatically), `PG3D_AUTOFIRE=1` / `PG3D_AUTOAIM=1` (shoot / aim at bots
-automatically), `PG3D_NOBOTS=1`, `PG3D_CAM="x,y,z,tx,ty,tz"` (start in fly mode at a
+automatically), `PG3D_NOBOTS=1`, `PG3D_HUNT=1` (zombies always chase), `PG3D_CAM="x,y,z,tx,ty,tz"` (start in fly mode at a
 position looking at a target), `PG3D_AUTOSHOT=file.png` (screenshot after load, then quit).
