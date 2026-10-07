@@ -48,7 +48,7 @@ fn gamma(c: [f32; 3]) -> Color {
 fn setup_camera_look(
     mut commands: Commands,
     info: Res<MapInfo>,
-    camera: Single<Entity, With<Camera3d>>,
+    camera: Single<Entity, (With<Camera3d>, Without<crate::armory_preview::PreviewCamera>)>,
     mut clear: ResMut<ClearColor>,
 ) {
     let r = &info.render;
