@@ -221,6 +221,8 @@ pub struct NguiScreen {
     pub slider_values: HashMap<usize, f32>,
     /// filled sprite node -> fill amount 0..1 (horizontal fills grow from the left)
     pub fill_override: HashMap<usize, f32>,
+    /// widgets whose colour game code changed since they were drawn
+    recolor: std::collections::HashSet<usize>,
     dirty: bool,
     last_size: Vec2,
     /// label glyph cache key (node -> (text, size)) to avoid rebuilding glyphs
@@ -283,6 +285,18 @@ impl NguiScreen {
         if self.fill_override.get(&i) != Some(&amount) {
             self.fill_override.insert(i, amount);
             self.dirty = true;
+        }
+    }
+    /// Change a widget's tint (and switch it on if it was disabled), like setting
+    /// UIWidget.color / enabled from game code.
+    pub fn set_color(&mut self, i: usize, color: [f32; 4]) {
+        if let Some(w) = self.nodes[i].widget.as_mut() {
+            if w.color != color || !w.enabled {
+                w.color = color;
+                w.enabled = true;
+                self.recolor.insert(i);
+                self.dirty = true;
+            }
         }
     }
     pub fn set_pos(&mut self, i: usize, pos: Vec2) {
@@ -445,6 +459,7 @@ pub fn spawn_screen(commands: &mut Commands, assets: &AssetServer, data: &DataDi
         pos_override: HashMap::new(),
         slider_values: HashMap::new(),
         fill_override: HashMap::new(),
+        recolor: Default::default(),
         dirty: true,
         last_size: Vec2::ZERO,
         glyph_key: HashMap::new(),
@@ -725,6 +740,10 @@ fn layout(
             }
             if visible {
                 build_frame(&mut commands, screen, i, e, sr, k, palpha);
+            }
+            if screen.recolor.remove(&i) {
+                let c = tint(srgba(w.color), palpha);
+                commands.entity(e).entry::<ImageNode>().and_modify(move |mut img| img.color = c);
             }
             // a picture set by game code after the widget was first drawn
             if let Some(h) = screen.texture_override.get(&i) {

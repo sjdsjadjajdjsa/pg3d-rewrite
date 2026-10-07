@@ -189,6 +189,11 @@ fn setup(
                         s.set_active(i, on);
                     }
                 }
+                // the cell's white backing: NGUI blends in gamma space, where 43 % white
+                // lightens far less than in our linear blending (OBSERVED cell colours)
+                if let Some(i) = s.find_in(c, "Bg") {
+                    s.set_color(i, [1.0, 1.0, 1.0, 0.2]);
+                }
                 cells.push(c);
             }
         }
@@ -308,6 +313,17 @@ fn refresh(
             if let Some(i) = s.find_in(c, "Level_Label_newbalance") {
                 s.set_text(i, "Lvl. 1");
             }
+            let rarity = list[k].1.rarity;
+            // band behind "Lvl." in the rarity's colour (OBSERVED: light blue for Common)
+            if let Some(i) = s.find_in(c, "BGrare") {
+                s.set_color(i, rarity_band(rarity));
+            }
+            // owned items get a blue "bought" tint (BoughtIndicatorBg, off in the prefab);
+            // the equipped one stays green. OBSERVED colour: about [50, 83, 137] in the cell
+            if let Some(i) = s.find_in(c, "BoughtIndicatorBg") {
+                let on = equipped.as_deref() != Some(name);
+                s.set_color(i, [0.07, 0.31, 0.6, if on { 0.5 } else { 0.0 }]);
+            }
             if let Some(i) = s.find_in(c, "EQUIPPED") {
                 s.set_active(i, equipped.as_deref() == Some(name));
             }
@@ -339,6 +355,18 @@ fn preview_on_when_open(
         if c.is_active != open {
             c.is_active = open;
         }
+    }
+}
+
+/// Colour of the level band of a cell by rarity.
+fn rarity_band(r: i32) -> [f32; 4] {
+    match r {
+        1 => [0.36, 0.89, 0.36, 1.0],
+        2 => [0.22, 0.78, 1.0, 1.0],
+        3 => [0.78, 0.42, 1.0, 1.0],
+        4 => [1.0, 0.82, 0.0, 1.0],
+        5 => [1.0, 0.31, 0.43, 1.0],
+        _ => [0.37, 0.76, 1.0, 1.0],
     }
 }
 
