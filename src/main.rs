@@ -87,6 +87,7 @@ fn main() {
             .insert_resource(DataDir(data_dir.into()))
             .insert_resource(settings::Settings::load())
             .insert_resource(controls::Controls::load())
+            .insert_resource(wallet::Wallet::load())
             .add_plugins((menu::MenuPlugin, screenshot::ScreenshotPlugin))
             .run();
         return;

@@ -24,7 +24,7 @@ impl Plugin for MenuPlugin {
             .add_systems(PreStartup, lobby_scene)
             .add_systems(Startup, build_menu)
             .add_systems(Update, (character_idle, test_click))
-            .add_systems(Update, (button_colors, button_clicks, lobby_clicks, fade_toast, setup_lobby));
+            .add_systems(Update, (button_colors, button_clicks, lobby_clicks, fade_toast, setup_lobby, lobby_wallet));
     }
 }
 
@@ -543,5 +543,32 @@ pub fn back_to_menu(keys: Res<ButtonInput<KeyCode>>, mut exit: MessageWriter<App
     if keys.just_pressed(KeyCode::F10) {
         relaunch(None);
         exit.write(AppExit::Success);
+    }
+}
+
+/// Coins and gems in the lobby's top-right panel (CoinsShopButton/CurrencyPanel: two
+/// ItemCurrencyUI cells, coins on the left, gems on the right).
+fn lobby_wallet(
+    wallet: Res<crate::wallet::Wallet>,
+    assets: Res<AssetServer>,
+    mut screens: Query<&mut crate::ngui::NguiScreen>,
+    mut done: Local<Option<crate::wallet::Wallet>>,
+) {
+    if *done == Some(*wallet) {
+        return;
+    }
+    for mut s in &mut screens {
+        let Some(panel) = s.find("CurrencyPanelLayout") else { continue };
+        *done = Some(*wallet);
+        for (cell, v, icon) in [("Currency (1)", wallet.coins, "coins_118d"), ("Currency", wallet.gems, "gems_118a")] {
+            let Some(c) = s.find_in(panel, cell).filter(|&c| s.nodes[c].parent == Some(panel)) else { continue };
+            if let Some(t) = s.find_in(c, "Texture") {
+                s.set_texture(t, assets.load(format!("ui/lobby/textures/{icon}.png")));
+            }
+            if let Some(l) = s.find_in(c, "Label") {
+                // no thousands spaces here, unlike the match HUD (OBSERVED: "4376" "4797")
+                s.set_text(l, v.max(0).to_string());
+            }
+        }
     }
 }
