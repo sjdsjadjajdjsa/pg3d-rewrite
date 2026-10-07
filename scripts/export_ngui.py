@@ -173,6 +173,10 @@ class Ngui:
         for g in bm["mSaved"]:
             entry["glyphs"][str(g["index"])] = [g["x"] + offset[0], g["y"] + offset[1], g["width"], g["height"],
                                                 g["offsetX"], g["offsetY"], g["advance"]]
+            # BMGlyph.kerning: flat [previous char, amount, ...] pairs
+            k = g.get("kerning") or []
+            if k:
+                entry.setdefault("kerning", {})[str(g["index"])] = {str(k[i]): k[i + 1] for i in range(0, len(k) - 1, 2)}
         self.fonts[key] = entry
         return key
 
