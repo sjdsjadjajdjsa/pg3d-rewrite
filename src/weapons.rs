@@ -638,8 +638,7 @@ fn spawn_hud(mut commands: Commands) {
 }
 
 /// Right mouse on a scoped weapon (isZooming): narrow the field of view to the weapon's
-/// fieldOfViewZomm and hide the gun model. Unity's default view is 75 degrees vertical;
-/// we use 70, so scale by the same ratio.
+/// fieldOfViewZomm (degrees, vertical like ours) and hide the gun model.
 #[allow(clippy::type_complexity)]
 fn zoom(
     input: crate::controls::Input,
@@ -649,10 +648,11 @@ fn zoom(
     mut view_models: Query<&mut Visibility, With<ViewModel>>,
     mut zoomed: Local<bool>,
     time: Res<Time>,
+    settings: Res<crate::settings::Settings>,
 ) {
     let Some(w) = loadout.current() else { return };
     let want = w.def.isZooming != 0 && input.pressed(Action::Aim) && loadout.reloading <= 0.0;
-    let target = if want { 70.0 * w.def.fieldOfViewZomm / 75.0 } else { 70.0 };
+    let target = if want { w.def.fieldOfViewZomm } else { settings.fov };
     if want != *zoomed {
         let key = if want { "zoomIn" } else { "zoomOut" };
         crate::sound::play(&mut commands, w.sounds.get(key), None, 0.7);

@@ -59,7 +59,7 @@ pub fn spawn_camera(mut commands: Commands, settings: Res<crate::settings::Setti
         .unwrap_or_default();
     commands.spawn((
         Camera3d::default(),
-        Projection::Perspective(PerspectiveProjection { fov: 70f32.to_radians(), ..default() }),
+        Projection::Perspective(PerspectiveProjection { fov: settings.fov.to_radians(), ..default() }),
         PlayerCamera { fly_speed: 10.0, sensitivity: settings.mouse_sensitivity() },
         start,
     ));

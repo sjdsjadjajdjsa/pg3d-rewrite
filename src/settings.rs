@@ -13,11 +13,15 @@ pub struct Settings {
     pub sfx: f32,
     /// 0..1, mapped to mouse radians-per-pixel by `mouse_sensitivity()`
     pub sensitivity: f32,
+    /// vertical field of view in degrees, as the original's Settings > Controls "Field of
+    /// View" (it goes straight into Unity's Camera.fieldOfView, which is vertical too)
+    pub fov: f32,
 }
 
 impl Default for Settings {
     fn default() -> Self {
-        Self { music: 0.8, sfx: 0.8, sensitivity: 0.5 }
+        // 80: the value in the original's settings in our reference screenshots
+        Self { music: 0.8, sfx: 0.8, sensitivity: 0.5, fov: 80.0 }
     }
 }
 
