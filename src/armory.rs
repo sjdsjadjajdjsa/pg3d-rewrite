@@ -118,6 +118,10 @@ fn setup(
             "Camera/Bottom/Container",
             // the scroll bar: our lists fit without scrolling
             "ArmoryView/Slider",
+            "Properties (OFF)/btn0/EggButtons_ShopNGUI",
+            "Properties (OFF)/btn1",
+            "Properties (OFF)/btn2",
+            "Properties (OFF)/ReturnEveryDay",
         ] {
             if let Some(i) = s.find_path(path) {
                 s.set_active(i, false);
@@ -127,6 +131,8 @@ fn setup(
             "ContainerGrid/GridCategoriesWeapons",
             "Camera/Right (OFF)",
             "ClipPropertiesPanel/PanelProperties (OFF)",
+            // the button row under the stats (Equip / Equipped)
+            "ArmoryView/Properties (OFF)",
             // the "+" next to the gems (OBSERVED)
             "ObjectForCenter/BankButton",
         ] {
@@ -138,6 +144,14 @@ fn setup(
             if let Some(i) = s.find(name) {
                 s.make_button(i);
             }
+        }
+        // the Equip row sits under the right edge of the stats panel (OBSERVED). btn0 is
+        // anchored to btn2, which the game moves; we place it directly instead
+        if let Some(i) = s.find_path("Properties (OFF)/btn0") {
+            if let Some(w) = s.nodes[i].widget.as_mut() {
+                w.anchors.clear();
+            }
+            s.set_pos(i, Vec2::new(900.0, -307.0));
         }
         // the bank bar is centred by game code (BankShopView) on the buttons it shows.
         // OBSERVED: coin icon at x 1020 px
@@ -216,13 +230,16 @@ fn clicks(mut clicks: MessageReader<NguiClick>, mut screens: Query<(&NguiScreen,
             a.selected = None;
             a.dirty = true;
         } else if let Some(k) = a.cells.iter().position(|&n| n == c.node) {
-            // pick a weapon: select it and equip it in its category
+            // a weapon cell selects it (stats, preview); "Equip" then equips it (OBSERVED)
             let Some(name) = a.shown.get(k).cloned() else { continue };
+            a.selected = Some(name);
+            a.dirty = true;
+        } else if c.name == "BtnEquip" {
+            let Some(name) = a.selected.clone() else { continue };
             let cat = a.category;
             a.loadout.equipped.insert(cat, name.clone());
             a.loadout.save();
             info!("armory: equipped {name} in category {cat}");
-            a.selected = Some(name);
             a.dirty = true;
         }
         let _ = s;
@@ -267,6 +284,13 @@ fn refresh(mut screens: Query<(&mut NguiScreen, &mut Armory)>, assets: Res<Asset
             }
             if let Some(i) = s.find_in(c, "SeceltionIndicator") {
                 s.set_active(i, selected.as_deref() == Some(name));
+            }
+        }
+        // Equip for a weapon that is not equipped, the dark "Equipped" box for the one that is
+        let is_equipped = selected.is_some() && selected == equipped;
+        for (name, on) in [("BtnEquip", selected.is_some() && !is_equipped), ("Equipped", is_equipped)] {
+            if let Some(i) = s.find_path(&format!("btn0/{name}")) {
+                s.set_active(i, on);
             }
         }
         // stats panel of the selected weapon
