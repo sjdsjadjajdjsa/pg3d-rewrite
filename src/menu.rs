@@ -122,7 +122,7 @@ fn lobby_scene(
     if dir.join("sounds/music.wav").exists() {
         commands.spawn((
             AudioPlayer::new(assets.load("maps/lobby/sounds/music.wav")),
-            PlaybackSettings::LOOP.with_volume(bevy::audio::Volume::Linear(settings.music)),
+            PlaybackSettings::LOOP.with_volume(bevy::audio::Volume::Linear(settings.music_volume())),
             crate::settings_ui::Music,
         ));
     }

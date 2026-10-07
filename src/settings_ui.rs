@@ -1,11 +1,12 @@
 //! The original settings window (exported NGUI screen), shared by the lobby menu and the
-//! in-match pause screen. Two of its tabs work:
-//!   * Multimedia: Music and Sound FX are the original sliders, the brightness slider becomes
-//!     mouse sensitivity. Changes apply live and are saved.
+//! in-match pause screen. Three of its tabs work:
+//!   * Settings (sliders icon, TabSetting): first-person camera sensitivity, field of view
+//!     (60-90, SettingsTabSetting) and "Invert cam".
+//!   * Multimedia: Music and Sound FX. Changes apply live and are saved.
 //!   * Key binding (keyboard icon, TabRebind = the PC version's KeyMappingView): one row per
 //!     action; click a row, press a key or mouse button. A key already in use asks first
 //!     (ChangeButtonWindow_Used) and then swaps the two. "Default Settings" resets all.
-//! The touch-screen tabs (Controls, Settings, Graphics) are hidden.
+//! The other tabs (touch controls, graphics, ...) are hidden, as are options we don't have.
 
 use bevy::{diagnostic::FrameCount, prelude::*};
 
@@ -19,7 +20,7 @@ pub struct SettingsUiPlugin;
 impl Plugin for SettingsUiPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<Rebinding>()
-            .add_systems(Update, (settings_sliders, tab_clicks, rebind_clicks, capture_key).chain());
+            .add_systems(Update, (settings_sliders, tab_clicks, toggle_clicks, rebind_clicks, capture_key).chain());
     }
 }
 
@@ -41,7 +42,10 @@ impl Rebinding {
     }
 }
 
-const TABS: [&str; 2] = ["TabMultimedia", "TabRebind"];
+const TABS: [&str; 3] = ["TabSetting", "TabMultimedia", "TabRebind"];
+
+/// Field of view range of the original's slider (SettingsTabSetting: UISliderCont 60..90).
+const FOV_RANGE: (f32, f32) = (60.0, 90.0);
 
 /// Tab buttons sit under ".../TabsTable/"; the tab pages are nodes with the same name elsewhere.
 fn is_tab_button(s: &NguiScreen, i: usize) -> bool {
@@ -269,16 +273,22 @@ pub fn setup_settings(s: &mut crate::ngui::NguiScreen, settings: &crate::setting
             continue;
         }
         match s.nodes[i].name.as_str() {
-            "TabControls" | "TabSetting" | "TabGraphics" => s.set_active(i, false),
-            "TabMultimedia" | "TabRebind" => {
-                let k = if s.nodes[i].name == "TabMultimedia" { 1.0 } else { 2.0 };
+            "TabControls" | "TabGraphics" => s.set_active(i, false),
+            "TabSetting" | "TabMultimedia" | "TabRebind" => {
+                let k = match s.nodes[i].name.as_str() {
+                    "TabSetting" => 1.0,
+                    "TabMultimedia" => 2.0,
+                    _ => 3.0,
+                };
                 s.set_pos(i, Vec2::new(94.0 * k, s.nodes[i].pos[1]));
                 s.make_button(i);
             }
             _ => {}
         }
     }
-    select_tab(s, "TabMultimedia");
+    // the first tab; PG3D_SETTINGS_TAB=TabMultimedia|TabRebind (automated screenshots)
+    let tab = std::env::var("PG3D_SETTINGS_TAB").ok().filter(|t| TABS.contains(&t.as_str()));
+    select_tab(s, tab.as_deref().unwrap_or("TabSetting"));
     let hide = [
         "3DTouchCont",
         "CheckBoxCont_4",
@@ -289,6 +299,14 @@ pub fn setup_settings(s: &mut crate::ngui::NguiScreen, settings: &crate::setting
         "NotificaionsCont",
         "GS_StreamerCont",
         "CheckBox",
+        "BrightnessCont",
+        // Settings tab: what we don't have (third-person camera, acceleration, phone/BR options)
+        "ThirdPerson_settings",
+        "Acceleration_param",
+        "CheckBoxCont_1",
+        "CheckBoxCont_2",
+        "CheckBoxCont_3",
+        "Btns_Toggle",
     ];
     for i in 0..s.nodes.len() {
         let name = s.nodes[i].name.clone();
@@ -300,7 +318,15 @@ pub fn setup_settings(s: &mut crate::ngui::NguiScreen, settings: &crate::setting
             s.set_active(i, true);
         }
     }
-    for (cont, value) in [("MusicCont", settings.music), ("SoundFXCont", settings.sfx), ("BrightnessCont", settings.sensitivity)] {
+    for (cont, on) in [("InvertCamCont", settings.invert_y), ("MusicCont", settings.music_on), ("SoundFXCont", settings.sfx_on)] {
+        if let Some(c) = s.find(cont).and_then(|c| s.find_in(c, "CheckBox")) {
+            s.set_active(c, true);
+            if let Some(k) = s.find_in(c, "check") {
+                s.set_active(k, on);
+            }
+        }
+    }
+    for (cont, value) in [("MusicCont", settings.music), ("SoundFXCont", settings.sfx)] {
         let Some(c) = s.nodes.iter().position(|n| n.name == cont) else { continue };
         let prefix = s.path(c);
         let kids: Vec<usize> = (c..s.nodes.len()).filter(|&j| s.path(j).starts_with(&prefix)).collect();
@@ -309,10 +335,69 @@ pub fn setup_settings(s: &mut crate::ngui::NguiScreen, settings: &crate::setting
             if s.nodes[j].slider.is_some() {
                 s.set_slider(j, value);
             } else if n == "Amound_Label" {
-                s.set_text(j, format!("{:.0}%", value * 100.0));
-            } else if cont == "BrightnessCont" && (n == "NameSettings_Label" || n == "label_param") {
-                s.set_text(j, if n == "label_param" { "Mouse" } else { "Mouse sensitivity" });
+                s.set_text(j, slider_text(cont, value));
             }
+        }
+    }
+    let fov = (settings.fov - FOV_RANGE.0) / (FOV_RANGE.1 - FOV_RANGE.0);
+    for (cont, value) in [("FirstPerson_settings", settings.sensitivity), ("FOV", fov)] {
+        let Some(c) = s.find(cont) else { continue };
+        if let Some(j) = s.find_in(c, "Slider") {
+            s.set_slider(j, value);
+        }
+        if let Some(j) = s.find_in(c, "Amound_Label") {
+            s.set_text(j, slider_text(cont, value));
+        }
+    }
+}
+
+/// UISliderCont's value label: a percentage without a sign ("33", "50"), or for the FOV
+/// the value itself ("80.0").
+fn slider_text(cont: &str, value: f32) -> String {
+    if cont == "FOV" {
+        format!("{:.1}", FOV_RANGE.0 + value.clamp(0.0, 1.0) * (FOV_RANGE.1 - FOV_RANGE.0))
+    } else {
+        format!("{:.0}", value * 100.0)
+    }
+}
+
+/// Music and sound effect volumes after the mute check boxes.
+fn apply_volumes(settings: &crate::settings::Settings, music: &mut Query<&mut AudioSink, With<Music>>) {
+    crate::sound::set_sfx_volume(settings.sfx_volume());
+    for mut sink in music {
+        sink.set_volume(bevy::audio::Volume::Linear(settings.music_volume()));
+    }
+}
+
+/// Check boxes: "Invert cam", and Music / Sound FX on-off.
+fn toggle_clicks(
+    mut clicks: MessageReader<NguiClick>,
+    mut screens: Query<&mut NguiScreen>,
+    mut settings: ResMut<crate::settings::Settings>,
+    mut music: Query<&mut AudioSink, With<Music>>,
+) {
+    for c in clicks.read() {
+        if c.name != "CheckBox" {
+            continue;
+        }
+        let Ok(mut s) = screens.get_mut(c.screen) else { continue };
+        let path = s.path(c.node);
+        let on = if path.contains("InvertCamCont") {
+            settings.invert_y = !settings.invert_y;
+            settings.invert_y
+        } else if path.contains("MusicCont") {
+            settings.music_on = !settings.music_on;
+            settings.music_on
+        } else if path.contains("SoundFXCont") {
+            settings.sfx_on = !settings.sfx_on;
+            settings.sfx_on
+        } else {
+            continue;
+        };
+        settings.save();
+        apply_volumes(&settings, &mut music);
+        if let Some(k) = s.find_in(c.node, "check") {
+            s.set_active(k, on);
         }
     }
 }
@@ -334,23 +419,22 @@ fn settings_sliders(
             (&mut settings.music, "MusicCont")
         } else if path.contains("SoundFXCont") {
             (&mut settings.sfx, "SoundFXCont")
-        } else if path.contains("BrightnessCont") {
-            (&mut settings.sensitivity, "BrightnessCont")
+        } else if path.contains("FirstPerson_settings/Slider") {
+            (&mut settings.sensitivity, "FirstPerson_settings")
+        } else if path.contains("/FOV/") {
+            (&mut settings.fov, "FOV")
         } else {
             continue;
         };
-        *field = m.value;
+        *field = if cont == "FOV" { FOV_RANGE.0 + m.value * (FOV_RANGE.1 - FOV_RANGE.0) } else { m.value };
         changed = true;
-        let label = (0..s.nodes.len()).find(|&j| s.nodes[j].name == "Amound_Label" && s.path(j).contains(cont));
+        let label = (0..s.nodes.len()).find(|&j| s.nodes[j].name == "Amound_Label" && s.path(j).contains(&format!("/{cont}/")));
         if let Some(j) = label {
-            s.set_text(j, format!("{:.0}%", m.value * 100.0));
+            s.set_text(j, slider_text(cont, m.value));
         }
     }
     if changed {
-        crate::sound::set_sfx_volume(settings.sfx);
-        for mut sink in &mut music {
-            sink.set_volume(bevy::audio::Volume::Linear(settings.music));
-        }
+        apply_volumes(&settings, &mut music);
         for mut c in &mut cameras {
             c.sensitivity = settings.mouse_sensitivity();
         }

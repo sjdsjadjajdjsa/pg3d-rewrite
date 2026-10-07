@@ -16,12 +16,17 @@ pub struct Settings {
     /// vertical field of view in degrees, as the original's Settings > Controls "Field of
     /// View" (it goes straight into Unity's Camera.fieldOfView, which is vertical too)
     pub fov: f32,
+    /// Settings > "Invert cam": moving the mouse up looks down
+    pub invert_y: bool,
+    /// the check boxes next to the Music / Sound FX sliders (off = muted)
+    pub music_on: bool,
+    pub sfx_on: bool,
 }
 
 impl Default for Settings {
     fn default() -> Self {
         // 80: the value in the original's settings in our reference screenshots
-        Self { music: 0.8, sfx: 0.8, sensitivity: 0.5, fov: 80.0 }
+        Self { music: 0.8, sfx: 0.8, sensitivity: 0.5, fov: 80.0, invert_y: false, music_on: true, sfx_on: true }
     }
 }
 
@@ -51,6 +56,14 @@ impl Settings {
         if let Err(e) = std::fs::write(&p, serde_json::to_string_pretty(self).unwrap_or_default()) {
             warn!("could not save settings to {}: {e}", p.display());
         }
+    }
+
+    pub fn music_volume(&self) -> f32 {
+        if self.music_on { self.music } else { 0.0 }
+    }
+
+    pub fn sfx_volume(&self) -> f32 {
+        if self.sfx_on { self.sfx } else { 0.0 }
     }
 
     /// Radians of camera turn per pixel of mouse movement (0.0005 .. 0.0045).

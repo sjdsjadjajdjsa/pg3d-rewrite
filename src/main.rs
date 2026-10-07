@@ -64,7 +64,7 @@ fn ignore_real_input(
 }
 
 fn main() {
-    sound::set_sfx_volume(settings::Settings::load().sfx);
+    sound::set_sfx_volume(settings::Settings::load().sfx_volume());
     let data_dir = std::env::var("PG3D_DATA").unwrap_or_else(|_| DEFAULT_DATA.to_string());
     let Some(map_name) = std::env::args().nth(1) else {
         // no map given: show the start menu

@@ -48,7 +48,7 @@ impl Plugin for ResultsPlugin {
         app.init_resource::<MatchOver>()
             .init_resource::<Loading>()
             .add_systems(Startup, spawn_screen)
-            .add_systems(Update, (test_die, setup, death, end_match, clicks).chain());
+            .add_systems(Update, (test_die, setup, death, end_match, clicks, wallet_bar).chain());
     }
 }
 
@@ -88,6 +88,39 @@ fn setup(mut screens: Query<&mut NguiScreen, Added<NguiScreen>>) {
                 }
                 _ => {}
             }
+        }
+        // the coin/gem bar (BankShopViewGuiElement in TopRightCorner): after a match it shows
+        // the bank "+" button instead of the Armory button and centres on it
+        if let Some(b) = s.find("TopRightCorner").and_then(|t| s.find_in(t, "ObjectForCenter")) {
+            if let Some(shop) = s.find_in(b, "ShopButton") {
+                s.set_active(shop, false);
+            }
+            if let Some(bank) = s.find_in(b, "BankButton") {
+                s.set_active(bank, true);
+                let (x, y) = (s.nodes[bank].pos[0], s.nodes[b].pos[1]);
+                s.set_pos(b, Vec2::new(-x, y));
+            }
+        }
+    }
+}
+
+/// Coins and gems in the bar at the top right.
+fn wallet_bar(
+    wallet: Res<crate::wallet::Wallet>,
+    screen: Res<ResultsScreen>,
+    mut screens: Query<&mut NguiScreen>,
+    mut last: Local<Option<crate::wallet::Wallet>>,
+) {
+    let Some(e) = screen.0 else { return };
+    let Ok(mut s) = screens.get_mut(e) else { return };
+    if *last == Some(*wallet) {
+        return;
+    }
+    let Some(t) = s.find("TopRightCorner") else { return };
+    *last = Some(*wallet);
+    for (name, v) in [("CoinsLabel", wallet.coins), ("GemLabel", wallet.gems)] {
+        if let Some(i) = s.find_in(t, name) {
+            s.set_text(i, group(v.clamp(0, i32::MAX as i64) as i32));
         }
     }
 }

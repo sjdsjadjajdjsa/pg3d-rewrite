@@ -92,12 +92,14 @@ fn look(
     cursor: Single<&CursorOptions>,
     camera: Single<(&mut Transform, &PlayerCamera)>,
     mut player: Single<&mut Player>,
+    settings: Res<crate::settings::Settings>,
 ) {
     let (mut transform, cam) = camera.into_inner();
     if cursor.grab_mode != CursorGrabMode::None && motion.delta != Vec2::ZERO {
         let (yaw, pitch, _) = transform.rotation.to_euler(EulerRot::YXZ);
         let yaw = yaw - motion.delta.x * cam.sensitivity;
-        let pitch = (pitch - motion.delta.y * cam.sensitivity).clamp(-FRAC_PI_2 + 0.01, FRAC_PI_2 - 0.01);
+        let dy = if settings.invert_y { -motion.delta.y } else { motion.delta.y };
+        let pitch = (pitch - dy * cam.sensitivity).clamp(-FRAC_PI_2 + 0.01, FRAC_PI_2 - 0.01);
         transform.rotation = Quat::from_euler(EulerRot::YXZ, yaw, pitch, 0.0);
     }
     player.yaw = transform.rotation.to_euler(EulerRot::YXZ).0;
