@@ -270,6 +270,8 @@ class Ngui:
                              "effect_dist": [d["mEffectDistance"]["x"], d["mEffectDistance"]["y"]],
                              "spacing": [d["mSpacingX"], d["mSpacingY"]], "max_lines": d["mMaxLineCount"],
                              "gradient": bool(d.get("mApplyGradient", 0)),
+                             "gradient_top": [d.get("mGradientTop", {}).get(c, 1.0) for c in "rgba"],
+                             "gradient_bottom": [d.get("mGradientBottom", {}).get(c, 1.0) for c in "rgba"],
                              "key": d.get("mTextTerm", "")}
         elif k == "UITexture":
             tex = self.resolve(owner, d["mTexture"]) if d["mTexture"]["m_PathID"] else None
