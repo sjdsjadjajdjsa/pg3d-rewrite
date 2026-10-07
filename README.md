@@ -63,6 +63,12 @@ Game install (read-only, never modify, never copy into git):
     Exported model materials now honour the Cubic/Universal `UNLIT` keyword (the first-person arms are
     unlit, the guns' Optimized/MultiShader is lit); map exports ignore it (lightmaps light the level).
 
+Textures keep their Unity filter mode: most of the game's textures are Point filtered, so the
+exporters write glTF NEAREST samplers for them (bilinear made everything blurry).
+
+Reference material from the real game (screenshots, clips, settings tabs) is in
+`private/reference/` (not in git).
+
 **Shortcut:** `scripts/export_all.sh [maps...]` runs all of the above (indexes only if missing).
 
 Other helpers: `scripts/dump_behaviour.py` (any MonoBehaviour's fields as JSON), `scripts/find_text.py`

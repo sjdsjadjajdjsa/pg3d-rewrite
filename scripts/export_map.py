@@ -194,6 +194,7 @@ class Exporter:
         self.vis = Gltf("map")
         self.col = Gltf("collision")
         self.vis.doc["samplers"].append({"magFilter": 9729, "minFilter": 9987, "wrapS": 10497, "wrapT": 10497})
+        self.samplers = {(1, 0, 0): 0}  # (Unity filter mode, wrap U, wrap V) -> glTF sampler
         self.mesh_cache = {}     # (mesh key) -> MeshHandler data
         self.node_by_transform = {}  # (file, path_id) of a Unity Transform -> glTF node
         self.pending_skins = []  # (node index, SkinnedMeshRenderer, mesh data)
@@ -279,6 +280,26 @@ class Exporter:
         return md["acc"][k]
 
     # ---- materials / textures
+    def sampler(self, tex):
+        """glTF sampler matching the texture's Unity import settings. Most of the game's
+        pixel-art textures use Point filtering (crisp texels); bilinear would blur them."""
+        ts = getattr(tex, "m_TextureSettings", None)
+        filt = int(getattr(ts, "m_FilterMode", 1)) if ts is not None else 1
+        wu = int(getattr(ts, "m_WrapU", getattr(ts, "m_WrapMode", 0))) if ts is not None else 0
+        wv = int(getattr(ts, "m_WrapV", getattr(ts, "m_WrapMode", 0))) if ts is not None else 0
+        key = (min(filt, 1), wu, wv)
+        if key not in self.samplers:
+            wrap = {0: 10497, 1: 33071, 2: 33648}  # repeat, clamp, mirror
+            s = {"wrapS": wrap.get(wu, 10497), "wrapT": wrap.get(wv, 10497)}
+            if filt == 0:
+                s.update(magFilter=9728, minFilter=9984)  # nearest, nearest mipmap
+            else:
+                s.update(magFilter=9729, minFilter=9987)
+            self.vis.doc["samplers"].append(s)
+            self.samplers[key] = len(self.vis.doc["samplers"]) - 1
+        self.stats[f"textures_filter{filt}"] += 1
+        return self.samplers[key]
+
     def texture(self, tex_ptr):
         key = ptr_key(tex_ptr)
         if key is None:
@@ -293,7 +314,7 @@ class Exporter:
                     img.save(self.out / "textures" / fname)
                     g = self.vis.doc
                     g["images"].append({"uri": f"textures/{fname}", "name": tex.m_Name})
-                    g["textures"].append({"source": len(g["images"]) - 1, "sampler": 0})
+                    g["textures"].append({"source": len(g["images"]) - 1, "sampler": self.sampler(tex)})
                     idx = len(g["textures"]) - 1
                     self.stats["textures"] += 1
                 except Exception as e:
