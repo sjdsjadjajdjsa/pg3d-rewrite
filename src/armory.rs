@@ -89,6 +89,69 @@ struct Item {
     dpses: Vec<f32>,
     /// effect lines under the stats ("Automatic", "Zoom", ...)
     InShopEffects: Vec<i32>,
+    /// from the game's balance tables (balance.json, filled in at load)
+    #[serde(skip)]
+    price: i64,
+    #[serde(skip)]
+    gems: bool,
+    #[serde(skip)]
+    level: i32,
+    #[serde(skip)]
+    shop: Option<ShopStats>,
+}
+
+/// The Armory's numbers for a weapon (BalanceWeapons: SR fire rate, A capacity,
+/// SM mobility).
+#[derive(Deserialize, Clone, Copy, Default)]
+#[serde(default)]
+#[allow(non_snake_case)]
+struct ShopStats {
+    SR: Option<f32>,
+    A: Option<f32>,
+    SM: Option<f32>,
+}
+
+/// Per weapon number: unlock level, grade, price coefficient, currency (BalanceWeaponsEconomic).
+#[derive(Deserialize, Clone, Copy, Default)]
+#[serde(default)]
+#[allow(non_snake_case)]
+struct Economy {
+    L: Option<i32>,
+    G: Option<i32>,
+    PC: Option<f32>,
+    BC: Option<i32>,
+}
+
+#[derive(Deserialize, Default)]
+#[serde(default)]
+struct Balance {
+    /// "RC" = rare grade, coins; ... 65 levels each (BalanceEconomic.WeaponPrices)
+    prices: HashMap<String, Vec<f32>>,
+    economy: HashMap<String, Economy>,
+    shop: HashMap<String, ShopStats>,
+}
+
+impl Balance {
+    /// The original's price (ItemRecord.get_PriceItemRecord, GameAssembly 0x835640):
+    /// the price table of the weapon's grade (common and uncommon use the rare row) at the
+    /// weapon's level, times its coefficient, rounded to 5, at least 5. The level is the
+    /// weapon's unlock level here: the live game raises it with the player's level (a
+    /// level 65 account sees "Lvl. 55" and RC[54] = 530 coins, as in the screenshots).
+    fn price(&self, number: &str) -> Option<(i64, bool, i32)> {
+        let e = self.economy.get(number)?;
+        let level = e.L.unwrap_or(1).clamp(1, 65);
+        let grade = match e.G.unwrap_or(0) {
+            3 => "E",
+            4 => "L",
+            5 => "M",
+            _ => "R",
+        };
+        let gems = e.BC == Some(1);
+        let row = self.prices.get(&format!("{grade}{}", if gems { "G" } else { "C" }))?;
+        let base = *row.get((level - 1) as usize).or(row.last())?;
+        let p = ((base * e.PC.unwrap_or(1.0) / 5.0).round() * 5.0).max(5.0) as i64;
+        Some((p, gems, level))
+    }
 }
 
 impl Item {
@@ -279,6 +342,16 @@ fn setup(
         let mut items: Vec<(String, Item)> =
             all.into_iter().filter(|(n, _)| dir.join(n).join("weapon.gltf").exists()).collect();
         items.sort_by_key(|(n, i)| (i.rarity, n.trim_start_matches("Weapon").parse::<u32>().unwrap_or(u32::MAX)));
+        let balance: Balance = std::fs::read_to_string(dir.join("balance.json"))
+            .ok()
+            .and_then(|t| serde_json::from_str(&t).ok())
+            .unwrap_or_default();
+        for (n, i) in &mut items {
+            let num = n.trim_start_matches("Weapon");
+            let (p, g, l) = balance.price(num).unwrap_or((500, false, 1));
+            (i.price, i.gems, i.level) = (p, g, l);
+            i.shop = balance.shop.get(num).copied();
+        }
         for (n, _) in &items {
             let _ = assets.load::<Image>(format!("weapons/{n}/icon.png"));
         }
@@ -350,22 +423,27 @@ fn clicks(
             shoot.start();
         } else if c.name == "BtnBuy" {
             let Some(name) = a.selected.clone() else { continue };
-            let Some(price) = a.items.iter().find(|(n, _)| *n == name).map(|(_, i)| price(i)) else { continue };
+            let Some((price, gems)) = a.items.iter().find(|(n, _)| *n == name).map(|(_, i)| (price(i), i.gems)) else { continue };
             if a.loadout.owns(&name) {
                 continue;
             }
-            if wallet.coins < price {
-                info!("armory: {name} costs {price}, only {} coins", wallet.coins);
-                toast(&mut commands, format!("Not enough coins: {price} needed, you have {}", wallet.coins));
+            let (have, what) = if gems { (wallet.gems, "gems") } else { (wallet.coins, "coins") };
+            if have < price {
+                info!("armory: {name} costs {price} {what}, only {have}");
+                toast(&mut commands, format!("Not enough {what}: {price} needed, you have {have}"));
                 continue;
             }
-            wallet.add_coins(-price);
+            if gems {
+                wallet.add_gems(-price);
+            } else {
+                wallet.add_coins(-price);
+            }
             // bought weapons are equipped straight away (OBSERVED in clip h_rec1)
             let cat = a.category;
             a.loadout.owned.push(name.clone());
             a.loadout.equipped.insert(cat, name.clone());
             a.loadout.save();
-            info!("armory: bought {name} for {price} coins and equipped it");
+            info!("armory: bought {name} for {price} and equipped it");
             a.dirty = true;
         } else if c.name == "BtnEquip" {
             let Some(name) = a.selected.clone() else { continue };
@@ -472,15 +550,18 @@ fn refresh(
             if let Some(i) = s.find_in(c, "ItemTexture") {
                 s.set_texture(i, assets.load(format!("weapons/{name}/icon.png")));
             }
-            if let Some(i) = s.find_in(c, "Level_Label_newbalance") {
-                s.set_text(i, "Lvl. 1");
-            }
             let owned = a.loadout.owns(name);
+            // owned weapons are at level 1 (no upgrades yet); locked ones show the level
+            // they come at
+            if let Some(i) = s.find_in(c, "Level_Label_newbalance") {
+                s.set_text(i, format!("Lvl. {}", if owned { 1 } else { list[k].1.level }));
+            }
             // locked weapons show their price next to a coin (OBSERVED "Lvl. 55  530")
             if let Some(i) = s.find_in(c, "GunPrice") {
                 s.set_active(i, !owned);
                 s.set_text(i, crate::results::group(price(&list[k].1) as i32));
-                for (icon, on) in [("UpgradeArrow", false), ("Coin", true), ("Gem", false)] {
+                let gems = list[k].1.gems;
+                for (icon, on) in [("UpgradeArrow", false), ("Coin", !gems), ("Gem", gems)] {
                     if let Some(j) = s.find_in(i, icon) {
                         s.set_active(j, on);
                     }
@@ -516,6 +597,7 @@ fn refresh(
         }
         // a locked weapon: its price and "Buy" in the same place
         let sel_price = selected.as_ref().and_then(|n| list.iter().find(|(m, _)| m == n)).map(|(_, i)| price(i));
+        let sel_gems = selected.as_ref().and_then(|n| list.iter().find(|(m, _)| m == n)).is_some_and(|(_, i)| i.gems);
         if let Some(b2) = s.find_path("Properties (OFF)/btn2") {
             s.set_active(b2, selected.is_some() && !sel_owned);
             let kids: Vec<usize> = s.subtree(b2).into_iter().filter(|&j| s.nodes[j].parent == Some(b2)).collect();
@@ -531,7 +613,10 @@ fn refresh(
                     s.set_text(l, crate::results::group(sel_price.unwrap_or(0) as i32));
                 }
                 if let Some(g) = s.find_in(pc, "Gem") {
-                    s.set_active(g, false);
+                    s.set_active(g, sel_gems);
+                }
+                if let Some(g) = s.find_in(pc, "Gold") {
+                    s.set_active(g, !sel_gems);
                 }
             }
         }
@@ -549,17 +634,8 @@ impl SavedLoadout {
     }
 }
 
-/// Coin price of a weapon. The live game takes prices from its servers; ours go by rarity,
-/// in the range seen in the recordings (475 .. 1 915 coins).
 fn price(item: &Item) -> i64 {
-    match item.rarity {
-        0 => 475,
-        1 => 530,
-        2 => 965,
-        3 => 1_390,
-        4 => 1_915,
-        _ => 2_500,
-    }
+    item.price
 }
 
 /// A short message at the bottom of the screen.
@@ -656,7 +732,11 @@ fn stats_panel(s: &mut NguiScreen, item: Option<&Item>, equipped: Option<&Item>)
     // our approximations of the shop numbers (the live game takes them from its servers):
     // efficiency = damage per second tier 0, mobility 50 at normal speed
     let eff = item.efficiency();
-    let mobility = (50.0 + (item.speedModifier - 1.0) * 300.0).round().clamp(0.0, 100.0) as i32;
+    // the game's own shop numbers (BalanceWeapons), else our approximations
+    let shop = item.shop.unwrap_or_default();
+    let mobility = shop.SM.map_or_else(|| (50.0 + (item.speedModifier - 1.0) * 300.0).round().clamp(0.0, 100.0), |v| v.round()) as i32;
+    let fire_rate = shop.SR.map_or(item.fireRateShop, |v| v.round() as i32);
+    let capacity = shop.A.map_or(item.ammoInClip, |v| v.round() as i32);
     for i in s.subtree(panel) {
         if matches!(s.nodes[i].name.as_str(), "ArrowUp" | "ArrowDown") {
             s.set_active(i, false);
@@ -676,14 +756,14 @@ fn stats_panel(s: &mut NguiScreen, item: Option<&Item>, equipped: Option<&Item>)
     if is_melee {
         set(s, "Melee_Properties/GunName", name);
         set(s, "WeaponEfficiency/Count", eff.to_string());
-        set(s, "Fire_Rate/FireRateMeleeLab", item.fireRateShop.to_string());
+        set(s, "Fire_Rate/FireRateMeleeLab", fire_rate.to_string());
         set(s, "Mobility/CapacityLabel", mobility.to_string());
         set(s, "Rarity/Label", rarity);
     } else {
         set(s, "Guns_Properties/GunName", name);
         set(s, "WeaponEfficiency/Count", eff.to_string());
-        set(s, "Fire_Rate/FireRateLabel", item.fireRateShop.to_string());
-        set(s, "Capacity/CapacityLabel", item.ammoInClip.to_string());
+        set(s, "Fire_Rate/FireRateLabel", fire_rate.to_string());
+        set(s, "Capacity/CapacityLabel", capacity.to_string());
         set(s, "Mobility/MobilityLabel", mobility.to_string());
         set(s, "Rariry/Label", rarity);
     }

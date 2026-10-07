@@ -34,4 +34,9 @@ impl Wallet {
         self.coins = self.coins.saturating_add(n).max(0);
         self.save();
     }
+
+    pub fn add_gems(&mut self, n: i64) {
+        self.gems = self.gems.saturating_add(n).max(0);
+        self.save();
+    }
 }
