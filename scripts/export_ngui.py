@@ -203,6 +203,9 @@ class Ngui:
                 if r.type.name != "MonoBehaviour":
                     continue
                 k = self.cls(r)
+                # every script on the node, so game code that moves/scales it at run time
+                # (layout helpers, controllers) can be found
+                node.setdefault("scripts", []).append(k)
                 if k not in KEEP:
                     continue
                 try:
