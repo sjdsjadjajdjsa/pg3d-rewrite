@@ -287,12 +287,28 @@ fn refresh(
         }
         a.dirty = false;
         let cat = a.category;
-        // tabs: the open one is drawn pressed
+        // tabs: the open one is drawn pressed; each shows the icon of the weapon equipped in
+        // that category instead of the grey silhouette (OBSERVED)
         for (k, name) in TABS.iter().enumerate() {
             let Some(t) = s.find(name) else { continue };
-            let on = k as i32 + 1 == cat;
+            let tab_cat = k as i32 + 1;
             if let Some(p) = s.find_in(t, "Pressed") {
-                s.set_active(p, on);
+                s.set_active(p, tab_cat == cat);
+            }
+            let weapon = equipped_in(&a.loadout, tab_cat)
+                .filter(|w| a.items.iter().any(|(n, _)| n == w))
+                .map(str::to_string);
+            let kids: Vec<usize> = s.subtree(t).into_iter().filter(|&j| s.nodes[j].parent == Some(t)).collect();
+            for j in kids {
+                let n = s.nodes[j].name.clone();
+                if n == "Texture" || n == "PrimaryIcon" {
+                    if let Some(w) = &weapon {
+                        s.set_texture(j, assets.load(format!("weapons/{w}/icon.png")));
+                    }
+                    s.set_active(j, weapon.is_some());
+                } else if n == "Texture (1)" || n == "PrimaryIcon (1)" {
+                    s.set_active(j, weapon.is_none());
+                }
             }
         }
         let list: Vec<(String, Item)> = a.items.iter().filter(|(_, i)| i.categoryNabor == cat).cloned().collect();
