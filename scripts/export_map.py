@@ -497,14 +497,20 @@ class Exporter:
             "fog_density": getattr(rs, "m_FogDensity", None),
         }
 
-    def lightmap_extras(self, mr, md):
-        """glTF node extras telling the game which lightmap + UV rect this renderer uses."""
+    def lightmap_extras(self, mr, md, static=False):
+        """glTF node extras telling the game which lightmap + UV rect this renderer uses.
+
+        Static batching bakes the renderer's lightmap scale/offset into the combined mesh's
+        second UV set (its UVs already equal the rect), so those use the whole lightmap.
+        """
         idx = getattr(mr, "m_LightmapIndex", 0xFFFF)
         if idx >= 0xFFFE or idx >= len(self.lightmaps) or not self.lightmaps[idx]:
             return None
         so = getattr(mr, "m_LightmapTilingOffset", None) or mr.m_LightmapScaleOffset
         # Unity: lm_uv = uv * (x, y) + (z, w), V pointing up. We flip V (v' = 1 - v), which
         # turns the V range into [1 - y - w, 1 - w]. Bevy: uv = mix(min, max, uv_1).
+        if static:
+            return {"lightmap": self.lightmaps[idx], "lightmap_rect": [0.0, 0.0, 1.0, 1.0]}
         return {"lightmap": self.lightmaps[idx],
                 "lightmap_rect": [so.z, 1 - so.y - so.w, so.z + so.x, 1 - so.w]}
 
@@ -674,7 +680,7 @@ class Exporter:
             first, count, static = sbi.firstSubMesh, sbi.subMeshCount, True
         mats = list(mr.m_Materials)
         mat_keys = tuple(ptr_key(m) for m in mats)
-        extras = self.lightmap_extras(mr, md)
+        extras = self.lightmap_extras(mr, md, static)
         is_skinned = (type(mr).__name__ == "SkinnedMeshRenderer" and md["joints"] is not None
                       and len(getattr(mr, "m_Bones", []) or []) > 0)
         key = (id(md), first, count, mat_keys, extras is not None, is_skinned)
