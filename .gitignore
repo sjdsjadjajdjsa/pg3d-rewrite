@@ -8,3 +8,4 @@
 *.rep/
 __pycache__/
 .venv/
+/helpers/*/target/

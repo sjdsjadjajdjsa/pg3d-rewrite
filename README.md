@@ -63,6 +63,13 @@ Game install (read-only, never modify, never copy into git):
     Exported model materials now honour the Cubic/Universal `UNLIT` keyword (the first-person arms are
     unlit, the guns' Optimized/MultiShader is lit); map exports ignore it (lightmaps light the level).
 
+HDR lightmaps (BC6H) are decoded by `helpers/bc6h-decode` (build once:
+`cd helpers/bc6h-decode && cargo build --release`); without it they are clamped to 8 bits.
+Cubic/Universal emission (`_EmissionTex` alpha mask, e.g. glowing crystals) becomes a glTF
+emissive texture. Explosive props (ExplosionObjectRespawnController -> Bomb_TNT prefab) are
+placed under their markers with `extras.explosive` settings.
+`scripts/export_ngui.py resources.assets InGameGUI ingame` exports the in-match HUD.
+
 Textures keep their Unity filter mode: most of the game's textures are Point filtered, so the
 exporters write glTF NEAREST samplers for them (bilinear made everything blurry).
 

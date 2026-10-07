@@ -207,6 +207,7 @@ class Exporter:
         # honour Cubic/Universal's UNLIT keyword (weapons, bots, characters). Map exports
         # switch this off: their surfaces are lit by baked lightmaps instead.
         self.unlit_keywords = True
+        self.in_explosive = False
         self.cameras = []
         self.sounds = {}         # filled by export_weapons.export_sounds for prefabs
         self.skip_names = set()  # GameObject names to leave out (with their children)
@@ -300,6 +301,37 @@ class Exporter:
         self.stats[f"textures_filter{filt}"] += 1
         return self.samplers[key]
 
+    def emission_texture(self, texenvs, emis, strength):
+        """Cubic/Universal emission: _MainTex.rgb * _EmissionTex (rgb tint, alpha = mask)
+        * _Emission, baked into one PNG for the glTF emissiveTexture."""
+        main = texenvs.get("_MainTex")
+        mt, et = deref(main.m_Texture) if main else None, deref(emis.m_Texture)
+        if mt is None or et is None:
+            return None
+        key = ("emission", ptr_key(main.m_Texture), ptr_key(emis.m_Texture), round(float(strength), 3))
+        if key in self.textures:
+            return self.textures[key]
+        try:
+            from PIL import Image
+            m = np.asarray(mt.image.convert("RGB"), dtype=np.float32) / 255.0
+            e = et.image.convert("RGBA")
+            if e.size != (m.shape[1], m.shape[0]):
+                e = e.resize((m.shape[1], m.shape[0]), Image.NEAREST)
+            e = np.asarray(e, dtype=np.float32) / 255.0
+            out = np.clip(m * e[:, :, :3] * e[:, :, 3:4] * float(strength), 0, 1)
+            fname = f"{len(self.textures):04d}_{safe(mt.m_Name)}_emission.png"
+            Image.fromarray((out * 255 + 0.5).astype(np.uint8), "RGB").save(self.out / "textures" / fname)
+            g = self.vis.doc
+            g["images"].append({"uri": f"textures/{fname}", "name": mt.m_Name + "_emission"})
+            g["textures"].append({"source": len(g["images"]) - 1, "sampler": self.sampler(mt)})
+            idx = len(g["textures"]) - 1
+            self.stats["emission_textures"] += 1
+        except Exception as ex:
+            print(f"  emission {mt.m_Name}: {ex!r}"[:200], file=sys.stderr)
+            idx = None
+        self.textures[key] = idx
+        return idx
+
     def texture(self, tex_ptr):
         key = ptr_key(tex_ptr)
         if key is None:
@@ -364,6 +396,15 @@ class Exporter:
             keywords += [str(k) for k in (getattr(mat, "m_ValidKeywords", None) or [])]
             if keywords:
                 out["extras"]["keywords"] = keywords
+            emis = texenvs.get("_EmissionTex")
+            if emis is not None and ("EMISSION_ENABLE" in keywords or floats.get("_EmissionEnable", 0) == 1):
+                ei = self.emission_texture(texenvs, emis, floats.get("_Emission", 1.0))
+                if ei is not None:
+                    # glowing parts (crystals, lamps): the main texture, masked by the
+                    # emission texture's alpha, shown at full brightness whatever the lighting
+                    out["emissiveTexture"] = {"index": ei}
+                    out["emissiveFactor"] = [1.0, 1.0, 1.0]
+                    out["extras"]["emission"] = float(floats.get("_Emission", 1.0))
             s = shader_name.lower()
             # Cubic/Universal (most game objects) switches lighting off per material with the
             # UNLIT keyword (set by its misleadingly named _LightingEnable toggle)
@@ -517,7 +558,21 @@ class Exporter:
         if particle:
             self.vis.doc["nodes"][idx].setdefault("extras", {}).update(particle_texture=particle,
                                                                         particle=particle_settings(comps))
-        self.collect_colliders(go.m_Name, comps, world)
+        if not self.in_explosive:
+            self.collect_colliders(go.m_Name, comps, world)
+        explosive = self.explosive_prefab(comps)
+        if explosive is not None:
+            # ExplosionObjectRespawnController: the game spawns an explosive barrel/TNT here
+            # (and respawns it); we place it as a child node tagged for the game to handle
+            prefab_t, info = explosive
+            self.in_explosive = True
+            c = self.walk(prefab_t, world)
+            self.in_explosive = False
+            if c is not None:
+                self.vis.doc["nodes"][c]["translation"] = [0.0, 0.0, 0.0]
+                self.vis.doc["nodes"][c].setdefault("extras", {})["explosive"] = info
+                children.append(c)
+                self.stats["explosives"] += 1
         if MARKER_RE.search(go.m_Name):
             self.markers.append({"name": go.m_Name, "position": world[:3, 3].tolist()})
         for cam in comps.get("Camera", []):
@@ -533,6 +588,35 @@ class Exporter:
         if children:
             self.vis.doc["nodes"][idx]["children"] = children
         return idx
+
+    def explosive_prefab(self, comps):
+        """(prefab root Transform, settings) of an ExplosionObjectRespawnController, or None."""
+        for ptr in comps.get("MonoBehaviour", []):
+            try:
+                mb = deref(ptr)
+                sc = deref(mb.m_Script)
+                if sc is None or sc.m_ClassName != "ExplosionObjectRespawnController":
+                    continue
+                go = deref(mb.explosionObjectPrefab)
+                info = {"respawn": float(getattr(mb, "timeToNextRespawn", 90.0))}
+                tr = None
+                for c in go.m_Component:
+                    r = deref(getattr(c, "component", c))
+                    if type(r).__name__ == "Transform":
+                        tr = r
+                    elif type(r).__name__ == "MonoBehaviour":
+                        rs = deref(r.m_Script)
+                        if rs is not None and rs.m_ClassName == "DamagedExplosionObject":
+                            info.update(radius=float(r.radiusExplosion), radius_max=float(r.radiusMaxExplosion),
+                                        damage_percent=float(r.damagePercent))
+                    elif type(r).__name__ == "BoxCollider":
+                        info.update(box_center=[-r.m_Center.x, r.m_Center.y, r.m_Center.z],
+                                    box_size=[r.m_Size.x, r.m_Size.y, r.m_Size.z])
+                if tr is not None:
+                    return tr, info
+            except Exception as e:
+                print(f"  explosive: {e!r}"[:160], file=sys.stderr)
+        return None
 
     def particle_texture(self, comps):
         """Texture of a ParticleSystemRenderer's material (muzzle flashes, smoke, ...), as
@@ -697,6 +781,24 @@ class Exporter:
 
 # ---------------------------------------------------------------- small helpers
 
+BC6H_DECODER = ROOT / "helpers/bc6h-decode/target/release/bc6h-decode"
+
+
+def decode_bc6h(raw, w, h):
+    """BC6H blocks -> float32 HxWx3 (Unity row order) via helpers/bc6h-decode
+    (build it once with `cargo build --release` in that folder)."""
+    import subprocess
+    import tempfile
+    if not BC6H_DECODER.exists():
+        print(f"  BC6H lightmap clamped to 8 bits: build {BC6H_DECODER.parent.parent.parent}", file=sys.stderr)
+        return None
+    with tempfile.TemporaryDirectory() as d:
+        src, dst = pathlib.Path(d, "in.bc6h"), pathlib.Path(d, "out.f32")
+        src.write_bytes(bytes(raw))
+        subprocess.run([str(BC6H_DECODER), str(src), str(dst), str(w), str(h)], check=True)
+        return np.frombuffer(dst.read_bytes(), dtype=np.float32).reshape(h, w, 3).copy()
+
+
 def texture_float_rgb(tex):
     """Texture2D -> float32 HxWx3 array, top row first. Handles half/float HDR formats
     exactly and falls back to UnityPy's 8-bit decoder for everything else."""
@@ -708,6 +810,10 @@ def texture_float_rgb(tex):
             a = np.frombuffer(raw, dtype=np.float16, count=w * h * 4).reshape(h, w, 4)[:, :, :3]
         elif fmt == 20:  # RGBAFloat
             a = np.frombuffer(raw, dtype=np.float32, count=w * h * 4).reshape(h, w, 4)[:, :, :3]
+        elif fmt == 24:  # BC6H: HDR; the Python decoders clamp it to 8 bits
+            a = decode_bc6h(raw, w, h)
+            if a is None:
+                return np.asarray(tex.image.convert("RGB"), dtype=np.float32) / 255.0
         else:
             return np.asarray(tex.image.convert("RGB"), dtype=np.float32) / 255.0
         return np.ascontiguousarray(a[::-1]).astype(np.float32)  # Unity stores bottom row first
