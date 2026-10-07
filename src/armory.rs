@@ -45,7 +45,7 @@ const PITCH: Vec2 = Vec2::new(217.3, 192.0);
 const FIRST: Vec2 = Vec2::new(-327.0, 144.7);
 const CELL_SCALE: f32 = 1.2;
 /// Most weapons one category can show (cells made once and reused).
-const MAX_CELLS: usize = 12;
+const MAX_CELLS: usize = 16;
 
 /// The weapon chosen in each category (categoryNabor -> weapon name), saved between runs.
 #[derive(Resource, Serialize, Deserialize, Clone, Debug, Default)]
