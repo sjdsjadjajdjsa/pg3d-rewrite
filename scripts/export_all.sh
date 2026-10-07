@@ -22,5 +22,8 @@ for m in "${MAPS[@]}"; do
 done
 echo "== weapons"
 $PY scripts/export_weapons.py 2>/dev/null | grep -E '^(weapons|model)'
+echo "== rockets"
+[ -f private/index/rockets.tsv ] || $PY scripts/find_behaviours.py RocketSettings > private/index/rockets.tsv
+$PY scripts/export_rockets.py 2>/dev/null | grep -E '^model'
 echo "== bots"
 $PY scripts/export_bots.py 2>/dev/null | grep -E '^(bots|model)' | cut -c1-60

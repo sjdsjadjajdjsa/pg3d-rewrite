@@ -39,6 +39,10 @@ Game install (read-only, never modify, never copy into git):
 9. `tools/venv/bin/python scripts/export_navmesh.py <map>` → `private/export/maps/<map>/navmesh.json` (walkable
    polygons for enemy path finding). Weapon/bot exports now also write `sounds/*.wav` and muzzle-flash particle data.
 
+10. `tools/venv/bin/python scripts/find_behaviours.py RocketSettings > private/index/rockets.tsv`, then
+    `tools/venv/bin/python scripts/export_rockets.py` → `private/export/rockets/` (all projectile settings +
+    models of rockets fired by exported weapons). Shooting bots' bullet colour/size is in bots.json.
+
 **Shortcut:** `scripts/export_all.sh [maps...]` runs all of the above (indexes only if missing).
 
 Other helpers: `scripts/dump_behaviour.py` (any MonoBehaviour's fields as JSON), `scripts/find_text.py`
