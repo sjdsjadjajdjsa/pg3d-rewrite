@@ -709,10 +709,10 @@ fn layout(
             let sr = to_screen(vr);
             let (pdepth, palpha) = panel_of(screen, i);
             let z = pdepth * 1000 + w.depth;
-            if screen.respawn.remove(&i) {
-                if let Some(e) = screen.entities[i].take() {
-                    commands.entity(e).despawn();
-                }
+            if screen.respawn.remove(&i)
+                && let Some(e) = screen.entities[i].take()
+            {
+                commands.entity(e).despawn();
             }
             // create the entity the first time the node becomes visible
             if screen.entities[i].is_none() {
