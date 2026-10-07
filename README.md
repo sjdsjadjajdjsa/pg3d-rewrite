@@ -63,9 +63,10 @@ V = toggle walk / fly camera (fly: jump key/E up, Ctrl/Q down, Shift fast), F12 
 | `src/settings_ui.rs` | the original settings window (Multimedia sliders + key binding tab), shared by menu and pause screen |
 | `src/controls.rs` | key bindings: actions → key / mouse button, saved in controls.json |
 | `src/pause.rs` | Esc pause screen (original pause panel): stops the match, settings, resume |
-| `src/results.rs` | end of a Campaign match: death camera + fade, then the original "You are zombified!" results screen, best score per map, Retry / Menu |
+| `src/results.rs` | end of a match as in the current game: hard cut to "Loading", then the Results table (waves, kills, score, best score per map), Again / back arrow |
+| `src/hud.rs` | in-match HUD laid out like the original: health bar, score · wave · zombies-left box, red damage edges and hit-direction arrows |
 | `src/pickups.rs` | health and ammo pickups at the map's BonusCreationZone points |
-| `src/bots.rs` | campaign zombies in waves (wave n = 4 + 2n, harder types later): chase/attack/die, player health, score |
+| `src/bots.rs` | Arena zombies in waves of 45 (as in the original HUD), up to 10 alive, harder types later: chase/attack/die, player health, score |
 | `src/screenshot.rs` | F12 screenshots, `PG3D_AUTOSHOT` for automated checks |
 
 Automated runs (`PG3D_AUTOSHOT` set) ignore your real keyboard/mouse and open their window

@@ -23,12 +23,14 @@ use crate::{
 };
 
 /// Bot types we spawn are every exported bot folder in <data>/bots/ (picked at random).
-/// How many bots are alive at once (GUESS: the original uses per-level wave settings).
-const MAX_ALIVE: usize = 6;
-/// Pause between waves, seconds.
+/// Zombies per wave. OBSERVED: the original Arena HUD shows 45 at the start of waves 1-3.
+const WAVE_SIZE: u32 = 45;
+/// How many bots are alive at once (GUESS: about 10 were on screen in the reference clips).
+const MAX_ALIVE: usize = 10;
+/// Pause between waves, seconds (GUESS).
 const WAVE_BREAK: f32 = 6.0;
-/// Seconds between spawns while below MAX_ALIVE.
-const SPAWN_INTERVAL: f32 = 2.5;
+/// Seconds between spawns while below MAX_ALIVE (GUESS: a 45-zombie wave took ~75 s).
+const SPAWN_INTERVAL: f32 = 1.2;
 /// Player health. GUESS: the original value is obfuscated; classic campaign had 9 hearts.
 pub const PLAYER_MAX_HEALTH: f32 = 9.0;
 /// PG3D_HUNT=1 (automated tests): zombies always know where you are instead of only
@@ -44,13 +46,14 @@ pub struct BotsPlugin;
 impl Plugin for BotsPlugin {
     fn build(&self, app: &mut App) {
         app.add_message::<BotDamage>()
+            .add_message::<PlayerHit>()
             .init_resource::<Wave>()
             .insert_resource(PlayerStats { health: PLAYER_MAX_HEALTH, protected: 0.0, score: 0, kills: 0, respawn_in: 0.0 })
-            .add_systems(Startup, (load_bot_defs, spawn_hud))
+            .add_systems(Startup, load_bot_defs)
             .add_systems(FixedUpdate, (bot_brain, bot_move).chain())
             .add_systems(
                 Update,
-                (spawner, apply_damage, bot_death, bot_animation, player_death, update_hud, auto_aim, fade_banners),
+                (spawner, apply_damage, bot_death, bot_animation, player_death, auto_aim, fade_banners),
             );
     }
 }
@@ -123,6 +126,8 @@ pub struct Wave {
     pub to_spawn: u32,
     /// seconds until the next wave starts (during a break)
     pub break_left: f32,
+    /// zombies of this wave still alive or not spawned yet (the HUD counter)
+    pub left: u32,
 }
 
 #[derive(Resource)]
@@ -134,6 +139,12 @@ pub struct PlayerStats {
     pub kills: i32,
     /// seconds until respawn while dead
     pub respawn_in: f32,
+}
+
+/// "The player was hit by something at `from`" (drives the HUD's red flash and arrows).
+#[derive(Message)]
+pub struct PlayerHit {
+    pub from: Vec3,
 }
 
 /// "This bot took `amount` damage" (sent by weapons).
@@ -190,8 +201,6 @@ struct BotAnims {
     playing: Option<String>,
 }
 
-#[derive(Component)]
-struct HudHealth;
 
 fn load_bot_defs(mut commands: Commands, data: Res<DataDir>, assets: Res<AssetServer>) {
     let dir = data.0.join("bots");
@@ -279,8 +288,9 @@ fn spawner(
     }
     let dt = time.delta_secs();
     let alive = bots.iter().filter(|b| b.state != BotState::Dead).count();
-    // waves (our own simple campaign rule set): wave n sends 4 + 2n zombies; when they
-    // are all dead there is a short break, then the next, harder wave starts
+    wave.left = alive as u32 + wave.to_spawn;
+    // waves: every wave sends WAVE_SIZE zombies; when they are all dead there is a short
+    // break, then the next, harder wave starts
     if wave.to_spawn == 0 && alive == 0 {
         if wave.break_left <= 0.0 {
             wave.break_left = if wave.number == 0 { 2.0 } else { WAVE_BREAK };
@@ -291,7 +301,7 @@ fn spawner(
         wave.break_left -= dt;
         if wave.break_left <= 0.0 {
             wave.number += 1;
-            wave.to_spawn = 4 + 2 * wave.number;
+            wave.to_spawn = WAVE_SIZE;
             wave.break_left = 0.0;
             info!("wave {} ({} zombies)", wave.number, wave.to_spawn);
             banner(&mut commands, &format!("WAVE {}", wave.number), Color::srgb(1.0, 0.85, 0.1));
@@ -401,6 +411,7 @@ fn bot_brain(
     mut bots: Query<(&Transform, &mut Bot)>,
     spatial: SpatialQuery,
     mut shots: MessageWriter<SpawnProjectile>,
+    mut hit: MessageWriter<PlayerHit>,
 ) {
     let dt = time.delta_secs();
     stats.protected = (stats.protected - dt).max(0.0);
@@ -461,6 +472,7 @@ fn bot_brain(
                 crate::sound::play(&mut commands, snd.get("attackSound"), Some(t.translation), 1.0);
                 if stats.protected <= 0.0 {
                     stats.health -= def.damagePerHit;
+                    hit.write(PlayerHit { from: t.translation });
                     crate::sound::play(&mut commands, snd.get("takeDamageSound"), None, 0.8);
                 }
             }
@@ -734,43 +746,6 @@ fn fade_banners(
             commands.entity(e).despawn();
         }
     }
-}
-
-fn spawn_hud(mut commands: Commands) {
-    commands.spawn((
-        Node { position_type: PositionType::Absolute, left: px(24.0), bottom: px(20.0), ..default() },
-        children![(HudHealth, Text::new(""), TextFont { font_size: FontSize::Px(26.0), ..default() }, TextColor(Color::WHITE))],
-    ));
-}
-
-fn update_hud(
-    stats: Res<PlayerStats>,
-    wave: Res<Wave>,
-    bots: Query<&Bot>,
-    mut text: Single<&mut Text, With<HudHealth>>,
-) {
-    let alive = bots.iter().filter(|b| b.state != BotState::Dead).count() as u32;
-    let wave_text = if std::env::var("PG3D_NOBOTS").is_ok() {
-        String::new()
-    } else if wave.to_spawn == 0 && alive == 0 && wave.break_left > 0.0 {
-        format!("   wave {} in {:.0}", wave.number + 1, wave.break_left.ceil())
-    } else {
-        format!("   wave {} - {} left", wave.number, alive + wave.to_spawn)
-    };
-    text.0 = if stats.health > 0.0 {
-        let hearts = stats.health.ceil().max(0.0) as usize;
-        format!(
-            "{} {:.0}/{:.0}   score {}   kills {}{}",
-            "♥".repeat(hearts),
-            stats.health,
-            PLAYER_MAX_HEALTH,
-            stats.score,
-            stats.kills,
-            wave_text
-        )
-    } else {
-        format!("YOU DIED - respawn in {:.0}   score {}", stats.respawn_in.max(0.0).ceil(), stats.score)
-    };
 }
 
 /// PG3D_AUTOAIM=1 (automated tests): turn the camera to the nearest living bot.

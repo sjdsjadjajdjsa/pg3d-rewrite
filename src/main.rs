@@ -13,6 +13,7 @@
 mod bots;
 mod camera;
 mod controls;
+mod hud;
 mod lighting;
 mod map;
 mod menu;
@@ -129,6 +130,7 @@ fn main() {
             pause::PausePlugin,
             results::ResultsPlugin,
         ))
+        .add_plugins(hud::HudPlugin)
         .add_systems(Update, (menu::back_to_menu, menu::test_click))
         .add_systems(
             PreUpdate,

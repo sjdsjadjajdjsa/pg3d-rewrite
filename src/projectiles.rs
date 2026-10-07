@@ -112,6 +112,7 @@ fn fly(
     player: Single<&Transform, (With<crate::player::Player>, Without<Projectile>)>,
     mut stats: ResMut<PlayerStats>,
     mut hits: MessageWriter<BotDamage>,
+    mut player_hits: MessageWriter<crate::bots::PlayerHit>,
 ) {
     let dt = time.delta_secs();
     for (e, mut t, mut p) in &mut q {
@@ -140,7 +141,7 @@ fn fly(
                     }
                     Owner::Enemy => {
                         if h.entity != Entity::PLACEHOLDER && point.distance(player.translation) < 1.5 {
-                            hurt_player(&mut stats, p.spec.damage);
+                            hurt_player(&mut stats, p.spec.damage, point - *dir * 10.0, &mut player_hits);
                         }
                     }
                 }
@@ -172,7 +173,7 @@ fn fly(
                 Owner::Enemy => {
                     let k = falloff(player.translation.distance(point));
                     if k > 0.0 {
-                        hurt_player(&mut stats, p.spec.damage * k);
+                        hurt_player(&mut stats, p.spec.damage * k, point, &mut player_hits);
                     }
                 }
             }
@@ -182,9 +183,10 @@ fn fly(
     }
 }
 
-fn hurt_player(stats: &mut PlayerStats, amount: f32) {
+fn hurt_player(stats: &mut PlayerStats, amount: f32, from: Vec3, hits: &mut MessageWriter<crate::bots::PlayerHit>) {
     if stats.protected <= 0.0 && stats.health > 0.0 {
         stats.health -= amount;
+        hits.write(crate::bots::PlayerHit { from });
     }
 }
 

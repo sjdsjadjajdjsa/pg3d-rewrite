@@ -1,10 +1,12 @@
-//! End of a Campaign match: when the player dies the camera drops to the floor and tips
-//! over while the screen flashes red and fades to black (DEATH_TIME), then the original
-//! survival results screen (LevelComplete scene, "YOU ARE ZOMBIFIED!") shows waves
-//! survived, monsters killed, score and best score. Retry restarts the map, Menu / Quit go
-//! back to the lobby.
+//! End of an Arena / Campaign match, as in the original (reference clips in
+//! ../pixel-gun-3d-re/private/reference/): at zero health the game cuts straight to a
+//! "Loading" screen over the blurred coliseum (LOADING_TIME), then the Results table
+//! (waves survived, monsters killed, score, best score) with a green "Again" button and
+//! the yellow back arrow. No death camera, no "You are zombified!" banner.
 //!
-//! UI: <data>/ui/results from `export_ngui.py level6 "UI Root (2D)" results`.
+//! UI: <data>/ui/results from `export_ngui.py level6 "UI Root (2D)" results`. That scene
+//! holds several end screens; we switch on what the current game shows (ArenaResults,
+//! BackgroundSurvivalTexture, MiniGameButton = "Again", QuitButton).
 
 use bevy::{
     app::AppExit,
@@ -28,34 +30,25 @@ pub struct MatchOver(pub bool);
 #[derive(Resource)]
 struct ResultsScreen(Option<Entity>);
 
-/// Seconds from death to the results screen.
-const DEATH_TIME: f32 = 2.0;
-/// How far the camera falls (eye height 1.7 m above the feet -> 0.3 m).
-const DEATH_DROP: f32 = 1.4;
-/// Sideways tilt of the fallen camera.
-const DEATH_ROLL_DEG: f32 = 75.0;
+/// Seconds the "Loading" screen shows before the table (OBSERVED: about 0.5-1 s).
+const LOADING_TIME: f32 = 0.8;
 
-/// The death sequence in progress.
+/// Seconds since death while the loading screen is up.
 #[derive(Resource, Default)]
-struct Death {
-    /// seconds since death, None while alive
-    t: Option<f32>,
-    /// camera rotation at the moment of death
-    base: Quat,
-    overlay: Option<Entity>,
-}
+struct Loading(Option<f32>);
 
 #[derive(Component)]
-struct DeathOverlay;
+struct LoadingLabel;
+
+/// Parts of the screen that appear only after "Loading".
+const TABLE_PARTS: [&str; 3] = ["ArenaResults", "BottomLine", "BottomLeftCorner"];
 
 impl Plugin for ResultsPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<MatchOver>()
-            .init_resource::<Death>()
+            .init_resource::<Loading>()
             .add_systems(Startup, spawn_screen)
-            .add_systems(Update, (test_die, setup, dying, end_match, clicks).chain())
-            // after the camera systems (Update) have placed the camera for this frame
-            .add_systems(PostUpdate, death_camera.before(bevy::transform::TransformSystems::Propagate));
+            .add_systems(Update, (test_die, setup, death, end_match, clicks).chain());
     }
 }
 
@@ -72,71 +65,6 @@ fn campaign() -> bool {
     std::env::var("PG3D_NOBOTS").is_err()
 }
 
-/// Starts and runs the death sequence: red flash fading to black, HUD and weapon hidden.
-#[allow(clippy::too_many_arguments)]
-fn dying(
-    mut commands: Commands,
-    time: Res<Time>,
-    stats: Res<PlayerStats>,
-    over: Res<MatchOver>,
-    mut death: ResMut<Death>,
-    camera: Single<&Transform, With<crate::camera::PlayerCamera>>,
-    mut cursor: Single<&mut CursorOptions>,
-    hud: Query<Entity, (With<Node>, Without<ChildOf>, Without<NguiScreen>, Without<DeathOverlay>)>,
-    view_models: Query<Entity, With<crate::weapons::ViewModel>>,
-    mut overlays: Query<&mut BackgroundColor, With<DeathOverlay>>,
-) {
-    if over.0 || stats.health > 0.0 || !campaign() {
-        return;
-    }
-    let Some(t) = death.t else {
-        info!("player died: death camera");
-        death.t = Some(0.0);
-        death.base = camera.rotation;
-        death.overlay = Some(
-            commands
-                .spawn((
-                    DeathOverlay,
-                    Node { position_type: PositionType::Absolute, width: percent(100.0), height: percent(100.0), ..default() },
-                    BackgroundColor(Color::srgba(0.8, 0.0, 0.0, 0.5)),
-                    GlobalZIndex(40_000),
-                    Pickable::IGNORE,
-                ))
-                .id(),
-        );
-        for h in &hud {
-            commands.entity(h).insert(Visibility::Hidden);
-        }
-        for v in &view_models {
-            commands.entity(v).insert(Visibility::Hidden);
-        }
-        cursor.grab_mode = CursorGrabMode::None;
-        cursor.visible = true;
-        return;
-    };
-    let t = t + time.delta_secs();
-    death.t = Some(t);
-    // red flash -> dark red -> black
-    let k = (t / DEATH_TIME).clamp(0.0, 1.0);
-    let red = 0.8 * (1.0 - k);
-    let alpha = 0.5 + 0.5 * k * k;
-    for mut bg in &mut overlays {
-        bg.0 = Color::srgba(red, 0.0, 0.0, alpha);
-    }
-}
-
-/// The fallen camera: drops to the floor (fast, then slower) and tips onto its side.
-fn death_camera(death: Res<Death>, mut camera: Single<&mut Transform, With<crate::camera::PlayerCamera>>) {
-    let Some(t) = death.t else { return };
-    let k = (t / (DEATH_TIME * 0.5)).clamp(0.0, 1.0);
-    let ease = 1.0 - (1.0 - k) * (1.0 - k);
-    camera.translation.y -= DEATH_DROP * ease;
-    let (yaw, pitch, _) = death.base.to_euler(EulerRot::YXZ);
-    // look slightly up at whoever got us, rolled sideways
-    let pitch = pitch + (0.25 - pitch) * ease * 0.5;
-    camera.rotation = Quat::from_euler(EulerRot::YXZ, yaw, pitch, DEATH_ROLL_DEG.to_radians() * ease);
-}
-
 fn spawn_screen(mut commands: Commands, assets: Res<AssetServer>, data: Res<DataDir>) {
     let e = crate::ngui::spawn_screen(&mut commands, &assets, &data, "results");
     if let Some(e) = e {
@@ -145,27 +73,88 @@ fn spawn_screen(mut commands: Commands, assets: Res<AssetServer>, data: Res<Data
     commands.insert_resource(ResultsScreen(e));
 }
 
-/// Put the screen into its "survival game over" state (the game does this at run time).
+/// Put the screen into the state the current game shows after an Arena match.
 fn setup(mut screens: Query<&mut NguiScreen, Added<NguiScreen>>) {
     for mut s in &mut screens {
         if s.nodes.first().is_none_or(|n| n.name != "UI Root (2D)") {
             continue;
         }
         for i in 0..s.nodes.len() {
-            let name = s.nodes[i].name.clone();
-            let parent = s.nodes[i].parent.map(|p| s.nodes[p].name.clone()).unwrap_or_default();
-            match name.as_str() {
-                "BackgroundSurvivalTexture" | "GameOverSprite" => s.set_active(i, true),
-                "NextImageButton" | "MiniGameButton" | "CampaingWindowNGUI" | "ArenaFinishNGUI" | "Facebook" | "Twitter"
-                | "ShareButton" | "ShareTogle" => s.set_active(i, false),
-                // the campaign star objectives also live under GameOverSprite
-                _ if parent == "GameOverSprite" && name != "LabelZombified" && name != "BGFooter" => {
+            match s.nodes[i].name.as_str() {
+                "BackgroundSurvivalTexture" | "MiniGameButton" => s.set_active(i, true),
+                "GameOverSprite" | "NextImageButton" | "MenuImageButton" | "RetryImageButton" | "MiniGame_NextMatchPrice"
+                | "CampaingWindowNGUI" | "ArenaFinishNGUI" | "Facebook" | "Twitter" | "ShareButton" | "ShareTogle" => {
                     s.set_active(i, false)
                 }
                 _ => {}
             }
         }
     }
+}
+
+fn show_table(s: &mut NguiScreen, on: bool) {
+    for i in 0..s.nodes.len() {
+        if TABLE_PARTS.contains(&s.nodes[i].name.as_str()) {
+            s.set_active(i, on);
+        }
+    }
+}
+
+/// At zero health: hide the HUD and weapon, release the mouse and show "Loading".
+#[allow(clippy::too_many_arguments)]
+fn death(
+    mut commands: Commands,
+    time: Res<Time<Real>>,
+    stats: Res<PlayerStats>,
+    over: Res<MatchOver>,
+    mut loading: ResMut<Loading>,
+    screen: Res<ResultsScreen>,
+    mut screens: Query<&mut NguiScreen>,
+    mut cursor: Single<&mut CursorOptions>,
+    hud: Query<Entity, (With<Node>, Without<ChildOf>, Without<NguiScreen>, Without<LoadingLabel>)>,
+    view_models: Query<Entity, With<crate::weapons::ViewModel>>,
+    mut vtime: ResMut<Time<Virtual>>,
+) {
+    if over.0 || stats.health > 0.0 || !campaign() {
+        return;
+    }
+    let Some(e) = screen.0 else { return };
+    if let Some(t) = loading.0.as_mut() {
+        *t += time.delta_secs();
+        return;
+    }
+    info!("player died: loading screen");
+    loading.0 = Some(0.0);
+    if let Ok(mut s) = screens.get_mut(e) {
+        show_table(&mut s, false);
+    }
+    commands.entity(e).insert(Visibility::Inherited);
+    commands.spawn((
+        LoadingLabel,
+        Node {
+            position_type: PositionType::Absolute,
+            width: percent(100.0),
+            top: percent(52.0),
+            justify_content: JustifyContent::Center,
+            ..default()
+        },
+        GlobalZIndex(200_000),
+        children![(
+            Text::new("Loading"),
+            TextFont { font_size: FontSize::Px(26.0), ..default() },
+            TextColor(Color::srgb(1.0, 0.85, 0.2)),
+            TextShadow { offset: Vec2::splat(2.0), color: Color::BLACK },
+        )],
+    ));
+    for h in &hud {
+        commands.entity(h).insert(Visibility::Hidden);
+    }
+    for v in &view_models {
+        commands.entity(v).insert(Visibility::Hidden);
+    }
+    vtime.pause();
+    cursor.grab_mode = CursorGrabMode::None;
+    cursor.visible = true;
 }
 
 fn best_score_path() -> std::path::PathBuf {
@@ -188,35 +177,34 @@ fn update_best(map: &str, score: i32) -> i32 {
 
 #[allow(clippy::too_many_arguments)]
 fn end_match(
-    mut death: ResMut<Death>,
+    mut commands: Commands,
+    loading: Res<Loading>,
     stats: Res<PlayerStats>,
     wave: Res<Wave>,
     map: Res<CurrentMap>,
     mut over: ResMut<MatchOver>,
     screen: Res<ResultsScreen>,
     mut screens: Query<&mut NguiScreen>,
-    mut time: ResMut<Time<Virtual>>,
-    mut cursor: Single<&mut CursorOptions>,
-    mut commands: Commands,
-    hud: Query<Entity, (With<Node>, Without<ChildOf>, Without<NguiScreen>, Without<DeathOverlay>)>,
+    labels: Query<Entity, With<LoadingLabel>>,
 ) {
-    if over.0 || stats.health > 0.0 || !campaign() || death.t.is_none_or(|t| t < DEATH_TIME) {
+    if over.0 || loading.0.is_none_or(|t| t < LOADING_TIME) {
         return;
     }
     let Some(e) = screen.0 else { return };
     over.0 = true;
-    if let Some(o) = death.overlay.take() {
-        commands.entity(o).despawn();
+    for l in &labels {
+        commands.entity(l).despawn();
     }
     let survived = wave.number.saturating_sub(1);
     let best = update_best(&map.0, stats.score);
     info!("match over: waves survived {survived}, kills {}, score {}, best {best}", stats.kills, stats.score);
     if let Ok(mut s) = screens.get_mut(e) {
+        show_table(&mut s, true);
         let values = [
             ("WavesVal", survived.to_string()),
             ("MonstersVal", stats.kills.to_string()),
-            ("ScoreVal", stats.score.to_string()),
-            ("BEST SCORE VAL", best.to_string()),
+            ("ScoreVal", group(stats.score)),
+            ("BEST SCORE VAL", group(best)),
         ];
         for (name, v) in values {
             if let Some(i) = s.nodes.iter().position(|n| n.name == name) {
@@ -224,14 +212,19 @@ fn end_match(
             }
         }
     }
-    commands.entity(e).insert(Visibility::Inherited);
-    // the in-game HUD (crosshair, health, ammo) is not part of the results screen
-    for h in &hud {
-        commands.entity(h).insert(Visibility::Hidden);
+}
+
+/// 18080 -> "18 080", as the original writes scores.
+fn group(n: i32) -> String {
+    let s = n.abs().to_string();
+    let mut out = String::new();
+    for (i, c) in s.chars().enumerate() {
+        if i > 0 && (s.len() - i) % 3 == 0 {
+            out.push(' ');
+        }
+        out.push(c);
     }
-    time.pause();
-    cursor.grab_mode = CursorGrabMode::None;
-    cursor.visible = true;
+    if n < 0 { format!("-{out}") } else { out }
 }
 
 fn clicks(
@@ -245,11 +238,11 @@ fn clicks(
     }
     for c in clicks.read() {
         match c.name.as_str() {
-            "RetryImageButton" => {
+            "MiniGameButton" | "RetryImageButton" => {
                 crate::menu::relaunch_with(Some(&map.0), false);
                 exit.write(AppExit::Success);
             }
-            "MenuImageButton" | "QuitButton" => {
+            "QuitButton" | "MenuImageButton" => {
                 crate::menu::relaunch(None);
                 exit.write(AppExit::Success);
             }

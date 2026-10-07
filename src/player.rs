@@ -50,7 +50,7 @@ pub struct PlayerPlugin;
 
 impl Plugin for PlayerPlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(Startup, spawn_player)
+        app.add_systems(Startup, (spawn_player, face_start.after(spawn_player).after(crate::camera::spawn_camera)))
             .add_systems(FixedUpdate, (read_input, move_player).chain())
             .add_systems(Update, (kill_zones, trace));
     }
@@ -67,16 +67,54 @@ pub struct Player {
     jump_requested: bool,
 }
 
-fn spawn_player(mut commands: Commands, markers: Res<MapMarkers>) {
-    let spawn = markers
+/// Where the player starts: a player spawn marker (multiplayer "MultyPlayerCreateZone…"),
+/// else, on the Arena maps that have none (the original places you by code), the bonus
+/// spot nearest the middle of all bonus spots, which is open floor in the arena centre.
+fn start_point(markers: &MapMarkers) -> Option<Vec3> {
+    let named = |m: &&crate::map::Marker| {
+        let n = m.name.to_lowercase();
+        (n.contains("player") || n.contains("spawn") || n.starts_with("multyplayercreatezone"))
+            && !n.contains("enemy")
+            && !n.contains("bonus")
+            && !n.contains("tnt")
+            && !n.contains("bomb")
+            && !n.contains("flag")
+    };
+    if let Some(m) = markers.0.iter().find(named) {
+        return Some(m.position);
+    }
+    let bonus: Vec<Vec3> = markers.0.iter().filter(|m| m.name.starts_with("BonusCreationZone")).map(|m| m.position).collect();
+    let mid = bonus.iter().copied().sum::<Vec3>() / bonus.len().max(1) as f32;
+    bonus.into_iter().min_by(|a, b| a.distance(mid).total_cmp(&b.distance(mid)))
+}
+
+/// Start looking towards the nearest zombie spawn, so the first wave comes into view
+/// (in the original Arena you start facing the arena, not a wall).
+fn face_start(
+    markers: Res<MapMarkers>,
+    player: Single<&Transform, (With<Player>, Without<crate::camera::PlayerCamera>)>,
+    mut camera: Single<&mut Transform, With<crate::camera::PlayerCamera>>,
+) {
+    if std::env::var("PG3D_CAM").is_ok() {
+        return;
+    }
+    let p = player.translation;
+    let target = markers
         .0
         .iter()
-        .find(|m| {
-            let n = m.name.to_lowercase();
-            (n.contains("player") || n.contains("spawn")) && !n.contains("enemy") && !n.contains("bonus")
-        })
-        .map(|m| m.position + Vec3::Y * 1.0)
-        .unwrap_or(Vec3::new(0.0, 5.0, 0.0));
+        .filter(|m| m.name.starts_with("EnemyCreationZone"))
+        .map(|m| m.position)
+        .min_by(|a, b| a.distance(p).total_cmp(&b.distance(p)));
+    if let Some(t) = target {
+        let dir = (t - p).with_y(0.0);
+        if dir.length() > 0.5 {
+            camera.rotation = Quat::from_rotation_y(f32::atan2(-dir.x, -dir.z));
+        }
+    }
+}
+
+fn spawn_player(mut commands: Commands, markers: Res<MapMarkers>) {
+    let spawn = start_point(&markers).map(|p| p + Vec3::Y * 1.0).unwrap_or(Vec3::new(0.0, 5.0, 0.0));
     // PG3D_SPAWN="x,y,z" (testing) puts the player somewhere else
     let spawn = std::env::var("PG3D_SPAWN")
         .ok()
