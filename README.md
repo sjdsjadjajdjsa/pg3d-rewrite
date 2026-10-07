@@ -24,6 +24,8 @@ tools/venv/bin/python scripts/export_ngui.py level17 MainMenuNGUI lobby
 tools/venv/bin/python scripts/export_map.py level17 --out lobby --skip MainMenuNGUI FriendsWindowGUI \
     --prefab slo_seasonlobby_current:SeasonLobbyRoot
 tools/venv/bin/python scripts/export_character.py
+tools/venv/bin/python scripts/export_ngui.py resources.assets AllModesView modes
+tools/venv/bin/python scripts/export_previews.py
 
 # here:
 cargo run            # start menu: pick a map
@@ -49,7 +51,7 @@ V = toggle walk / fly camera (fly: Space/Ctrl up/down, Shift fast), F12 = screen
 | `src/sound.rs` | original sound effects (3D for zombies) |
 | `src/particles.rs` | simple particles: muzzle flash and smoke |
 | `src/projectiles.rs` | rockets (player) and bullets (shooting enemies), explosions |
-| `src/menu.rs` | the original lobby: 3D lobby scene + character + music behind the re-drawn lobby UI; To Battle / Campaign open the map picker |
+| `src/menu.rs` | the original lobby (3D scene, character, music, re-drawn UI) → To Battle → the original game mode hub (Campaign / Sandbox) → map picker with the game's map pictures |
 | `src/ngui.rs` | re-implementation of NGUI (the original UI system): layout, anchors, sliced sprites, bitmap fonts, buttons |
 | `src/bots.rs` | campaign zombies: spawning at EnemyCreationZone, chase/attack/die, player health, score |
 | `src/screenshot.rs` | F12 screenshots, `PG3D_AUTOSHOT` for automated checks |

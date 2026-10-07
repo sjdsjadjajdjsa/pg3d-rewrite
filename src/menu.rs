@@ -45,13 +45,16 @@ pub fn exported_maps(data: &std::path::Path) -> Vec<String> {
         .filter_map(|e| e.ok())
         .filter(|e| e.path().join("map.gltf").exists())
         .filter_map(|e| e.file_name().into_string().ok())
+        .filter(|m| m != "lobby")
         .collect();
     maps.sort();
     maps
 }
 
 #[derive(Component)]
-struct MapPicker;
+struct MapPicker {
+    sandbox: bool,
+}
 
 #[derive(Component)]
 struct CloseButton;
@@ -147,17 +150,44 @@ fn character_idle(
     }
 }
 
+/// The two original screens: the lobby and the game mode hub ("To Battle").
+#[derive(Resource, Default)]
+struct Screens {
+    lobby: Option<Entity>,
+    modes: Option<Entity>,
+}
+
 fn build_menu(mut commands: Commands, data: Res<DataDir>, assets: Res<AssetServer>) {
-    if crate::ngui::spawn_screen(&mut commands, &assets, &data, "lobby").is_none() {
+    let lobby = crate::ngui::spawn_screen(&mut commands, &assets, &data, "lobby");
+    let modes = crate::ngui::spawn_screen(&mut commands, &assets, &data, "modes");
+    if let Some(m) = modes {
+        commands.entity(m).insert(Visibility::Hidden);
+    }
+    if lobby.is_none() {
         warn!("no exported lobby UI (run export_ngui.py level17 MainMenuNGUI lobby); using plain menu");
-        spawn_map_picker(&mut commands, &data, false);
+        spawn_map_picker(&mut commands, &data, &assets, false, false);
+    }
+    commands.insert_resource(Screens { lobby, modes });
+}
+
+fn show(commands: &mut Commands, e: Option<Entity>, on: bool) {
+    if let Some(e) = e {
+        commands.entity(e).insert(if on { Visibility::Inherited } else { Visibility::Hidden });
     }
 }
 
 /// The original fills in and switches parts of the lobby at run time (player data from
 /// the server, button press states, events). Put it into a sensible offline state.
-fn setup_lobby(mut screens: Query<&mut crate::ngui::NguiScreen, Added<crate::ngui::NguiScreen>>) {
+fn setup_lobby(
+    mut screens: Query<&mut crate::ngui::NguiScreen, Added<crate::ngui::NguiScreen>>,
+    assets: Res<AssetServer>,
+    data: Res<DataDir>,
+) {
     for mut s in &mut screens {
+        if s.nodes.first().is_some_and(|n| n.name == "AllModesView") {
+            setup_modes(&mut s, &assets, &data);
+            continue;
+        }
         let hide_names = [
             "Pressed",         // button pressed look; NGUI swaps it in while you hold the button
             "State_Locked",    // "unlocks at level X" overlays
@@ -190,21 +220,98 @@ fn setup_lobby(mut screens: Query<&mut crate::ngui::NguiScreen, Added<crate::ngu
     }
 }
 
-/// PG3D_MENU_CLICK=BtnBattle_A (automated tests): press that lobby button after 2 seconds.
+/// PG3D_MENU_CLICK=BtnBattle_A,GMH_GameMode_Cell_New_Big (automated tests): press these
+/// buttons one after another, two seconds apart.
 fn test_click(
     time: Res<Time>,
-    screens: Query<(Entity, &crate::ngui::NguiScreen)>,
+    screens: Query<(Entity, &crate::ngui::NguiScreen, &InheritedVisibility)>,
     mut out: MessageWriter<crate::ngui::NguiClick>,
-    mut done: Local<bool>,
+    mut done: Local<usize>,
 ) {
-    let Ok(name) = std::env::var("PG3D_MENU_CLICK") else { return };
-    if *done || time.elapsed_secs() < 2.0 {
+    let Ok(list) = std::env::var("PG3D_MENU_CLICK") else { return };
+    let names: Vec<&str> = list.split(',').collect();
+    if *done >= names.len() || time.elapsed_secs() < 2.0 * (*done + 1) as f32 {
         return;
     }
-    for (e, s) in &screens {
+    let name = names[*done];
+    for (e, s, vis) in &screens {
+        if !vis.get() {
+            continue;
+        }
         if let Some(node) = s.nodes.iter().position(|n| n.name == name) {
-            out.write(crate::ngui::NguiClick { screen: e, node, name: name.clone() });
-            *done = true;
+            info!("test click {name}");
+            out.write(crate::ngui::NguiClick { screen: e, node, name: name.to_string() });
+            *done += 1;
+            return;
+        }
+    }
+}
+
+/// Mode hub: the original fills its cards from server data. Offline we have two modes:
+/// Campaign (zombies) and Sandbox (walk around without enemies).
+fn setup_modes(s: &mut crate::ngui::NguiScreen, assets: &AssetServer, data: &DataDir) {
+    // card pictures: loading screens of two exported maps
+    let maps = exported_maps(&data.0);
+    let pics: Vec<String> = maps.iter().filter(|m| data.0.join(format!("previews/{m}.png")).exists()).cloned().collect();
+    let pic = |n: usize| pics.get(n % pics.len().max(1)).map(|m| assets.load(format!("previews/{m}.png")));
+    let cells = [
+        ("Column_01/GMH_GameMode_Cell_New_Big", Some(("Campaign", "Fight waves of zombies on any map"))),
+        ("Column_02/GMH_GameMode_Cell_New", Some(("Sandbox", "Explore the maps - no enemies"))),
+        ("Column_02/GMH_GameMode_Cell_New_2", None),
+        ("Column_03", None),
+        ("Column_04", None),
+    ];
+    let hide_in_cells = [
+        "TournamentComponent",
+        "CompetitionComponent",
+        "LockedByXp",
+        "LockedByNotAvailable",
+        "Tag_holder",
+        "Pressed",
+        "Bundles_GMH_GameMode",
+        "TapReward",
+        "TapRewardAnimation",
+        "GMHLabelNotification",
+    ];
+    for i in 0..s.nodes.len() {
+        let path = s.path(i);
+        let name = s.nodes[i].name.clone();
+        for (cell, content) in &cells {
+            if !path.ends_with(cell) {
+                continue;
+            }
+            match content {
+                None => s.set_active(i, false),
+                Some((title, desc)) => {
+                    let kids: Vec<usize> = (i + 1..s.nodes.len()).filter(|&j| s.path(j).starts_with(&path)).collect();
+                    for j in kids {
+                        let n = s.nodes[j].name.clone();
+                        if n == "tex_MapPreview" {
+                            // fill the card (its clipping panel) with a map picture
+                            let parent = s.nodes[j].parent.unwrap_or(j);
+                            if let Some(p) = s.nodes[parent].panel.as_ref().filter(|p| p.clipping != 0) {
+                                let size = Vec2::new(p.clip[2], p.clip[3]);
+                                s.set_size(j, size);
+                            }
+                            if let Some(h) = pic(i) {
+                                s.set_texture(j, h);
+                            }
+                        } else if n.starts_with("Label_Title") {
+                            s.set_text(j, *title);
+                        } else if n == "Label_Description" {
+                            s.set_text(j, *desc);
+                        } else if hide_in_cells.contains(&n.as_str()) {
+                            s.set_active(j, false);
+                        }
+                    }
+                }
+            }
+        }
+        // party / private match / shop need servers
+        if ["Button_Party", "Button_Private", "ShopButton", "GMHRecommendations_panel", "TemplateEventInfoHolder", "ButtonHintHolder", "GMHModeReward"]
+            .contains(&name.as_str())
+        {
+            s.set_active(i, false);
         }
     }
 }
@@ -214,13 +321,25 @@ fn lobby_clicks(
     mut commands: Commands,
     mut clicks: MessageReader<crate::ngui::NguiClick>,
     data: Res<DataDir>,
+    assets: Res<AssetServer>,
+    screens: Res<Screens>,
     pickers: Query<(), With<MapPicker>>,
 ) {
     for c in clicks.read() {
         let n = c.name.as_str();
-        if n.starts_with("BtnBattle") || n == "BtnLobby_Campaign" {
+        if n.starts_with("BtnBattle") && screens.modes.is_some() {
+            show(&mut commands, screens.lobby, false);
+            show(&mut commands, screens.modes, true);
+        } else if n == "btn_back" {
+            show(&mut commands, screens.modes, false);
+            show(&mut commands, screens.lobby, true);
+        } else if n.starts_with("BtnBattle") || n == "BtnLobby_Campaign" || n == "GMH_GameMode_Cell_New_Big" || n == "Button_Battle" {
             if pickers.is_empty() {
-                spawn_map_picker(&mut commands, &data, true);
+                spawn_map_picker(&mut commands, &data, &assets, true, false);
+            }
+        } else if n == "GMH_GameMode_Cell_New" {
+            if pickers.is_empty() {
+                spawn_map_picker(&mut commands, &data, &assets, true, true);
             }
         } else {
             commands.spawn((
@@ -253,11 +372,11 @@ fn fade_toast(mut commands: Commands, time: Res<Time>, mut q: Query<(Entity, &mu
     }
 }
 
-fn spawn_map_picker(commands: &mut Commands, data: &DataDir, overlay: bool) {
+fn spawn_map_picker(commands: &mut Commands, data: &DataDir, assets: &AssetServer, overlay: bool, sandbox: bool) {
     let maps = exported_maps(&data.0);
     commands
         .spawn((
-            MapPicker,
+            MapPicker { sandbox },
             GlobalZIndex(50_000),
             BackgroundColor(if overlay { Color::srgba(0.0, 0.0, 0.0, 0.8) } else { Color::NONE }),
             Node {
@@ -273,7 +392,7 @@ fn spawn_map_picker(commands: &mut Commands, data: &DataDir, overlay: bool) {
         .with_children(|root| {
             root.spawn((Text::new("PIXEL GUN 3D"), TextFont { font_size: FontSize::Px(56.0), ..default() }));
             root.spawn((
-                Text::new("Rust rewrite - pick a map"),
+                Text::new(if sandbox { "Sandbox - pick a map" } else { "Campaign - pick a map" }),
                 TextFont { font_size: FontSize::Px(22.0), ..default() },
                 TextColor(Color::srgb(0.7, 0.75, 0.85)),
             ));
@@ -294,8 +413,29 @@ fn spawn_map_picker(commands: &mut Commands, data: &DataDir, overlay: bool) {
             })
             .with_children(|grid| {
                 for m in &maps {
-                    grid.spawn((button_node(), BackgroundColor(NORMAL), Button, MapButton(m.clone())))
-                        .with_child((Text::new(m.replace('_', " ")), TextFont { font_size: FontSize::Px(20.0), ..default() }));
+                    // the game's own loading picture of the map, if exported
+                    let preview = data.0.join(format!("previews/{m}.png"));
+                    let mut card = grid.spawn((
+                        Node {
+                            width: px(200.0),
+                            height: px(140.0),
+                            flex_direction: FlexDirection::Column,
+                            justify_content: JustifyContent::FlexEnd,
+                            ..default()
+                        },
+                        BackgroundColor(NORMAL),
+                        Button,
+                        MapButton(m.clone()),
+                    ));
+                    if preview.exists() {
+                        card.insert(ImageNode::new(assets.load(format!("previews/{m}.png"))));
+                    }
+                    card.with_child((
+                        Text::new(m.replace('_', " ")),
+                        TextFont { font_size: FontSize::Px(18.0), ..default() },
+                        BackgroundColor(Color::srgba(0.0, 0.0, 0.0, 0.6)),
+                        Node { padding: UiRect::all(px(4.0)), ..default() },
+                    ));
                 }
             });
             if overlay {
@@ -336,18 +476,19 @@ fn button_clicks(
     maps: Query<(&Interaction, &MapButton), Changed<Interaction>>,
     quit: Query<&Interaction, (Changed<Interaction>, With<QuitButton>)>,
     close: Query<&Interaction, (Changed<Interaction>, With<CloseButton>)>,
-    pickers: Query<Entity, With<MapPicker>>,
+    pickers: Query<(Entity, &MapPicker)>,
     mut commands: Commands,
     mut exit: MessageWriter<AppExit>,
 ) {
     if close.iter().any(|i| *i == Interaction::Pressed) {
-        for e in &pickers {
+        for (e, _) in &pickers {
             commands.entity(e).despawn();
         }
     }
+    let sandbox = pickers.iter().next().is_some_and(|(_, p)| p.sandbox);
     for (i, m) in &maps {
         if *i == Interaction::Pressed {
-            relaunch(Some(&m.0));
+            relaunch_with(Some(&m.0), sandbox);
             exit.write(AppExit::Success);
         }
     }
@@ -358,8 +499,18 @@ fn button_clicks(
 
 /// Start a new copy of this program (with a map, or without one = menu).
 pub fn relaunch(map: Option<&str>) {
+    relaunch_with(map, false);
+}
+
+/// `sandbox`: start the map without enemies.
+pub fn relaunch_with(map: Option<&str>, sandbox: bool) {
     let Ok(exe) = std::env::current_exe() else { return };
     let mut cmd = std::process::Command::new(exe);
+    if sandbox {
+        cmd.env("PG3D_NOBOTS", "1");
+    } else {
+        cmd.env_remove("PG3D_NOBOTS");
+    }
     if let Some(m) = map {
         cmd.arg(m);
     }

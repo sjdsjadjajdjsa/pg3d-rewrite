@@ -30,7 +30,7 @@ pub struct NguiPlugin;
 impl Plugin for NguiPlugin {
     fn build(&self, app: &mut App) {
         app.add_message::<NguiClick>()
-            .add_systems(Update, (layout, (hover, clicks)).chain());
+            .add_systems(Update, (layout, (hover, clicks, cover_crop)).chain());
     }
 }
 
@@ -108,6 +108,11 @@ pub struct TextureDef {
 pub struct PanelDef {
     pub alpha: f32,
     pub depth: i32,
+    /// 0 = none; otherwise the panel shows only the `clip` rectangle (x, y, width, height)
+    #[serde(default)]
+    pub clipping: i32,
+    #[serde(default)]
+    pub clip: [f32; 4],
 }
 
 #[derive(Deserialize, Clone, Default)]
@@ -125,8 +130,8 @@ pub struct RootDef {
 #[derive(Deserialize, Clone)]
 struct AtlasDef {
     png: String,
-    /// name -> [x, y, w, h, border l r t b, padding l r t b]
-    sprites: HashMap<String, [f32; 12]>,
+    /// name -> [x, y, w, h, border l r t b, padding l r t b, centre transparent (0/1)]
+    sprites: HashMap<String, Vec<f32>>,
 }
 
 #[derive(Deserialize, Clone)]
@@ -155,6 +160,10 @@ pub struct NguiScreen {
     pub active_override: HashMap<usize, bool>,
     /// node index -> replacement text
     pub text_override: HashMap<usize, String>,
+    /// node index -> replacement picture for a texture widget (cropped to fill it)
+    pub texture_override: HashMap<usize, Handle<Image>>,
+    /// node index -> replacement widget size (virtual pixels)
+    pub size_override: HashMap<usize, Vec2>,
     dirty: bool,
     last_size: Vec2,
     /// label glyph cache key (node -> (text, size)) to avoid rebuilding glyphs
@@ -186,6 +195,15 @@ impl NguiScreen {
     }
     pub fn set_active(&mut self, i: usize, on: bool) {
         self.active_override.insert(i, on);
+        self.dirty = true;
+    }
+    pub fn set_size(&mut self, i: usize, size: Vec2) {
+        self.size_override.insert(i, size);
+        self.dirty = true;
+    }
+    /// Show `image` in texture widget `i`, cropped to fill it (like CSS object-fit: cover).
+    pub fn set_texture(&mut self, i: usize, image: Handle<Image>) {
+        self.texture_override.insert(i, image);
         self.dirty = true;
     }
     pub fn set_text(&mut self, i: usize, text: impl Into<String>) {
@@ -268,6 +286,8 @@ pub fn spawn_screen(commands: &mut Commands, assets: &AssetServer, data: &DataDi
         hits: vec![None; n],
         active_override,
         text_override: HashMap::new(),
+        texture_override: HashMap::new(),
+        size_override: HashMap::new(),
         dirty: true,
         last_size: Vec2::ZERO,
         glyph_key: HashMap::new(),
@@ -320,7 +340,8 @@ fn compute(screen: &NguiScreen, vw: f32, vh: f32) -> Vec<Placed> {
                 if nd.parent.is_none() { (Vec2::ZERO, Vec2::ONE) } else { (ppos + pscale * local, pscale * lscale) };
             let mut rect = None;
             if let Some(w) = &nd.widget {
-                let size = Vec2::new(w.w, w.h) * scale;
+                let base_size = screen.size_override.get(&i).copied().unwrap_or(Vec2::new(w.w, w.h));
+                let size = base_size * scale;
                 let pv = pivot_offset(w.pivot);
                 let mut r = Rect::from_corners(pos - pv * size, pos - pv * size + size);
                 let side = |name: &str| w.anchors.get(name).copied();
@@ -328,6 +349,13 @@ fn compute(screen: &NguiScreen, vw: f32, vh: f32) -> Vec<Placed> {
                     match a.target {
                         Some(t) => match out[t].rect {
                             Some(tr) => tr,
+                            // a clipping panel's sides are its clip rectangle
+                            None if screen.nodes[t].panel.as_ref().is_some_and(|p| p.clipping != 0) => {
+                                let c = screen.nodes[t].panel.as_ref().unwrap().clip;
+                                let centre = out[t].pos + Vec2::new(c[0], c[1]) * out[t].scale;
+                                let half = Vec2::new(c[2], c[3]) * out[t].scale / 2.0;
+                                Rect::from_corners(centre - half, centre + half)
+                            }
                             None if screen.nodes[t].panel.is_some() || screen.nodes[t].root.is_some() => full,
                             None => Rect::from_corners(out[t].pos, out[t].pos),
                         },
@@ -448,6 +476,7 @@ fn layout(
         let k = wsize.y / vh;
         let vw = wsize.x / k;
         let placed = compute(screen, vw, vh);
+        let mut spawned_any = false;
         let to_screen = |r: Rect| -> Rect {
             Rect::new((r.min.x + vw / 2.0) * k, (vh / 2.0 - r.max.y) * k, (r.max.x + vw / 2.0) * k, (vh / 2.0 - r.min.y) * k)
         };
@@ -464,8 +493,11 @@ fn layout(
                 if !visible {
                     continue;
                 }
-                let Some((bundle, image)) = make_widget(screen, &nd, palpha, k, sr) else { continue };
-                let e = commands.spawn(bundle).id();
+                let Some((bundle, image)) = make_widget(screen, i, palpha, k, sr) else { continue };
+                // new entities only exist once commands are applied: give them their
+                // draw order now, and lay out once more next frame
+                let e = commands.spawn((bundle, GlobalZIndex(z))).id();
+                spawned_any = true;
                 if let Some(image) = image {
                     commands.entity(e).insert(image);
                 }
@@ -484,6 +516,21 @@ fn layout(
             if nd.label.is_some() && visible {
                 build_glyphs(&mut commands, screen, i, e, sr, k, palpha);
             }
+            if visible {
+                build_frame(&mut commands, screen, i, e, sr, k, palpha);
+            }
+            // a picture set by game code after the widget was first drawn
+            if let Some(h) = screen.texture_override.get(&i) {
+                let mut im = ImageNode::new(h.clone()).with_color(tint(srgba(w.color), palpha));
+                im.image_mode = NodeImageMode::Stretch;
+                let h = h.clone();
+                commands.entity(e).entry::<ImageNode>().and_modify(move |mut img| {
+                    if img.image != h {
+                        img.image = h.clone();
+                        img.rect = None;
+                    }
+                }).or_insert(im);
+            }
             if let Some(ImageNodeUpdate { slicer }) = slice_update(screen, &nd, k) {
                 commands.entity(e).entry::<ImageNode>().and_modify(move |mut img| {
                     img.image_mode = NodeImageMode::Sliced(slicer);
@@ -494,10 +541,16 @@ fn layout(
             let made = screen.entities.iter().filter(|e| e.is_some()).count();
             info!("ngui layout {vw:.0}x{vh:.0} k={k:.2}: {made} widget entities");
             for i in 0..screen.nodes.len() {
-                if screen.entities[i].is_some() && screen.nodes[i].name.contains("Battle") {
-                    info!("  {} rect {:?}", screen.path(i), placed[i].rect.map(to_screen));
+                let watch = std::env::var("PG3D_TRACE_NGUI").unwrap_or_default();
+                if screen.entities[i].is_some() && !watch.is_empty() && screen.path(i).contains(&watch) && screen.visible(i) {
+                    let (pd, _) = panel_of(screen, i);
+                    let d = screen.nodes[i].widget.as_ref().map_or(0, |w| w.depth);
+                    info!("  {} z={} rect {:?}", screen.path(i), pd * 1000 + d, placed[i].rect.map(to_screen));
                 }
             }
+        }
+        if spawned_any {
+            screen.dirty = true;
         }
         // clickable areas: the button's own widget, or the union of its visible children
         for i in 0..screen.nodes.len() {
@@ -552,6 +605,63 @@ fn is_descendant(screen: &NguiScreen, mut j: usize, ancestor: usize) -> bool {
     false
 }
 
+/// A 9-slice sprite whose middle is not drawn ("Fill Center" off in NGUI): a frame.
+fn is_hollow(s: &SpriteDef, r: &[f32]) -> bool {
+    let clear_centre = r.get(12).is_some_and(|v| *v > 0.5);
+    s.kind == 1 && (!s.fill_center || clear_centre) && r[4] + r[5] + r[6] + r[7] > 0.0
+}
+
+/// Draw a hollow 9-slice sprite as its 8 border pieces (Bevy's slicer always fills the centre).
+fn build_frame(commands: &mut Commands, screen: &mut NguiScreen, i: usize, e: Entity, sr: Rect, k: f32, alpha: f32) {
+    let nd = &screen.nodes[i];
+    let (Some(s), Some(w)) = (&nd.sprite, &nd.widget) else { return };
+    let Some((img, a)) = s.atlas.as_ref().and_then(|a| screen.atlases.get(a)) else { return };
+    let Some(r) = a.sprites.get(&s.name).cloned() else { return };
+    if !is_hollow(s, &r) {
+        return;
+    }
+    let key = (format!("frame:{}", s.name), sr.width() as i32, sr.height() as i32);
+    if screen.glyph_key.get(&i) == Some(&key) {
+        return;
+    }
+    screen.glyph_key.insert(i, key);
+    commands.entity(e).despawn_related::<Children>();
+    let color = tint(srgba(w.color), alpha);
+    let (x, y, sw, sh) = (r[0], r[1], r[2], r[3]);
+    let (bl, br, bt, bb) = (r[4], r[5], r[6], r[7]);
+    let (tw, th) = (sr.width(), sr.height());
+    // source columns/rows in the atlas and target columns/rows on screen
+    let sx = [x, x + bl, x + sw - br, x + sw];
+    let sy = [y, y + bt, y + sh - bb, y + sh];
+    let tx = [0.0, bl * k, (tw - br * k).max(bl * k), tw];
+    let ty = [0.0, bt * k, (th - bb * k).max(bt * k), th];
+    let mut kids = vec![];
+    for row in 0..3 {
+        for col in 0..3 {
+            if row == 1 && col == 1 {
+                continue;
+            }
+            let (w_, h_) = (tx[col + 1] - tx[col], ty[row + 1] - ty[row]);
+            if w_ <= 0.0 || h_ <= 0.0 || sx[col + 1] <= sx[col] || sy[row + 1] <= sy[row] {
+                continue;
+            }
+            let mut im = ImageNode::new(img.clone()).with_color(color);
+            im.rect = Some(Rect::new(sx[col], sy[row], sx[col + 1], sy[row + 1]));
+            im.image_mode = NodeImageMode::Stretch;
+            let node = Node {
+                position_type: PositionType::Absolute,
+                left: px(tx[col]),
+                top: px(ty[row]),
+                width: px(w_),
+                height: px(h_),
+                ..default()
+            };
+            kids.push(commands.spawn((node, im, Pickable::IGNORE, Glyphs)).id());
+        }
+    }
+    commands.entity(e).add_children(&kids);
+}
+
 struct ImageNodeUpdate {
     slicer: TextureSlicer,
 }
@@ -564,6 +674,9 @@ fn slice_update(screen: &NguiScreen, nd: &NodeDef, k: f32) -> Option<ImageNodeUp
     }
     let (_, a) = screen.atlases.get(s.atlas.as_ref()?)?;
     let r = a.sprites.get(&s.name)?;
+    if is_hollow(s, r) {
+        return None;
+    }
     if r[4] + r[5] + r[6] + r[7] <= 0.0 {
         return None;
     }
@@ -589,13 +702,17 @@ fn abs_node(r: Rect) -> Node {
 }
 
 /// Bevy components for one widget (sprite / texture / label container).
-fn make_widget(screen: &NguiScreen, nd: &NodeDef, alpha: f32, k: f32, sr: Rect) -> Option<(impl Bundle, Option<ImageNode>)> {
+fn make_widget(screen: &NguiScreen, i: usize, alpha: f32, k: f32, sr: Rect) -> Option<(impl Bundle, Option<ImageNode>)> {
+    let nd = &screen.nodes[i];
     let w = nd.widget.as_ref()?;
     let color = tint(srgba(w.color), alpha);
-    let base = (Name::new(nd.name.clone()), abs_node(sr), Visibility::Inherited, GlobalZIndex(0), Pickable::IGNORE);
+    let base = (Name::new(nd.name.clone()), abs_node(sr), Visibility::Inherited, Pickable::IGNORE);
     if let Some(s) = &nd.sprite {
         let (img, a) = screen.atlases.get(s.atlas.as_ref()?)?;
         let r = a.sprites.get(&s.name)?;
+        if is_hollow(s, r) {
+            return Some((base, None)); // pieces added by build_frame
+        }
         let mut image = ImageNode::new(img.clone()).with_color(color);
         image.rect = Some(Rect::new(r[0], r[1], r[0] + r[2], r[1] + r[3]));
         image.flip_x = s.flip == 1 || s.flip == 3;
@@ -623,9 +740,17 @@ fn make_widget(screen: &NguiScreen, nd: &NodeDef, alpha: f32, k: f32, sr: Rect) 
         }
         return Some((base, Some(image)));
     }
+    if let Some(h) = screen.texture_override.get(&i) {
+        // cover_crop fits the picture once it has loaded
+        let mut im = ImageNode::new(h.clone()).with_color(color);
+        im.image_mode = NodeImageMode::Stretch;
+        return Some((base, Some(im)));
+    }
     if let Some(t) = &nd.texture {
         let h = screen.textures.get(t.png.as_ref()?)?;
-        return Some((base, Some(ImageNode::new(h.clone()).with_color(color))));
+        let mut im = ImageNode::new(h.clone()).with_color(color);
+        im.image_mode = NodeImageMode::Stretch;
+        return Some((base, Some(im)));
     }
     // labels and plain widgets: an empty container
     Some((base, None))
@@ -751,6 +876,38 @@ fn clicks(
                 let name = s.nodes[h.node].name.clone();
                 info!("ngui click: {}", s.path(h.node));
                 out.write(NguiClick { screen: h.screen, node: h.node, name });
+            }
+        }
+    }
+}
+
+/// Override pictures fill their widget: crop the image to the widget's aspect ratio.
+fn cover_crop(
+    screens: Query<&NguiScreen>,
+    mut q: Query<(&mut ImageNode, &ComputedNode)>,
+    images: Res<Assets<Image>>,
+) {
+    for s in &screens {
+        for (&i, handle) in &s.texture_override {
+            let Some(e) = s.entities.get(i).copied().flatten() else { continue };
+            let Ok((mut img, node)) = q.get_mut(e) else { continue };
+            let Some(image) = images.get(handle) else { continue };
+            let size = image.size_f32();
+            let target = node.size();
+            if target.x <= 0.0 || target.y <= 0.0 {
+                continue;
+            }
+            let want = target.x / target.y;
+            let have = size.x / size.y;
+            let rect = if have > want {
+                let w = size.y * want;
+                Rect::new((size.x - w) / 2.0, 0.0, (size.x + w) / 2.0, size.y)
+            } else {
+                let h = size.x / want;
+                Rect::new(0.0, (size.y - h) / 2.0, size.x, (size.y + h) / 2.0)
+            };
+            if img.rect != Some(rect) {
+                img.rect = Some(rect);
             }
         }
     }
