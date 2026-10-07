@@ -13,6 +13,7 @@
 mod bots;
 mod camera;
 mod controls;
+mod cursor;
 mod explosives;
 mod hud;
 mod ingame_ui;
@@ -88,7 +89,7 @@ fn main() {
             .insert_resource(settings::Settings::load())
             .insert_resource(controls::Controls::load())
             .insert_resource(wallet::Wallet::load())
-            .add_plugins((menu::MenuPlugin, screenshot::ScreenshotPlugin))
+            .add_plugins((menu::MenuPlugin, screenshot::ScreenshotPlugin, cursor::CursorPlugin))
             .run();
         return;
     };
@@ -155,7 +156,7 @@ fn main() {
             pause::PausePlugin,
             results::ResultsPlugin,
         ))
-        .add_plugins((hud::HudPlugin, ingame_ui::InGameUiPlugin, explosives::ExplosivesPlugin))
+        .add_plugins((hud::HudPlugin, ingame_ui::InGameUiPlugin, explosives::ExplosivesPlugin, cursor::CursorPlugin))
         .add_systems(Update, (menu::back_to_menu, menu::test_click))
         .add_systems(
             PreUpdate,
