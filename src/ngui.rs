@@ -31,7 +31,7 @@ impl Plugin for NguiPlugin {
     fn build(&self, app: &mut App) {
         app.add_message::<NguiClick>()
             .add_message::<NguiSlider>()
-            .add_systems(Update, (layout, (hover, clicks, cover_crop, drag_sliders)).chain());
+            .add_systems(Update, (gamma_blend_fix, layout, (hover, clicks, cover_crop, drag_sliders)).chain());
     }
 }
 
@@ -1082,4 +1082,63 @@ fn drag_sliders(
             out.write(NguiSlider { screen: h.screen, node: h.node, value: v });
         }
     }
+}
+
+// ------------------------------------------------------------------ gamma-space blending
+
+/// NGUI draws in Unity's gamma colour space, so a half-transparent pixel mixes the *sRGB*
+/// values: dark boxes (the Arena score box's 71 % black middle) hide the scene well and
+/// white text edges stay thin. Bevy blends in linear light, which lets far more of the
+/// scene through dark boxes and fattens bright edges. We can't change the blend, so each
+/// UI picture's alpha is adjusted once after loading so that blending in linear light gives
+/// the colour gamma blending would give over a typical background (sRGB 0.2). For black
+/// pixels that is exactly a' = 1 - (1 - a)^2.2 whatever the background.
+fn gamma_blend_fix(
+    screens: Query<&NguiScreen>,
+    mut images: ResMut<Assets<Image>>,
+    mut done: Local<std::collections::HashSet<AssetId<Image>>>,
+    mut lut: Local<Vec<u8>>,
+) {
+    if lut.is_empty() {
+        *lut = gamma_alpha_lut();
+    }
+    for s in &screens {
+        let handles = s.atlases.values().map(|a| &a.0).chain(s.fonts.values().map(|f| &f.0)).chain(s.textures.values());
+        for h in handles {
+            if done.contains(&h.id()) {
+                continue;
+            }
+            let Some(mut img) = images.get_mut(h) else { continue };
+            done.insert(h.id());
+            use bevy::render::render_resource::TextureFormat as F;
+            if !matches!(img.texture_descriptor.format, F::Rgba8UnormSrgb | F::Rgba8Unorm) {
+                continue;
+            }
+            let Some(data) = img.data.as_mut() else { continue };
+            for px in data.chunks_exact_mut(4) {
+                let a = px[3];
+                if a == 0 || a == 255 {
+                    continue;
+                }
+                let l = ((px[0] as u32 * 54 + px[1] as u32 * 183 + px[2] as u32 * 19) >> 8) as usize;
+                px[3] = lut[(a as usize) << 8 | l];
+            }
+        }
+    }
+}
+
+/// [alpha << 8 | luminance] -> alpha that gives the gamma-space blend in linear light.
+fn gamma_alpha_lut() -> Vec<u8> {
+    let lin = |v: f32| v.powf(2.2);
+    let b = 0.2_f32;
+    let mut t = vec![0u8; 256 * 256];
+    for a in 0..256 {
+        for l in 0..256 {
+            let (af, c) = (a as f32 / 255.0, l as f32 / 255.0);
+            let d = lin(c) - lin(b);
+            let out = if d.abs() < 0.02 { af } else { ((lin(af * c + (1.0 - af) * b) - lin(b)) / d).clamp(0.0, 1.0) };
+            t[a << 8 | l] = (out * 255.0 + 0.5) as u8;
+        }
+    }
+    t
 }
