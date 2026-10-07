@@ -28,7 +28,7 @@ ROOT = pathlib.Path(__file__).resolve().parent.parent
 GAME = em.GAME_DATA
 INDEX = ROOT / "private/index/weaponsounds.tsv"
 OUT = ROOT / "private/export/weapons"
-DEFAULT_MODELS = ["Weapon1", "Weapon2", "Weapon3", "Weapon5", "Weapon9", "Weapon11"]
+DEFAULT_MODELS = ["Weapon1", "Weapon2", "Weapon3", "Weapon5", "Weapon9", "Weapon11", "Weapon50", "Weapon61"]
 KEEP_LISTS = ("damageByTier", "dpses")
 KEEP_DICTS = ("damageRange", "gunPosition", "positionShop", "rotationShop")
 
@@ -103,6 +103,10 @@ def export_prefab(row, idx, out, gltf_name, anim_holder, skip=()):
     if not ex.col.doc["nodes"]:
         ex.col.node(name="empty")
     ex.col.doc["scenes"][0]["nodes"] = list(range(len(ex.col.doc["nodes"])))
+    if anim_holder is None:
+        # weapons reuse each other's inner rigs ("Weapon128_Inner" inside Weapon61)
+        anim_holder = next((nd["name"] for nd in ex.vis.doc["nodes"] if nd["name"].lower().endswith("_inner")), "")
+    ex.anim_holder = anim_holder
     clips = export_animations(ex, assets, anim_holder)
     ex.sounds = export_sounds(assets, go, out)
     return ex, assets, clips
@@ -110,8 +114,8 @@ def export_prefab(row, idx, out, gltf_name, anim_holder, skip=()):
 
 def export_model(row, idx):
     name = row[2]
-    ex, assets, clips = export_prefab(row, idx, OUT / name, "weapon", f"{name}_Inner")
-    ex.save({"weapon": name, "animations": animation_lengths(assets, f"{name}_Inner"), "clips": clips,
+    ex, assets, clips = export_prefab(row, idx, OUT / name, "weapon", None)
+    ex.save({"weapon": name, "animations": animation_lengths(assets, ex.anim_holder), "clips": clips,
              "sounds": ex.sounds})
     print(f"model {name}: {json.dumps(dict(ex.stats))}")
 

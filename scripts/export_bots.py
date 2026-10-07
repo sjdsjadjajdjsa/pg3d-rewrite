@@ -27,7 +27,7 @@ import export_weapons as ew  # noqa: E402
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 INDEX = ROOT / "private/index/bots.tsv"
 OUT = ROOT / "private/export/bots"
-DEFAULT = ["Enemy1_go", "Enemy2_go", "Enemy3_go"]
+DEFAULT = [f"Enemy{i}_go" for i in range(1, 13)]
 
 
 def export_stats(rows, gen):
@@ -50,10 +50,26 @@ def export_stats(rows, gen):
                 continue
             b = {k: v for k, v in d.items() if isinstance(v, (int, float, str)) and k not in ("m_Enabled", "m_Name")}
             b["class"] = cls
+            b.update(nav_agent(o))
             bots[go] = b
     OUT.mkdir(parents=True, exist_ok=True)
     (OUT / "bots.json").write_text(json.dumps(bots, indent=0, sort_keys=True))
     print(f"bots.json: {len(bots)} bots")
+
+
+def nav_agent(mb_obj):
+    """Settings of the prefab's NavMeshAgent (speed, size, baseOffset = hover height)."""
+    try:
+        go = mb_obj.read(check_read=False).m_GameObject.read()
+        for c in go.m_Component:
+            p = getattr(c, "component", c)
+            if p.deref().type.name == "NavMeshAgent":
+                d = p.deref().read_typetree()
+                return {"agentSpeed": d["m_Speed"], "agentRadius": d["m_Radius"],
+                        "agentHeight": d["m_Height"], "agentBaseOffset": d["m_BaseOffset"]}
+    except Exception as e:
+        print(f"  nav agent: {e!r}"[:200], file=sys.stderr)
+    return {}
 
 
 def main():

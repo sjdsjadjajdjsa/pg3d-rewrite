@@ -39,6 +39,8 @@ Game install (read-only, never modify, never copy into git):
 9. `tools/venv/bin/python scripts/export_navmesh.py <map>` → `private/export/maps/<map>/navmesh.json` (walkable
    polygons for enemy path finding). Weapon/bot exports now also write `sounds/*.wav` and muzzle-flash particle data.
 
+**Shortcut:** `scripts/export_all.sh [maps...]` runs all of the above (indexes only if missing).
+
 Other helpers: `scripts/dump_behaviour.py` (any MonoBehaviour's fields as JSON), `scripts/find_text.py`
 (find a string in the asset files), `scripts/probe_settings.py` (colour space, physics, time settings).
 
