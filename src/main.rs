@@ -11,6 +11,7 @@
 //!           V = toggle walk / fly camera, F12 = screenshot, F10 = back to menu.
 
 mod armory;
+mod armory_preview;
 mod bots;
 mod camera;
 mod controls;

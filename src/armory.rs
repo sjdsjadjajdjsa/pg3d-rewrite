@@ -18,7 +18,8 @@ pub struct ArmoryPlugin;
 
 impl Plugin for ArmoryPlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(Update, (setup, clicks, refresh).chain());
+        app.add_plugins(crate::armory_preview::ArmoryPreviewPlugin)
+            .add_systems(Update, (setup, clicks, refresh).chain());
     }
 }
 
@@ -102,6 +103,7 @@ fn setup(
     mut screens: Query<(Entity, &mut NguiScreen), Added<NguiScreen>>,
     data: Res<DataDir>,
     assets: Res<AssetServer>,
+    preview: Option<Res<crate::armory_preview::PreviewImage>>,
 ) {
     for (e, mut s) in &mut screens {
         if !s.nodes.first().is_some_and(|n| n.name == "ShopNGUI") {
@@ -211,6 +213,23 @@ fn setup(
             loadout: SavedLoadout::load(),
             dirty: true,
         });
+        // the character holding the selected weapon, behind the stats panel
+        if let Some(p) = &preview {
+            commands.entity(e).with_child((
+                Name::new("armory character"),
+                ImageNode::new(p.0.clone()),
+                Node {
+                    position_type: PositionType::Absolute,
+                    left: vw(75.0),
+                    top: vh(60.0 / 7.2),
+                    width: vw(25.0),
+                    height: vh(600.0 / 7.2),
+                    ..default()
+                },
+                GlobalZIndex(-500),
+                Pickable::IGNORE,
+            ));
+        }
         // the purple background (scripts/make_armory_bg.py)
         commands.entity(e).with_child((
             Name::new("armory background"),
@@ -246,7 +265,11 @@ fn clicks(mut clicks: MessageReader<NguiClick>, mut screens: Query<(&NguiScreen,
     }
 }
 
-fn refresh(mut screens: Query<(&mut NguiScreen, &mut Armory)>, assets: Res<AssetServer>) {
+fn refresh(
+    mut screens: Query<(&mut NguiScreen, &mut Armory)>,
+    assets: Res<AssetServer>,
+    mut preview: ResMut<crate::armory_preview::PreviewWeapon>,
+) {
     for (mut s, mut a) in &mut screens {
         if !a.dirty {
             continue;
@@ -286,6 +309,7 @@ fn refresh(mut screens: Query<(&mut NguiScreen, &mut Armory)>, assets: Res<Asset
                 s.set_active(i, selected.as_deref() == Some(name));
             }
         }
+        preview.wanted = selected.clone();
         // Equip for a weapon that is not equipped, the dark "Equipped" box for the one that is
         let is_equipped = selected.is_some() && selected == equipped;
         for (name, on) in [("BtnEquip", selected.is_some() && !is_equipped), ("Equipped", is_equipped)] {
