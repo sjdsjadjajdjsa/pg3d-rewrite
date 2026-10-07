@@ -135,6 +135,8 @@ fn spawn_map(mut commands: Commands, assets: Res<AssetServer>, map: Res<CurrentM
     commands.spawn((
         Name::new(format!("map {}", map.0)),
         WorldAssetRoot(assets.load(GltfAssetLabel::Scene(0).from_asset(path))),
+        // particle textures (explosion effects of map props) are relative to the map folder
+        crate::particles::AssetDir(format!("maps/{}", map.0)),
     ));
 }
 

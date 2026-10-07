@@ -74,6 +74,7 @@ fn explode(
     mut hits: MessageReader<BotDamage>,
     mut q: Query<(&mut Explosive, &GlobalTransform)>,
     mut shots: MessageWriter<SpawnProjectile>,
+    mut bursts: MessageWriter<crate::particles::Burst>,
 ) {
     for h in hits.read() {
         let Ok((mut x, gt)) = q.get_mut(h.bot) else { continue };
@@ -95,6 +96,8 @@ fn explode(
             explosion_radius: x.def.radius.clamp(1.0, 10.0),
             look: Look::Ball { color: Color::srgb(1.0, 0.6, 0.1), radius: 0.05 },
         });
+        // the prefab's own blast effect (flash, sparks, fire), exported under the TNT node
+        bursts.write(crate::particles::Burst(h.bot));
         commands.entity(h.bot).insert(Visibility::Hidden);
         commands.entity(x.hitbox).insert(CollisionLayers::NONE);
     }

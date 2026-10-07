@@ -1,7 +1,7 @@
 //! In-match HUD, laid out like the original (reference clips in
 //! ../pixel-gun-3d-re/private/reference/, Arena mini-game):
 //!   * (health bar and weapon bar: the original sprites, see ingame_ui.rs)
-//!   * top centre: dark box with score, wave number and zombies left
+//!   * (top centre box with score / wave / zombies left: ingame_ui.rs, original sprites)
 //!   * damage: red screen edges that get stronger as health drops and flash on every
 //!     hit, plus a red arrow around the crosshair pointing at whoever hit you
 //! The original draws these with NGUI sprites from its in-match atlas; we draw them with
@@ -9,18 +9,16 @@
 
 use bevy::{asset::RenderAssetUsages, prelude::*, render::render_resource::{Extent3d, TextureDimension, TextureFormat}};
 
-use crate::bots::{PLAYER_MAX_HEALTH, PlayerHit, PlayerStats, Wave};
+use crate::bots::{PLAYER_MAX_HEALTH, PlayerHit, PlayerStats};
 
 pub struct HudPlugin;
 
 impl Plugin for HudPlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(Startup, spawn_hud).add_systems(Update, (update_score, damage_flash, hit_arrows));
+        app.add_systems(Startup, spawn_hud).add_systems(Update, (damage_flash, hit_arrows));
     }
 }
 
-#[derive(Component)]
-struct ScoreText;
 #[derive(Component)]
 struct Vignette;
 
@@ -78,25 +76,6 @@ fn spawn_hud(mut commands: Commands, mut images: ResMut<Assets<Image>>) {
         Pickable::IGNORE,
     ));
 
-    // score / wave / zombies left
-    commands.spawn((
-        Node { position_type: PositionType::Absolute, width: percent(100.0), top: px(12.0), justify_content: JustifyContent::Center, ..default() },
-        Pickable::IGNORE,
-        children![(
-            Node { padding: UiRect::axes(px(14.0), px(4.0)), border: UiRect::all(px(2.0)), ..default() },
-            BackgroundColor(Color::srgba(0.0, 0.0, 0.0, 0.75)),
-            BorderColor::all(Color::srgb(0.25, 0.25, 0.3)),
-            children![(ScoreText, Text::new(""), TextFont { font_size: FontSize::Px(22.0), ..default() }, TextColor(Color::WHITE))],
-        )],
-    ));
-}
-
-fn update_score(stats: Res<PlayerStats>, wave: Res<Wave>, mut score: Single<&mut Text, With<ScoreText>>) {
-    score.0 = if std::env::var("PG3D_NOBOTS").is_ok() {
-        format!("Score {}", stats.score)
-    } else {
-        format!("Score {}    Wave {}    Left {}", stats.score, wave.number.max(1), wave.left)
-    };
 }
 
 /// Red edges: a steady part from lost health plus a flash on each hit.

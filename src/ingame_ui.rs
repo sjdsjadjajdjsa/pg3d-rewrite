@@ -3,7 +3,10 @@
 //! weapon bar (WeaponToggles/Panel_Tap: six category slots with key hints, ammo and the
 //! green "selected" frame), the health bar and the pause button in the top-left corner.
 //! Everything for touch screens, multiplayer, pets, chat and events is switched off.
-//! Slot pictures are the generic category icons: the per-weapon icons are not exported yet.
+//! The top-centre box (score · wave · zombies left) is the Arena mode's own part,
+//! InGameGUIPart_Arena (`export_ngui.py resources.assets InGameGUIPart_Arena arenapart`).
+//! Slot pictures: <data>/weapons/<Weapon>/icon.png from export_weapon_icons.py (the game's
+//! "<Tag>_icon1_big"), else the bar's generic category icon.
 
 use bevy::prelude::*;
 
@@ -19,18 +22,22 @@ pub struct InGameUiPlugin;
 impl Plugin for InGameUiPlugin {
     fn build(&self, app: &mut App) {
         app.add_systems(Startup, spawn)
-            .add_systems(Update, (setup, place_corners, update).chain());
+            .add_systems(Update, (setup, place_corners, update, update_arena_box).chain());
     }
 }
 
 #[derive(Resource)]
 struct Hud(Option<Entity>);
 
+#[derive(Resource)]
+struct ArenaBox(Option<Entity>);
+
 /// Node indices we update every frame.
 #[derive(Component, Default)]
 struct HudNodes {
-    /// per slot: toggle, ammo label, selected frame
-    slots: Vec<(usize, Option<usize>, Option<usize>)>,
+    /// per slot: toggle, ammo label, selected frame, picture
+    slots: Vec<(usize, Option<usize>, Option<usize>, Option<usize>)>,
+    icons_for: Vec<String>,
     health_label: Option<usize>,
     health_fill: Option<usize>,
     top_left: Option<usize>,
@@ -46,6 +53,42 @@ fn spawn(mut commands: Commands, assets: Res<AssetServer>, data: Res<DataDir>) {
         warn!("no exported in-match HUD (run export_ngui.py resources.assets InGameGUI ingame)");
     }
     commands.insert_resource(Hud(e));
+    let b = if std::env::var("PG3D_NOBOTS").is_ok() {
+        None
+    } else {
+        crate::ngui::spawn_screen(&mut commands, &assets, &data, "arenapart")
+    };
+    commands.insert_resource(ArenaBox(b));
+}
+
+/// Score, wave and zombies left in the Arena box at the top.
+fn update_arena_box(
+    stats: Res<PlayerStats>,
+    wave: Res<crate::bots::Wave>,
+    over: Res<crate::results::MatchOver>,
+    arena: Res<ArenaBox>,
+    mut screens: Query<&mut NguiScreen>,
+    mut commands: Commands,
+    mut last: Local<String>,
+) {
+    let Some(e) = arena.0 else { return };
+    let Ok(mut s) = screens.get_mut(e) else { return };
+    let dead = stats.health <= 0.0 || over.0;
+    let key = format!("{} {} {} {dead}", stats.score, wave.number, wave.left);
+    if *last == key {
+        return;
+    }
+    *last = key;
+    commands.entity(e).insert(if dead { Visibility::Hidden } else { Visibility::Inherited });
+    for (name, text) in [
+        ("TimeSurvivalLabel", stats.score.to_string()),
+        ("WaveSurvivalLabel", format!("Wave {}", wave.number.max(1))),
+        ("ScoreSurvivalLabel", wave.left.to_string()),
+    ] {
+        if let Some(i) = s.find(name) {
+            s.set_text(i, text);
+        }
+    }
 }
 
 fn child(s: &NguiScreen, parent: usize, name: &str) -> Option<usize> {
@@ -101,7 +144,7 @@ fn setup(mut commands: Commands, mut screens: Query<(Entity, &mut NguiScreen), A
                 }
                 for name in SLOTS {
                     let Some(t) = child(&s, tap, name) else { continue };
-                    nodes.slots.push((t, child(&s, t, "Label"), child(&s, t, "Checkmark")));
+                    nodes.slots.push((t, child(&s, t, "Label"), child(&s, t, "Checkmark"), child(&s, t, "ShopIcon")));
                 }
             }
         }
@@ -127,9 +170,22 @@ fn update(
     hud: Res<Hud>,
     mut screens: Query<(&mut NguiScreen, &mut HudNodes)>,
     mut commands: Commands,
+    assets: Res<AssetServer>,
+    data: Res<DataDir>,
 ) {
     let Some(e) = hud.0 else { return };
     let Ok((mut s, mut n)) = screens.get_mut(e) else { return };
+    let names: Vec<String> = loadout.weapons.iter().map(|w| w.name.clone()).collect();
+    if names != n.icons_for {
+        for (slot, name) in names.iter().enumerate() {
+            let Some(&(_, _, _, Some(icon))) = n.slots.get(slot) else { continue };
+            let rel = format!("weapons/{name}/icon.png");
+            if data.0.join(&rel).exists() {
+                s.set_texture(icon, assets.load(rel));
+            }
+        }
+        n.icons_for = names;
+    }
     let dead = stats.health <= 0.0 || over.0;
     let k = (stats.health / PLAYER_MAX_HEALTH).clamp(0.0, 1.0);
     let ammo: Vec<String> = loadout
@@ -151,7 +207,7 @@ fn update(
         let w = s.nodes[i].widget.as_ref().map_or(106.0, |w| w.w);
         s.set_size(i, Vec2::new((w * k).max(0.0), h));
     }
-    for (slot, &(toggle, label, selected)) in n.slots.clone().iter().enumerate() {
+    for (slot, &(toggle, label, selected, _)) in n.slots.clone().iter().enumerate() {
         let used = slot < loadout.weapons.len();
         s.set_active(toggle, used);
         if let (Some(l), Some(text)) = (label, ammo.get(slot)) {
