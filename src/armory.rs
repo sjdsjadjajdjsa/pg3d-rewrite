@@ -18,7 +18,7 @@ pub struct ArmoryPlugin;
 
 impl Plugin for ArmoryPlugin {
     fn build(&self, app: &mut App) {
-        app.add_plugins(crate::armory_preview::ArmoryPreviewPlugin)
+        app.add_plugins((crate::armory_preview::ArmoryPreviewPlugin, crate::particles::ParticlesPlugin))
             .add_systems(Update, ((setup, clicks, refresh).chain(), preview_on_when_open));
     }
 }
@@ -142,7 +142,7 @@ fn setup(
                 s.set_active(i, true);
             }
         }
-        for name in TABS {
+        for name in TABS.into_iter().chain(["BtnShoot"]) {
             if let Some(i) = s.find(name) {
                 s.make_button(i);
             }
@@ -241,7 +241,11 @@ fn setup(
     }
 }
 
-fn clicks(mut clicks: MessageReader<NguiClick>, mut screens: Query<(&NguiScreen, &mut Armory)>) {
+fn clicks(
+    mut clicks: MessageReader<NguiClick>,
+    mut screens: Query<(&NguiScreen, &mut Armory)>,
+    mut shoot: ResMut<crate::armory_preview::PreviewShoot>,
+) {
     for c in clicks.read() {
         let Ok((s, mut a)) = screens.get_mut(c.screen) else { continue };
         if let Some(k) = TABS.iter().position(|t| *t == c.name) {
@@ -253,6 +257,8 @@ fn clicks(mut clicks: MessageReader<NguiClick>, mut screens: Query<(&NguiScreen,
             let Some(name) = a.shown.get(k).cloned() else { continue };
             a.selected = Some(name);
             a.dirty = true;
+        } else if c.name == "BtnShoot" {
+            shoot.start();
         } else if c.name == "BtnEquip" {
             let Some(name) = a.selected.clone() else { continue };
             let cat = a.category;

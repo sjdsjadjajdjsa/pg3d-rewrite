@@ -11,6 +11,7 @@ use bevy::{
     prelude::*,
     render::render_resource::TextureFormat,
 };
+use serde::Deserialize;
 
 pub struct ArmoryPreviewPlugin;
 
@@ -18,7 +19,8 @@ impl Plugin for ArmoryPreviewPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<PreviewWeapon>()
             .add_systems(Startup, spawn)
-            .add_systems(Update, (tag_meshes, play_idle, attach_weapon, hide_weapon_extras));
+            .init_resource::<PreviewShoot>()
+            .add_systems(Update, (tag_meshes, play_idle, attach_weapon, hide_weapon_extras, shoot).chain());
     }
 }
 
@@ -56,6 +58,35 @@ struct PreviewChar {
 #[derive(Component)]
 struct HeldWeapon {
     cleaned: bool,
+    /// "Shoot" sound and the time between shots (weapon info.json)
+    sound: Option<Handle<AudioSource>>,
+    interval: f32,
+}
+
+/// The Armory's Shoot button: the character raises the weapon to the side and fires a
+/// short burst (OBSERVED in clip h_rec2: gun level, pointing left, muzzle flashes).
+#[derive(Resource, Default)]
+pub struct PreviewShoot {
+    /// seconds left of the burst
+    pub time: f32,
+    next_shot: f32,
+    /// 0 = holding low, 1 = aiming
+    aim: f32,
+}
+
+impl PreviewShoot {
+    pub fn start(&mut self) {
+        self.time = 1.6;
+        self.next_shot = 0.25;
+    }
+}
+
+#[derive(Deserialize, Default)]
+struct WeaponInfo {
+    #[serde(default)]
+    animations: std::collections::HashMap<String, f32>,
+    #[serde(default)]
+    sounds: std::collections::HashMap<String, String>,
 }
 
 fn spawn(
@@ -139,6 +170,7 @@ fn attach_weapon(
     children: Query<&Children>,
     names: Query<&Name>,
     assets: Res<AssetServer>,
+    data: Res<crate::DataDir>,
 ) {
     if want.held.as_ref().map(|h| &h.0) == want.wanted.as_ref() {
         return;
@@ -152,10 +184,18 @@ fn attach_weapon(
         commands.entity(old).despawn();
     }
     let Some(name) = want.wanted.clone() else { return };
+    let info: WeaponInfo = std::fs::read_to_string(data.0.join(format!("weapons/{name}/info.json")))
+        .ok()
+        .and_then(|t| serde_json::from_str(&t).ok())
+        .unwrap_or_default();
+    let sound = info.sounds.get("shoot").map(|rel| assets.load(format!("weapons/{name}/{rel}")));
+    let interval = info.animations.get("Shoot").copied().filter(|v| *v > 0.05).unwrap_or(0.3).max(0.12);
     let w = commands
         .spawn((
             Name::new(format!("preview {name}")),
-            HeldWeapon { cleaned: false },
+            HeldWeapon { cleaned: false, sound, interval },
+            crate::particles::AssetDir(format!("weapons/{name}")),
+            RenderLayers::layer(LAYER),
             WorldAssetRoot(assets.load(GltfAssetLabel::Scene(0).from_asset(format!("weapons/{name}/weapon.gltf")))),
             // held low at the right hip, pointing ahead (OBSERVED pose); the weapon files
             // are first-person, with the gun 1.5 up and 0.8 ahead of their origin
@@ -201,7 +241,40 @@ fn hide_weapon_extras(
 }
 
 fn weapon_transform() -> Transform {
-    let rot = Quat::from_rotation_z(1.0) * Quat::from_rotation_y(-std::f32::consts::FRAC_PI_2);
-    let gun = Vec3::new(-0.68, 0.92, 0.45);
+    pose(0.0)
+}
+
+/// Weapon pose between holding it low at the side (0) and aiming it level to the
+/// character's right, our left (1).
+fn pose(aim: f32) -> Transform {
+    let low = Quat::from_rotation_z(1.0) * Quat::from_rotation_y(-std::f32::consts::FRAC_PI_2);
+    let up = Quat::from_rotation_y(-std::f32::consts::FRAC_PI_2);
+    let rot = low.slerp(up, aim);
+    let gun = Vec3::new(-0.68, 0.92, 0.45).lerp(Vec3::new(-0.55, 1.2, 0.4), aim);
     Transform::from_translation(gun - rot * Vec3::new(0.0, 1.5, 0.82)).with_rotation(rot)
+}
+
+fn shoot(
+    mut commands: Commands,
+    time: Res<Time>,
+    mut st: ResMut<PreviewShoot>,
+    mut weapons: Query<(Entity, &HeldWeapon, &mut Transform)>,
+    mut flashes: MessageWriter<crate::particles::Burst>,
+) {
+    let dt = time.delta_secs();
+    let firing = st.time > 0.0;
+    st.time = (st.time - dt).max(0.0);
+    let target = if firing { 1.0 } else { 0.0 };
+    st.aim += (target - st.aim) * (dt * 10.0).min(1.0);
+    let Ok((we, w, mut tf)) = weapons.single_mut() else { return };
+    *tf = pose(st.aim);
+    if firing && st.aim > 0.9 {
+        st.next_shot -= dt;
+        if st.next_shot <= 0.0 {
+            st.next_shot = w.interval;
+            // the weapon's own muzzle flash particles (particles.rs)
+            flashes.write(crate::particles::Burst(we));
+            crate::sound::play(&mut commands, w.sound.as_ref(), None, 0.6);
+        }
+    }
 }

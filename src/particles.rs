@@ -126,10 +126,15 @@ fn spawn_bursts(
 fn update_particles(
     mut commands: Commands,
     time: Res<Time>,
-    camera: Single<&GlobalTransform, With<crate::camera::PlayerCamera>>,
+    cameras: Query<
+        &GlobalTransform,
+        Or<(With<crate::camera::PlayerCamera>, With<crate::armory_preview::PreviewCamera>)>,
+    >,
     mut q: Query<(Entity, &mut Particle, &mut Transform)>,
     mut materials: ResMut<Assets<StandardMaterial>>,
 ) {
+    // the match camera, or the Armory preview's in the menu
+    let Some(camera) = cameras.iter().next() else { return };
     let cam_rot = camera.compute_transform().rotation;
     for (e, mut p, mut t) in &mut q {
         p.age += time.delta_secs();
