@@ -1062,7 +1062,7 @@ fn build_glyphs(
     };
     let runs = parse_markup(&text, tint(srgba(w.color), alpha));
     // lines of (glyph rect in font page, x, advance-adjusted) in virtual units at scale 1
-    let mut lines: Vec<Vec<(char, Color, [f32; 7], f32)>> = vec![vec![]];
+    let mut lines: Vec<GlyphLine> = vec![vec![]];
     let mut x = 0.0;
     let mut widths = vec![0.0f32];
     for (ch, col) in runs {
@@ -1412,13 +1412,12 @@ impl UiMaterial for GlyphMaterial {
     }
 }
 
+/// One printed line: (character, colour, glyph [x, y, w, h, offset x, offset y, advance], pen x).
+type GlyphLine = Vec<(char, Color, [f32; 7], f32)>;
+
 /// Break lines at spaces so that none is wider than `max_w` font pixels (NGUIText.WrapText).
 /// Glyph x positions are moved to the start of their new line; widths are recomputed.
-#[allow(clippy::type_complexity)]
-fn wrap_lines(
-    lines: &[Vec<(char, Color, [f32; 7], f32)>],
-    max_w: f32,
-) -> (Vec<Vec<(char, Color, [f32; 7], f32)>>, Vec<f32>) {
+fn wrap_lines(lines: &[GlyphLine], max_w: f32) -> (Vec<GlyphLine>, Vec<f32>) {
     let (mut out, mut widths) = (vec![], vec![]);
     for line in lines {
         let mut start = 0; // index of the first glyph of the current output line
