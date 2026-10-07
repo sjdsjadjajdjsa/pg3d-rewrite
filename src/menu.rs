@@ -20,11 +20,11 @@ impl Plugin for MenuPlugin {
         app.insert_resource(ClearColor(Color::srgb(0.08, 0.1, 0.14)))
             .insert_resource(crate::map::CurrentMap("lobby".into()))
             .init_resource::<crate::map::MapInfo>()
-            .add_plugins((crate::ngui::NguiPlugin, crate::lighting::LightingPlugin))
+            .add_plugins((crate::ngui::NguiPlugin, crate::lighting::LightingPlugin, crate::settings_ui::SettingsUiPlugin))
             .add_systems(PreStartup, lobby_scene)
             .add_systems(Startup, build_menu)
             .add_systems(Update, (character_idle, test_click))
-            .add_systems(Update, (button_colors, button_clicks, lobby_clicks, fade_toast, setup_lobby, crate::settings_ui::settings_sliders));
+            .add_systems(Update, (button_colors, button_clicks, lobby_clicks, fade_toast, setup_lobby));
     }
 }
 
@@ -187,10 +187,11 @@ fn setup_lobby(
     assets: Res<AssetServer>,
     data: Res<DataDir>,
     settings: Res<crate::settings::Settings>,
+    controls: Res<crate::controls::Controls>,
 ) {
     for mut s in &mut screens {
         if s.nodes.first().is_some_and(|n| n.name == "SettingsWindow") {
-            crate::settings_ui::setup_settings(&mut s, &settings);
+            crate::settings_ui::setup_settings(&mut s, &settings, &controls);
             continue;
         }
         if s.nodes.first().is_some_and(|n| n.name == "AllModesView") {
@@ -231,8 +232,8 @@ fn setup_lobby(
 
 /// PG3D_MENU_CLICK=BtnBattle_A,GMH_GameMode_Cell_New_Big (automated tests): press these
 /// buttons one after another, two seconds apart.
-fn test_click(
-    time: Res<Time>,
+pub fn test_click(
+    time: Res<Time<Real>>,
     screens: Query<(Entity, &crate::ngui::NguiScreen, &InheritedVisibility)>,
     mut out: MessageWriter<crate::ngui::NguiClick>,
     mut done: Local<usize>,
@@ -247,7 +248,8 @@ fn test_click(
         if !vis.get() {
             continue;
         }
-        if let Some(node) = s.nodes.iter().position(|n| n.name == name) {
+        let node = (0..s.nodes.len()).find(|&i| s.nodes[i].name == name && s.nodes[i].button.is_some() && s.visible(i));
+        if let Some(node) = node.or_else(|| s.nodes.iter().position(|n| n.name == name)) {
             info!("test click {name}");
             out.write(crate::ngui::NguiClick { screen: e, node, name: name.to_string() });
             *done += 1;
@@ -356,6 +358,8 @@ fn lobby_clicks(
             if pickers.is_empty() {
                 spawn_map_picker(&mut commands, &data, &assets, true, true);
             }
+        } else if Some(c.screen) == screens.settings {
+            // handled in settings_ui.rs
         } else {
             commands.spawn((
                 Toast(2.5),

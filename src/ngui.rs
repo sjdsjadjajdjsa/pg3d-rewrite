@@ -237,6 +237,52 @@ impl NguiScreen {
         self.texture_override.insert(i, image);
         self.dirty = true;
     }
+    pub fn set_pos(&mut self, i: usize, pos: Vec2) {
+        self.pos_override.insert(i, pos);
+        self.dirty = true;
+    }
+    /// Make a node clickable (for widgets the game drives through other scripts).
+    pub fn make_button(&mut self, i: usize) {
+        self.nodes[i].button.get_or_insert_with(ButtonDef::default);
+        self.dirty = true;
+    }
+    /// `i` and every node below it, in list order.
+    pub fn subtree(&self, i: usize) -> Vec<usize> {
+        (i..self.nodes.len()).filter(|&j| j == i || is_descendant(self, j, i)).collect()
+    }
+    /// First node named `name` inside the subtree of `i`.
+    pub fn find_in(&self, i: usize, name: &str) -> Option<usize> {
+        self.subtree(i).into_iter().find(|&j| self.nodes[j].name == name)
+    }
+    /// Copy the subtree of `i` (same parent) like Unity's Instantiate; returns the copy's
+    /// root. Anchors and slider thumbs inside the subtree point at the copies.
+    pub fn clone_subtree(&mut self, i: usize) -> usize {
+        let src = self.subtree(i);
+        let base = self.nodes.len();
+        let map: HashMap<usize, usize> = src.iter().enumerate().map(|(k, &j)| (j, base + k)).collect();
+        for &j in &src {
+            let mut n = self.nodes[j].clone();
+            if j != i {
+                n.parent = n.parent.map(|p| map.get(&p).copied().unwrap_or(p));
+            }
+            if let Some(w) = &mut n.widget {
+                for a in w.anchors.values_mut() {
+                    a.target = a.target.map(|t| map.get(&t).copied().unwrap_or(t));
+                }
+            }
+            if let Some(sl) = &mut n.slider {
+                sl.thumb = sl.thumb.map(|t| map.get(&t).copied().unwrap_or(t));
+            }
+            if let Some(&on) = self.active_override.get(&j) {
+                self.active_override.insert(map[&j], on);
+            }
+            self.nodes.push(n);
+            self.entities.push(None);
+            self.hits.push(None);
+        }
+        self.dirty = true;
+        base
+    }
     pub fn set_text(&mut self, i: usize, text: impl Into<String>) {
         self.text_override.insert(i, text.into());
         self.dirty = true;
@@ -244,7 +290,7 @@ impl NguiScreen {
     fn active(&self, i: usize) -> bool {
         *self.active_override.get(&i).unwrap_or(&self.nodes[i].active)
     }
-    fn visible(&self, i: usize) -> bool {
+    pub fn visible(&self, i: usize) -> bool {
         let mut j = Some(i);
         while let Some(k) = j {
             if !self.active(k) {

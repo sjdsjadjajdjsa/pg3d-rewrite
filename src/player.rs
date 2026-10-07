@@ -9,7 +9,10 @@
 use avian3d::prelude::*;
 use bevy::prelude::*;
 
-use crate::map::{Layer, MapMarkers, Trigger};
+use crate::{
+    controls::Action,
+    map::{Layer, MapMarkers, Trigger},
+};
 
 // --- RECOVERED: CharacterController on the Player prefab -------------------------
 /// Total capsule height, metres.
@@ -104,16 +107,17 @@ fn spawn_player(mut commands: Commands, markers: Res<MapMarkers>) {
 
 /// Jump presses are read every frame (Update would miss none, FixedUpdate might),
 /// so we latch them here and consume them in move_player.
-fn read_input(keys: Res<ButtonInput<KeyCode>>, mut player: Single<&mut Player>) {
-    if keys.pressed(KeyCode::Space) {
+fn read_input(input: crate::controls::Input, mut player: Single<&mut Player>) {
+    if input.pressed(Action::Jump) {
         player.jump_requested = true;
     }
 }
 
 fn move_player(
-    keys: Res<ButtonInput<KeyCode>>,
+    keys: crate::controls::Input,
     time: Res<Time>,
     camera_mode: Res<crate::camera::CameraMode>,
+    stats: Option<Res<crate::bots::PlayerStats>>,
     player: Single<(Entity, &mut Transform, &mut Player, &Children)>,
     colliders: Query<&Collider>,
     move_and_slide: MoveAndSlide,
@@ -136,11 +140,16 @@ fn move_player(
             p.jump_requested = true;
         }
     }
-    if *camera_mode == crate::camera::CameraMode::Walk {
-        if keys.pressed(KeyCode::KeyW) { input.y += 1.0 }
-        if keys.pressed(KeyCode::KeyS) { input.y -= 1.0 }
-        if keys.pressed(KeyCode::KeyD) { input.x += 1.0 }
-        if keys.pressed(KeyCode::KeyA) { input.x -= 1.0 }
+    let dead = stats.is_some_and(|s| s.health <= 0.0);
+    if dead {
+        input = Vec2::ZERO;
+        p.jump_requested = false;
+    }
+    if *camera_mode == crate::camera::CameraMode::Walk && !dead {
+        if keys.pressed(Action::Forward) { input.y += 1.0 }
+        if keys.pressed(Action::Back) { input.y -= 1.0 }
+        if keys.pressed(Action::Right) { input.x += 1.0 }
+        if keys.pressed(Action::Left) { input.x -= 1.0 }
     }
     let rot = Quat::from_rotation_y(p.yaw);
     let wish = rot * Vec3::new(input.x, 0.0, -input.y).normalize_or_zero() * WALK_SPEED;

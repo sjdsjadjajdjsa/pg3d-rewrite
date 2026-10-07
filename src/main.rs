@@ -12,6 +12,7 @@
 
 mod bots;
 mod camera;
+mod controls;
 mod lighting;
 mod map;
 mod menu;
@@ -78,6 +79,7 @@ fn main() {
             )
             .insert_resource(DataDir(data_dir.into()))
             .insert_resource(settings::Settings::load())
+            .insert_resource(controls::Controls::load())
             .add_plugins((menu::MenuPlugin, screenshot::ScreenshotPlugin))
             .run();
         return;
@@ -107,7 +109,8 @@ fn main() {
         )
         .add_plugins(PhysicsPlugins::default())
         .insert_resource(DataDir(data_dir.into()))
-            .insert_resource(settings::Settings::load())
+        .insert_resource(settings::Settings::load())
+        .insert_resource(controls::Controls::load())
         .insert_resource(map::CurrentMap(map_name))
         .add_plugins((
             map::MapPlugin,
@@ -126,7 +129,7 @@ fn main() {
             pause::PausePlugin,
             results::ResultsPlugin,
         ))
-        .add_systems(Update, menu::back_to_menu)
+        .add_systems(Update, (menu::back_to_menu, menu::test_click))
         .add_systems(
             PreUpdate,
             ignore_real_input.after(bevy::input::InputSystems).run_if(|| automated()),

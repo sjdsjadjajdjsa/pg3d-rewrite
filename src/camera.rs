@@ -77,8 +77,8 @@ fn grab_cursor(
     }
 }
 
-fn toggle_mode(keys: Res<ButtonInput<KeyCode>>, mut mode: ResMut<CameraMode>) {
-    if keys.just_pressed(KeyCode::KeyV) {
+fn toggle_mode(input: crate::controls::Input, mut mode: ResMut<CameraMode>) {
+    if input.just_pressed(crate::controls::Action::FreeCamera) {
         *mode = match *mode {
             CameraMode::Walk => CameraMode::Fly,
             CameraMode::Fly => CameraMode::Walk,
@@ -103,16 +103,17 @@ fn look(
     player.yaw = transform.rotation.to_euler(EulerRot::YXZ).0;
 }
 
-fn fly(keys: Res<ButtonInput<KeyCode>>, time: Res<Time>, camera: Single<(&mut Transform, &PlayerCamera)>) {
+fn fly(input: crate::controls::Input, keys: Res<ButtonInput<KeyCode>>, time: Res<Time>, camera: Single<(&mut Transform, &PlayerCamera)>) {
     let (mut transform, cam) = camera.into_inner();
     let mut dir = Vec3::ZERO;
     let forward = transform.forward().as_vec3();
     let right = transform.right().as_vec3();
-    if keys.pressed(KeyCode::KeyW) { dir += forward }
-    if keys.pressed(KeyCode::KeyS) { dir -= forward }
-    if keys.pressed(KeyCode::KeyD) { dir += right }
-    if keys.pressed(KeyCode::KeyA) { dir -= right }
-    if keys.any_pressed([KeyCode::Space, KeyCode::KeyE]) { dir += Vec3::Y }
+    use crate::controls::Action;
+    if input.pressed(Action::Forward) { dir += forward }
+    if input.pressed(Action::Back) { dir -= forward }
+    if input.pressed(Action::Right) { dir += right }
+    if input.pressed(Action::Left) { dir -= right }
+    if input.pressed(Action::Jump) || keys.pressed(KeyCode::KeyE) { dir += Vec3::Y }
     if keys.any_pressed([KeyCode::ControlLeft, KeyCode::KeyQ]) { dir -= Vec3::Y }
     let fast = if keys.pressed(KeyCode::ShiftLeft) { 4.0 } else { 1.0 };
     transform.translation += dir.normalize_or_zero() * cam.fly_speed * fast * time.delta_secs();

@@ -113,7 +113,7 @@ impl Plugin for MapPlugin {
     }
 }
 
-fn map_dir(data: &DataDir, map: &CurrentMap) -> std::path::PathBuf {
+pub fn map_dir(data: &DataDir, map: &CurrentMap) -> std::path::PathBuf {
     data.0.join("maps").join(&map.0)
 }
 

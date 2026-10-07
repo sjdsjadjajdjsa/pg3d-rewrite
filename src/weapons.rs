@@ -21,6 +21,7 @@ use bevy::{
 use serde::Deserialize;
 
 use crate::{
+    controls::Action,
     DataDir,
     bots::{BotDamage, BotPart},
     camera::PlayerCamera,
@@ -166,7 +167,7 @@ impl Loadout {
 
 /// Root of the first-person weapon model.
 #[derive(Component)]
-struct ViewModel;
+pub struct ViewModel;
 
 /// The view model's animation graph: clip name -> node.
 #[derive(Component)]
@@ -359,15 +360,16 @@ fn hook_up_animation_player(
     }
 }
 
-/// glTF meshes are spawned later as children; move them onto the view model layer and
-/// make them unlit (the original draws the first-person weapon with its own simple
-/// lighting, so it is never pitch black on night maps).
+/// glTF meshes are spawned later as children; move them onto the view model layer.
+/// The weapon is lit like the zombies: by the sun and the map's light probes. Maps
+/// without probes draw it unlit so it is never pitch black.
 fn tag_view_model_meshes(
     mut commands: Commands,
     added: Query<(Entity, Option<&MeshMaterial3d<StandardMaterial>>), (Added<Mesh3d>, Without<RenderLayers>)>,
     parents: Query<&ChildOf>,
     roots: Query<(), With<ViewModel>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
+    probes: Res<crate::lighting::HasProbes>,
 ) {
     for (e, mat) in &added {
         if !parents.iter_ancestors(e).any(|a| roots.contains(a)) {
@@ -375,6 +377,9 @@ fn tag_view_model_meshes(
         }
         let mut ec = commands.entity(e);
         ec.insert(RenderLayers::layer(VIEW_MODEL_LAYER));
+        if probes.0 {
+            continue;
+        }
         if let Some(m) = mat.and_then(|m| materials.get(&m.0)).cloned() {
             ec.insert(MeshMaterial3d(materials.add(StandardMaterial { unlit: true, ..m })));
         }
@@ -433,7 +438,7 @@ fn switch_weapon(
 fn fire(
     mut commands: Commands,
     time: Res<Time>,
-    mouse: Res<ButtonInput<MouseButton>>,
+    input: crate::controls::Input,
     cursor: Single<&CursorOptions>,
     mut loadout: ResMut<Loadout>,
     camera: Single<&GlobalTransform, With<PlayerCamera>>,
@@ -460,7 +465,7 @@ fn fire(
     w.spread = (w.spread - w.def.downKoof * dt).max(0.0);
 
     let autofire = std::env::var("PG3D_AUTOFIRE").is_ok(); // automated tests
-    let wants = autofire || (mouse.pressed(MouseButton::Left) && cursor.grab_mode != CursorGrabMode::None);
+    let wants = autofire || (input.pressed(Action::Fire) && cursor.grab_mode != CursorGrabMode::None);
     if !wants || loadout.cooldown > 0.0 || loadout.reloading > 0.0 {
         return;
     }
@@ -470,7 +475,7 @@ fn fire(
             loadout.reloading = w.reload_time;
             loadout.play = Some("Reload");
             crate::sound::play(&mut commands, w.sounds.get("reload"), None, 0.8);
-        } else if mouse.just_pressed(MouseButton::Left) {
+        } else if input.just_pressed(Action::Fire) {
             crate::sound::play(&mut commands, w.sounds.get("empty"), None, 0.8);
         }
         return;
@@ -547,7 +552,7 @@ fn spread_dir(rot: Quat, deg: f32, t: f32, i: u32) -> Dir3 {
     Dir3::new(rot * local).unwrap_or(Dir3::NEG_Z)
 }
 
-fn reload(mut commands: Commands, keys: Res<ButtonInput<KeyCode>>, time: Res<Time>, mut loadout: ResMut<Loadout>) {
+fn reload(mut commands: Commands, input: crate::controls::Input, time: Res<Time>, mut loadout: ResMut<Loadout>) {
     let loadout = &mut *loadout;
     let cur = loadout.current;
     if loadout.reloading > 0.0 {
@@ -563,7 +568,7 @@ fn reload(mut commands: Commands, keys: Res<ButtonInput<KeyCode>>, time: Res<Tim
         return;
     }
     let Some(w) = loadout.weapons.get(cur) else { return };
-    if keys.just_pressed(KeyCode::KeyR) && w.def.isMelee == 0 && w.clip < w.def.ammoInClip && w.reserve > 0 {
+    if input.just_pressed(Action::Reload) && w.def.isMelee == 0 && w.clip < w.def.ammoInClip && w.reserve > 0 {
         loadout.reloading = w.reload_time;
         loadout.play = Some("Reload");
         crate::sound::play(&mut commands, w.sounds.get("reload"), None, 0.8);
@@ -652,7 +657,7 @@ fn update_hud(loadout: Res<Loadout>, mut text: Single<&mut Text, With<HudText>>)
 /// we use 70, so scale by the same ratio.
 #[allow(clippy::type_complexity)]
 fn zoom(
-    mouse: Res<ButtonInput<MouseButton>>,
+    input: crate::controls::Input,
     mut commands: Commands,
     mut loadout: ResMut<Loadout>,
     mut cam: Single<&mut Projection, (With<PlayerCamera>, Without<ViewModel>)>,
@@ -661,7 +666,7 @@ fn zoom(
     time: Res<Time>,
 ) {
     let Some(w) = loadout.current() else { return };
-    let want = w.def.isZooming != 0 && mouse.pressed(MouseButton::Right) && loadout.reloading <= 0.0;
+    let want = w.def.isZooming != 0 && input.pressed(Action::Aim) && loadout.reloading <= 0.0;
     let target = if want { 70.0 * w.def.fieldOfViewZomm / 75.0 } else { 70.0 };
     if want != *zoomed {
         let key = if want { "zoomIn" } else { "zoomOut" };

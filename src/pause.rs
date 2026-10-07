@@ -22,7 +22,8 @@ impl Plugin for PausePlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<Paused>()
             .add_systems(Startup, spawn_pause_screen)
-            .add_systems(Update, (setup, toggle, clicks, crate::settings_ui::settings_sliders));
+            .add_plugins(crate::settings_ui::SettingsUiPlugin)
+            .add_systems(Update, (setup, toggle, clicks));
     }
 }
 
@@ -34,9 +35,13 @@ fn spawn_pause_screen(mut commands: Commands, assets: Res<AssetServer>, data: Re
     commands.insert_resource(PauseScreen(e));
 }
 
-fn setup(mut screens: Query<&mut NguiScreen, Added<NguiScreen>>, settings: Res<crate::settings::Settings>) {
+fn setup(
+    mut screens: Query<&mut NguiScreen, Added<NguiScreen>>,
+    settings: Res<crate::settings::Settings>,
+    controls: Res<crate::controls::Controls>,
+) {
     for mut s in &mut screens {
-        crate::settings_ui::setup_settings(&mut s, &settings);
+        crate::settings_ui::setup_settings(&mut s, &settings, &controls);
         // the window's own tab bar and its "Settings" header are drawn by the pause panel
         for i in 0..s.nodes.len() {
             if s.nodes[i].name == "GamepadSettingsButton" {
@@ -77,11 +82,13 @@ fn toggle(
     mut commands: Commands,
     screen: Res<PauseScreen>,
     over: Res<crate::results::MatchOver>,
+    rebinding: Res<crate::settings_ui::Rebinding>,
+    frame: Res<bevy::diagnostic::FrameCount>,
 ) {
     // PG3D_PAUSE=1 (automated tests): open the pause screen after 2 seconds
     let test = std::env::var("PG3D_PAUSE").is_ok() && !paused.0 && time.elapsed_secs() > 2.0;
-    if over.0 {
-        return; // the results screen is up
+    if over.0 || rebinding.busy(&frame) {
+        return; // the results screen is up / Esc belongs to the key binding popup
     }
     if keys.just_pressed(KeyCode::Escape) || test {
         let on = !paused.0;

@@ -22,12 +22,17 @@ impl Default for Settings {
 }
 
 impl Settings {
-    fn path() -> std::path::PathBuf {
+    /// ~/.config/pixel-gun-3d-rs (or $XDG_CONFIG_HOME/pixel-gun-3d-rs).
+    pub fn config_dir() -> std::path::PathBuf {
         let base = std::env::var_os("XDG_CONFIG_HOME")
             .map(std::path::PathBuf::from)
             .or_else(|| std::env::var_os("HOME").map(|h| std::path::PathBuf::from(h).join(".config")))
             .unwrap_or_else(|| ".".into());
-        base.join("pixel-gun-3d-rs/settings.json")
+        base.join("pixel-gun-3d-rs")
+    }
+
+    fn path() -> std::path::PathBuf {
+        Self::config_dir().join("settings.json")
     }
 
     pub fn load() -> Self {

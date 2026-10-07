@@ -6,23 +6,33 @@
 //!   * camera exposure = 1 and tone mapping off, so "1.0" in a shader is "1.0" on screen
 //!   * baked lightmaps are converted by the exporter (value^2.2) and attached per mesh
 //!   * ambient light / fog / sun come from the scene's RenderSettings and Lights
+//!   * moving things (zombies, weapons, pickups) are lit by the map's baked light probes,
+//!     resampled by ../pixel-gun-3d-re/scripts/export_probes.py into a Bevy irradiance
+//!     volume (probes.json + probes.bin). Like Unity, they then get no flat ambient light.
 
 use bevy::{
-    camera::Exposure,
+    asset::RenderAssetUsages,
+    camera::{Exposure, visibility::RenderLayers},
+    render::render_resource::{Extent3d, TextureDimension, TextureFormat},
     core_pipeline::tonemapping::Tonemapping,
     gltf::GltfExtras,
+    light::IrradianceVolume,
     pbr::{DistanceFog, FogFalloff, Lightmap},
     prelude::*,
 };
 use serde::Deserialize;
 
-use crate::map::{CurrentMap, MapInfo};
+use crate::{
+    DataDir,
+    map::{CurrentMap, MapInfo},
+};
 
 pub struct LightingPlugin;
 
 impl Plugin for LightingPlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(Startup, (setup_lights, setup_camera_look).after(crate::camera::spawn_camera))
+        app.init_resource::<HasProbes>()
+            .add_systems(Startup, (setup_lights, setup_camera_look).after(crate::camera::spawn_camera))
             .add_systems(Update, (attach_lightmaps, set_lightmap_exposure));
     }
 }
@@ -56,12 +66,64 @@ fn setup_camera_look(
     }
 }
 
-fn setup_lights(mut commands: Commands, info: Res<MapInfo>) {
+/// True when the current map has baked light probes (an irradiance volume).
+#[derive(Resource, Default)]
+pub struct HasProbes(pub bool);
+
+#[derive(Deserialize)]
+struct ProbeGrid {
+    resolution: [u32; 3],
+    min: Vec3,
+    max: Vec3,
+}
+
+/// The map's light probes as an irradiance volume entity (see export_probes.py).
+fn spawn_probes(commands: &mut Commands, images: &mut Assets<Image>, data: &DataDir, map: &CurrentMap) -> bool {
+    let dir = crate::map::map_dir(data, map);
+    let Some(grid) =
+        std::fs::read_to_string(dir.join("probes.json")).ok().and_then(|s| serde_json::from_str::<ProbeGrid>(&s).ok())
+    else {
+        return false;
+    };
+    let [rx, ry, rz] = grid.resolution;
+    let size = Extent3d { width: rx, height: 2 * ry, depth_or_array_layers: 3 * rz };
+    let Ok(bytes) = std::fs::read(dir.join("probes.bin")) else { return false };
+    if bytes.len() != (size.width * size.height * size.depth_or_array_layers * 8) as usize {
+        warn!("probes.bin has the wrong size; re-run export_probes.py");
+        return false;
+    }
+    let image =
+        Image::new(size, TextureDimension::D3, bytes, TextureFormat::Rgba16Float, RenderAssetUsages::RENDER_WORLD);
+    let centre = (grid.min + grid.max) / 2.0;
+    // voxel centres sit on the grid's corners: the volume reaches half a voxel further
+    let voxel = (grid.max - grid.min) / (Vec3::new(rx as f32, ry as f32, rz as f32) - 1.0).max(Vec3::ONE);
+    let extent = grid.max - grid.min + voxel;
+    commands.spawn((
+        Name::new("light probes"),
+        LightProbe { falloff: Vec3::ZERO },
+        IrradianceVolume { voxels: images.add(image), intensity: 1.0, affects_lightmapped_meshes: false },
+        Transform::from_translation(centre).with_scale(extent),
+        RenderLayers::from_layers(&[0, 1]),
+    ));
+    info!("light probes: {rx}x{ry}x{rz} irradiance volume, {extent:.1} m");
+    true
+}
+
+fn setup_lights(
+    mut commands: Commands,
+    info: Res<MapInfo>,
+    data: Res<DataDir>,
+    map: Res<CurrentMap>,
+    mut images: ResMut<Assets<Image>>,
+) {
     let r = &info.render;
-    // Ambient only lights things that have no lightmap (the lightmap already has it).
+    let probes = std::env::var("PG3D_NOPROBES").is_err() && spawn_probes(&mut commands, &mut images, &data, &map);
+    commands.insert_resource(HasProbes(probes));
+    // Ambient only lights things that have no lightmap (the lightmap already has it) and,
+    // when the map has light probes, nothing at all: Unity bakes the ambient into them.
     commands.insert_resource(GlobalAmbientLight {
         color: gamma(r.ambient_sky.unwrap_or([0.4; 3])),
-        brightness: r.ambient_intensity.unwrap_or(1.0),
+        brightness: if probes { 0.0 } else { r.ambient_intensity.unwrap_or(1.0) },
         affects_lightmapped_meshes: false,
     });
     // Sun: the map's directional light, or a default one.
@@ -82,7 +144,7 @@ fn setup_lights(mut commands: Commands, info: Res<MapInfo>) {
         },
         Transform::default().looking_to(dir.normalize_or(Vec3::NEG_Y), Vec3::Y),
         // also light the first-person weapon (drawn on render layer 1)
-        bevy::camera::visibility::RenderLayers::from_layers(&[0, 1]),
+        RenderLayers::from_layers(&[0, 1]),
     ));
 }
 
