@@ -27,6 +27,7 @@ $PY scripts/export_map.py level17 --out lobby --skip MainMenuNGUI FriendsWindowG
   --prefab slo_seasonlobby_current:SeasonLobbyRoot 2>/dev/null | grep -E '^\{' | cut -c1-120
 $PY scripts/export_character.py 2>/dev/null | grep '^character' | cut -c1-120
 $PY scripts/export_ngui.py resources.assets AllModesView modes 2>/dev/null | grep -E '^modes'
+$PY scripts/export_keys.py 2>/dev/null | grep -E "^keys"
 $PY scripts/export_previews.py 2>/dev/null | grep previews
 $PY scripts/export_ngui.py resources.assets SettingsWindow settings 2>/dev/null | grep -E '^settings'
 $PY scripts/export_ngui.py resources.assets SettingsPanel pause 2>/dev/null | grep -E '^pause'

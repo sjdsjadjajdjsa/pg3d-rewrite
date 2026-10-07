@@ -281,6 +281,18 @@ class Ngui:
             rc = d["mRect"]
             node["texture"] = {"png": self.texture_png(tex, "textures", out) if tex and tex.type.name == "Texture2D" else None,
                                "uv": [rc["x"], rc["y"], rc["width"], rc["height"]]}
+            # a custom material (e.g. the SDF icon shader of the PC key tips): its shader name
+            # and number/colour settings
+            mat = self.resolve(owner, d["mMat"]) if d.get("mMat", {}).get("m_PathID") else None
+            if mat is not None and mat.type.name == "Material":
+                m = mat.read()
+                sh = m.m_Shader.deref()
+                props = m.m_SavedProperties
+                node["texture"]["material"] = {
+                    "shader": sh.read().m_ParsedForm.m_Name if sh is not None and hasattr(sh.read(), "m_ParsedForm") else (sh.read().m_Name if sh else None),
+                    "floats": {(k if isinstance(k, str) else k.name): v for k, v in props.m_Floats},
+                    "colors": {(k if isinstance(k, str) else k.name): [v.r, v.g, v.b, v.a] for k, v in props.m_Colors},
+                }
         elif k == "UIPanel":
             node["panel"] = {"alpha": d["mAlpha"], "depth": d["mDepth"], "clipping": d["mClipping"],
                              "clip": [d["mClipRange"]["x"], d["mClipRange"]["y"], d["mClipRange"]["z"], d["mClipRange"]["w"]]}
