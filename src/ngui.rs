@@ -29,6 +29,8 @@ pub struct NguiPlugin;
 
 impl Plugin for NguiPlugin {
     fn build(&self, app: &mut App) {
+        bevy::asset::embedded_asset!(app, "glyph.wgsl");
+        app.add_plugins(UiMaterialPlugin::<GlyphMaterial>::default());
         app.add_message::<NguiClick>()
             .add_message::<NguiSlider>()
             .add_systems(Update, (gamma_blend_fix, layout, (hover, clicks, cover_crop, texture_uv, drag_sliders)).chain());
@@ -174,6 +176,9 @@ struct AtlasDef {
 struct FontDef {
     png: String,
     size: f32,
+    /// font page size in pixels
+    #[serde(default)]
+    page: Option<[f32; 2]>,
     /// unicode code point -> [x, y, w, h, offset x, offset y, advance]
     glyphs: HashMap<String, [f32; 7]>,
 }
@@ -615,6 +620,7 @@ fn layout(
     window: Single<&Window>,
     mut resized: MessageReader<WindowResized>,
     mut nodes_q: Query<(&mut Node, &mut Visibility, &mut GlobalZIndex), Without<NguiScreen>>,
+    mut glyph_mats: ResMut<Assets<GlyphMaterial>>,
 ) {
     let any_resize = resized.read().count() > 0;
     let wsize = Vec2::new(window.width(), window.height());
@@ -680,7 +686,7 @@ fn layout(
                 *gz = GlobalZIndex(z);
             }
             if nd.label.is_some() && visible {
-                build_glyphs(&mut commands, screen, i, e, sr, k, palpha);
+                build_glyphs(&mut commands, &mut glyph_mats, screen, i, e, sr, k, palpha);
             }
             if visible {
                 build_frame(&mut commands, screen, i, e, sr, k, palpha);
@@ -968,7 +974,17 @@ fn make_widget(screen: &NguiScreen, i: usize, alpha: f32, k: f32, sr: Rect) -> O
 }
 
 /// Lay out a bitmap-font label as one image node per glyph (plus outline/shadow copies).
-fn build_glyphs(commands: &mut Commands, screen: &mut NguiScreen, i: usize, e: Entity, sr: Rect, k: f32, alpha: f32) {
+#[allow(clippy::too_many_arguments)]
+fn build_glyphs(
+    commands: &mut Commands,
+    mats: &mut Assets<GlyphMaterial>,
+    screen: &mut NguiScreen,
+    i: usize,
+    e: Entity,
+    sr: Rect,
+    k: f32,
+    alpha: f32,
+) {
     let nd = &screen.nodes[i];
     let (Some(l), Some(w)) = (&nd.label, &nd.widget) else { return };
     let text = screen.text(i);
@@ -1058,26 +1074,31 @@ fn build_glyphs(commands: &mut Commands, screen: &mut NguiScreen, i: usize, e: E
             }
             let x = lx + (gx + g[4]) * s;
             let y = y0 + (li as f32 * line_h + g[5]) * s;
-            let rect = Rect::new(g[0], g[1], g[0] + g[2], g[1] + g[3]);
+            let (gw, gh) = (g[2] * s, g[3] * s);
+            let page = font.page.unwrap_or([1024.0, 1024.0]);
+            let mut mat = |c: Color, y0: f32, y1: f32| {
+                let c = c.to_srgba();
+                MaterialNode(mats.add(GlyphMaterial {
+                    texture: img.clone(),
+                    glyph: GlyphUniform {
+                        rect: Vec4::new(g[0] / page[0], (g[1] + g[3] * y0) / page[1], g[2] / page[0], g[3] * (y1 - y0) / page[1]),
+                        color: Vec4::new(c.red, c.green, c.blue, c.alpha),
+                    },
+                }))
+            };
             let place = |off: Vec2| Node {
                 position_type: PositionType::Absolute,
                 left: px((x + off.x) * k),
                 top: px((y + off.y) * k),
-                width: px(g[2] * s * k),
-                height: px(g[3] * s * k),
+                width: px(gw * k),
+                height: px(gh * k),
                 ..default()
             };
             for off in &effect_offsets {
-                let mut im = ImageNode::new(img.clone()).with_color(effect_color);
-                im.rect = Some(rect);
-                im.image_mode = NodeImageMode::Stretch;
-                kids.push((place(*off), im, Pickable::IGNORE, ZIndex(0)));
+                kids.push((place(*off), mat(effect_color, 0.0, 1.0), Pickable::IGNORE, ZIndex(0)));
             }
             if !l.gradient {
-                let mut im = ImageNode::new(img.clone()).with_color(*col);
-                im.rect = Some(rect);
-                im.image_mode = NodeImageMode::Stretch;
-                kids.push((place(Vec2::ZERO), im, Pickable::IGNORE, ZIndex(1)));
+                kids.push((place(Vec2::ZERO), mat(*col, 0.0, 1.0), Pickable::IGNORE, ZIndex(1)));
                 continue;
             }
             // vertical gradient: draw the glyph as horizontal strips, each tinted by the
@@ -1089,13 +1110,10 @@ fn build_glyphs(commands: &mut Commands, screen: &mut NguiScreen, i: usize, e: E
                 let t = (a + b) / 2.0;
                 let gc: Vec<f32> = (0..4).map(|i| l.gradient_top[i] + (l.gradient_bottom[i] - l.gradient_top[i]) * t).collect();
                 let tint_c = Color::srgba(c.red * gc[0], c.green * gc[1], c.blue * gc[2], c.alpha * gc[3]);
-                let mut im = ImageNode::new(img.clone()).with_color(tint_c);
-                im.rect = Some(Rect::new(g[0], g[1] + g[3] * a, g[0] + g[2], g[1] + g[3] * b));
-                im.image_mode = NodeImageMode::Stretch;
                 let mut n = place(Vec2::ZERO);
                 n.top = px((y + g[3] * a * s) * k);
                 n.height = px(g[3] * (b - a) * s * k);
-                kids.push((n, im, Pickable::IGNORE, ZIndex(1)));
+                kids.push((n, mat(tint_c, a, b), Pickable::IGNORE, ZIndex(1)));
             }
         }
     }
@@ -1219,7 +1237,6 @@ fn gamma_blend_fix(
             .atlases
             .values()
             .map(|a| (&a.0, None))
-            .chain(s.fonts.values().map(|f| (&f.0, None)))
             .chain(s.textures.iter().map(|(png, h)| (h, sdf.get(png.as_str()).copied())));
         for (h, sdf) in handles {
             if done.contains(&h.id()) {
@@ -1286,5 +1303,27 @@ fn texture_uv(screens: Query<&NguiScreen>, mut q: Query<&mut ImageNode>, images:
                 img.rect = Some(rect);
             }
         }
+    }
+}
+
+/// One bitmap-font glyph (see glyph.wgsl).
+#[derive(Asset, TypePath, bevy::render::render_resource::AsBindGroup, Clone)]
+pub struct GlyphMaterial {
+    #[texture(0)]
+    #[sampler(1)]
+    texture: Handle<Image>,
+    #[uniform(2)]
+    glyph: GlyphUniform,
+}
+
+#[derive(Clone, Copy, bevy::render::render_resource::ShaderType)]
+struct GlyphUniform {
+    rect: Vec4,
+    color: Vec4,
+}
+
+impl UiMaterial for GlyphMaterial {
+    fn fragment_shader() -> bevy::shader::ShaderRef {
+        "embedded://pixel_gun_3d_rs/glyph.wgsl".into()
     }
 }
