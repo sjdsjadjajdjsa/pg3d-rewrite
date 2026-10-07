@@ -26,6 +26,17 @@ impl Plugin for ArmoryPlugin {
 /// Category tabs along the top, in categoryNabor order (1 primary .. 6 heavy).
 const TABS: [&str; 6] = ["PrimaryCategory", "BackupCategory", "MeleeCategory", "SpecilCategory", "SniperCategory", "PremiumCategory"];
 
+/// Sections in the left column: (button, its category tabs along the top).
+const SECTIONS: [(&str, &str); 7] = [
+    ("BtnCategory1", "GridCategoriesWeapons"),
+    ("BtnCategory3", "GridCategoriesWear"),
+    ("BtnCategory6", "GridCategoriesGadgets"),
+    ("BtnCategory_Misc", "GridCategoriesMisc"),
+    ("BtnCategory4", "GridCategoriesBattle"),
+    ("BtnCategory_Pets", "GridCategoriesPets"),
+    ("BtnCategory8", "GridCategoriesCraft"),
+];
+
 /// Grid layout in 1_FirstGrid's space. OBSERVED (1280x720 screenshots, 0.9375 px per
 /// virtual pixel): 4 columns 204 px apart, rows 180 px apart, cells 194x178 px.
 const COLUMNS: usize = 4;
@@ -113,6 +124,9 @@ struct Armory {
     /// weapon shown in each cell
     shown: Vec<String>,
     category: i32,
+    /// open section (SECTIONS index; 0 = Weapon) and, outside Weapon, its open tab
+    section: usize,
+    tab: usize,
     selected: Option<String>,
     loadout: SavedLoadout,
     dirty: bool,
@@ -187,14 +201,13 @@ fn setup(
         if let Some(i) = s.find_path("BankShopViewPrefab(Clone)/ObjectForCenter") {
             s.set_pos(i, Vec2::new(-72.7, 0.0));
         }
-        // left column: Weapon is the open section
-        if let Some(col) = s.find("GridCategory") {
-            let buttons: Vec<usize> = s.subtree(col).into_iter().filter(|&b| s.nodes[b].parent == Some(col)).collect();
-            for b in buttons {
-                let on = s.nodes[b].name == "BtnCategory1";
-                if let Some(p) = s.find_in(b, "PressedState") {
-                    s.set_active(p, on);
-                }
+        // the left column's sections and every section's tabs can be clicked
+        for (btn, grid) in SECTIONS {
+            if let Some(i) = s.find(btn) {
+                s.make_button(i);
+            }
+            for t in section_tabs(&s, grid) {
+                s.make_button(t);
             }
         }
         if let Some(i) = s.find_path("ExpProgressMiniView/Deafault/icon_Star/Label_Lvl") {
@@ -241,6 +254,8 @@ fn setup(
             cells,
             shown: vec![],
             category: 1,
+            section: 0,
+            tab: 0,
             selected: None,
             loadout: SavedLoadout::load(),
             dirty: true,
@@ -280,7 +295,14 @@ fn clicks(
 ) {
     for c in clicks.read() {
         let Ok((s, mut a)) = screens.get_mut(c.screen) else { continue };
-        if let Some(k) = TABS.iter().position(|t| *t == c.name) {
+        if let Some(k) = SECTIONS.iter().position(|(b, _)| *b == c.name) {
+            a.section = k;
+            a.tab = 0;
+            a.dirty = true;
+        } else if let Some(k) = section_tabs(s, SECTIONS[a.section].1).iter().position(|&t| t == c.node).filter(|_| a.section != 0) {
+            a.tab = k;
+            a.dirty = true;
+        } else if let Some(k) = TABS.iter().position(|t| *t == c.name) {
             a.category = k as i32 + 1;
             a.selected = None;
             a.dirty = true;
@@ -313,6 +335,46 @@ fn refresh(
             continue;
         }
         a.dirty = false;
+        // left column: the open section is drawn pressed, its tabs shown along the top
+        for (k, (btn, grid)) in SECTIONS.iter().enumerate() {
+            if let Some(b) = s.find(btn)
+                && let Some(p) = s.find_in(b, "PressedState")
+            {
+                s.set_active(p, k == a.section);
+            }
+            if let Some(g) = s.find(grid) {
+                s.set_active(g, k == a.section);
+            }
+        }
+        if let Some(i) = s.find_path("ArmoryView/NoOffers") {
+            s.set_active(i, a.section != 0);
+        }
+        // the stats panel only for weapons
+        if let Some(i) = s.find_path("Camera/Right (OFF)") {
+            s.set_active(i, a.section == 0);
+        }
+        if a.section != 0 {
+            // sections we have no items for yet: their tabs, an empty grid and "No Items!"
+            for (k, t) in section_tabs(&s, SECTIONS[a.section].1).into_iter().enumerate() {
+                if let Some(p) = s.find_in(t, "Pressed") {
+                    s.set_active(p, k == a.tab);
+                }
+            }
+            for &c in &a.cells {
+                s.set_active(c, false);
+            }
+            for name in ["Guns_Properties", "Melee_Properties"] {
+                if let Some(i) = s.find(name) {
+                    s.set_active(i, false);
+                }
+            }
+            for path in ["PanelProperties (OFF)/Special", "Properties (OFF)/btn0/BtnEquip"] {
+                if let Some(i) = s.find_path(path) {
+                    s.set_active(i, false);
+                }
+            }
+            continue;
+        }
         let cat = a.category;
         // tabs: the open one is drawn pressed; each shows the icon of the weapon equipped in
         // that category instead of the grey silhouette (OBSERVED)
@@ -404,6 +466,12 @@ fn preview_on_when_open(
 }
 
 /// Colour of the level band of a cell by rarity.
+/// The tab buttons of a section's top row (direct children of its grid).
+fn section_tabs(s: &NguiScreen, grid: &str) -> Vec<usize> {
+    let Some(g) = s.find(grid) else { return vec![] };
+    s.subtree(g).into_iter().filter(|&j| s.nodes[j].parent == Some(g)).collect()
+}
+
 fn rarity_band(r: i32) -> [f32; 4] {
     match r {
         1 => [0.36, 0.89, 0.36, 1.0],
