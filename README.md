@@ -50,6 +50,8 @@ Game install (read-only, never modify, never copy into git):
     The lobby scene is `level17` = Assets/Sources/Scenes/Menu_Custom.unity.
     `scripts/export_ngui.py resources.assets AllModesView modes` exports the "To Battle" game mode hub and
     `scripts/export_previews.py` the map loading pictures (bundles level_loading_previews_*).
+    `scripts/export_ngui.py resources.assets SettingsWindow settings` exports the settings window and
+    `scripts/export_pickups.py` the in-match bonus models/sounds (prefab BonusGeneric).
     `scripts/find_behaviours.py` now also searches the built-in scenes (levelN) and resolves their scripts
     through globalgamemanagers.assets.
 

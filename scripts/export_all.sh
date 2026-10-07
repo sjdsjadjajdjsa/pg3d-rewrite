@@ -27,6 +27,8 @@ $PY scripts/export_map.py level17 --out lobby --skip MainMenuNGUI FriendsWindowG
 $PY scripts/export_character.py 2>/dev/null | grep '^character' | cut -c1-120
 $PY scripts/export_ngui.py resources.assets AllModesView modes 2>/dev/null | grep -E '^modes'
 $PY scripts/export_previews.py 2>/dev/null | grep previews
+$PY scripts/export_ngui.py resources.assets SettingsWindow settings 2>/dev/null | grep -E '^settings'
+$PY scripts/export_pickups.py 2>/dev/null | grep -E '^pickups' | cut -c1-80
 echo "== weapons"
 $PY scripts/export_weapons.py 2>/dev/null | grep -E '^(weapons|model)'
 echo "== rockets"

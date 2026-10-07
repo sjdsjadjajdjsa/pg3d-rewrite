@@ -45,8 +45,9 @@ def load_level_env(level: str):
     files = [GAME_DATA / level, GAME_DATA / "resources.assets", GAME_DATA / "globalgamemanagers.assets"]
     files += sorted(GAME_DATA.glob("sharedassets*.assets"))
     # texture/mesh data lives next to the asset files in .resS / .resource streams
+    names = {x.name for x in files}
     files += [f for f in GAME_DATA.iterdir() if f.suffix in (".resS", ".resource")
-              and (f.stem in {x.name for x in files} or f.name.startswith(level))]
+              and (f.stem in names or f.stem + ".assets" in names or f.name.startswith(level))]
     files += [GAME_DATA / "Resources/unity default resources", GAME_DATA / "Resources/unity_builtin_extra"]
     env = UnityPy.load(*[str(f) for f in files])
     return env, str(GAME_DATA / level), len(files)
@@ -205,6 +206,7 @@ class Exporter:
         self.cameras = []
         self.sounds = {}         # filled by export_weapons.export_sounds for prefabs
         self.skip_names = set()  # GameObject names to leave out (with their children)
+        self.force_active = set()  # inactive GameObjects to export anyway (switched on by game code)
         self.markers = []        # spawn zones etc. (empty GameObjects with telling names)
         self.lightmaps = []      # lightmap index -> png path (or None)
         self.lightmap_scale = 1.0
@@ -445,7 +447,7 @@ class Exporter:
         go = deref(t.m_GameObject)
         if go is None:
             return None
-        if not getattr(go, "m_IsActive", True) or go.m_Name in self.skip_names:
+        if (not getattr(go, "m_IsActive", True) and go.m_Name not in self.force_active) or go.m_Name in self.skip_names:
             self.stats["inactive_skipped"] += 1
             return None
         tr, rot, sc = unity_trs_to_gltf(t)
