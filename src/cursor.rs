@@ -79,6 +79,9 @@ fn apply(
     mut current: Local<u32>,
 ) {
     let Some(source) = source else { return };
+    if std::env::var("PG3D_PLAIN_CURSOR").is_ok() {
+        return;
+    }
     let Ok((e, window)) = windows.single() else { return };
     let n = ((SIZE_720 * window.height() / 720.0).round() as u32).clamp(16, 128);
     if *current == n {
