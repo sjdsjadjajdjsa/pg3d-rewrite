@@ -20,6 +20,11 @@ for m in "${MAPS[@]}"; do
   $PY scripts/export_map.py "$m" 2>/dev/null | grep -E '^\{' | cut -c1-200 || echo "   map export FAILED"
   $PY scripts/export_navmesh.py "$m" 2>/dev/null | grep polygons || echo "   navmesh export FAILED"
 done
+echo "== menu (lobby UI, lobby scene, character)"
+$PY scripts/export_ngui.py level17 MainMenuNGUI lobby 2>/dev/null | grep -E '^(lobby|strings)'
+$PY scripts/export_map.py level17 --out lobby --skip MainMenuNGUI FriendsWindowGUI \
+  --prefab slo_seasonlobby_current:SeasonLobbyRoot 2>/dev/null | grep -E '^\{' | cut -c1-120
+$PY scripts/export_character.py 2>/dev/null | grep '^character' | cut -c1-120
 echo "== weapons"
 $PY scripts/export_weapons.py 2>/dev/null | grep -E '^(weapons|model)'
 echo "== rockets"

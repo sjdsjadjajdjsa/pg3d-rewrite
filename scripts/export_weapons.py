@@ -233,8 +233,14 @@ def euler_to_quat(deg):
     return np.stack([x, y, z, w], axis=1)
 
 
-def export_animations(ex, assets, inner_name):
-    """Convert the legacy Animation clips on `inner_name` into glTF animations."""
+def export_animations(ex, assets, inner_name, animation=None, root=None):
+    """Convert the legacy Animation clips on `inner_name` into glTF animations.
+
+    Or pass `animation` (an Animation object from anywhere) and `root` (the glTF node its
+    curve paths start from) directly, e.g. a lobby animator driving a separately exported
+    character."""
+    if animation is not None and root is not None:
+        return _export_clips(ex, animation, root)
     # several prefabs can contain an object with this name: take the one we exported
     anim, root = None, None
     for o in assets.objects:
@@ -252,7 +258,10 @@ def export_animations(ex, assets, inner_name):
             break
     if anim is None:
         return []
-    a, go = anim
+    return _export_clips(ex, anim[0], root)
+
+
+def _export_clips(ex, a, root):
     doc = ex.vis.doc
 
     def resolve(path):

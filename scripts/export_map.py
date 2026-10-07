@@ -40,7 +40,21 @@ MARKER_RE = re.compile(r"spawn|createzone|creationzone|respawn|point", re.I)
 
 # ---------------------------------------------------------------- loading
 
+def load_level_env(level: str):
+    """Scenes built into the game itself (levelN files, e.g. level17 = the lobby)."""
+    files = [GAME_DATA / level, GAME_DATA / "resources.assets", GAME_DATA / "globalgamemanagers.assets"]
+    files += sorted(GAME_DATA.glob("sharedassets*.assets"))
+    # texture/mesh data lives next to the asset files in .resS / .resource streams
+    files += [f for f in GAME_DATA.iterdir() if f.suffix in (".resS", ".resource")
+              and (f.stem in {x.name for x in files} or f.name.startswith(level))]
+    files += [GAME_DATA / "Resources/unity default resources", GAME_DATA / "Resources/unity_builtin_extra"]
+    env = UnityPy.load(*[str(f) for f in files])
+    return env, str(GAME_DATA / level), len(files)
+
+
 def load_env(map_name: str):
+    if re.fullmatch(r"level\d+", map_name):
+        return load_level_env(map_name)
     idx = json.loads(INDEX.read_text())
     root = idx["root"]
     scene = glob.glob(f"{root}/{map_name}_scene/*/*")
@@ -64,6 +78,14 @@ def load_env(map_name: str):
     builtin = [str(GAME_DATA / "Resources/unity default resources"), str(GAME_DATA / "Resources/unity_builtin_extra")]
     env = UnityPy.load(*sorted(seen), *builtin)
     return env, scene[0], len(seen)
+
+
+def serialized_in(f):
+    """All SerializedFiles inside one loaded file (a bundle can hold several)."""
+    from UnityPy.files import SerializedFile
+    if isinstance(f, SerializedFile):
+        return [f]
+    return [s for c in (getattr(f, "files", None) or {}).values() for s in serialized_in(c)]
 
 
 def iter_serialized(env):
@@ -180,6 +202,7 @@ class Exporter:
         self.textures = {}       # texture key -> gltf texture index
         self.colliders = []
         self.lights = []
+        self.cameras = []
         self.sounds = {}         # filled by export_weapons.export_sounds for prefabs
         self.skip_names = set()  # GameObject names to leave out (with their children)
         self.markers = []        # spawn zones etc. (empty GameObjects with telling names)
@@ -414,7 +437,8 @@ class Exporter:
         for sf in iter_serialized(self.env):
             # objects that live in the scene bundle itself
             p = getattr(getattr(sf, "parent", None), "path", "") or ""
-            if os.path.abspath(p) == os.path.abspath(scene_path) or sf.name.startswith("BuildPlayer-"):
+            if (os.path.abspath(p) == os.path.abspath(scene_path) or sf.name.startswith("BuildPlayer-")
+                    or sf.name == os.path.basename(scene_path)):
                 yield from sf.objects.values()
 
     def walk(self, t, parent_world):
@@ -462,6 +486,8 @@ class Exporter:
         self.collect_colliders(go.m_Name, comps, world)
         if MARKER_RE.search(go.m_Name):
             self.markers.append({"name": go.m_Name, "position": world[:3, 3].tolist()})
+        for cam in comps.get("Camera", []):
+            self.camera(go.m_Name, cam, world)
         for lt in comps.get("Light", []):
             self.light(go.m_Name, lt, world)
         for ch in t.m_Children:
@@ -604,6 +630,16 @@ class Exporter:
                 self.colliders.append(rec)
                 self.stats[f"collider_{rec['kind']}" + ("_trigger" if trig else "")] += 1
 
+    def camera(self, name, ptr, world):
+        c = deref(ptr)
+        if c is None or not getattr(c, "m_Enabled", True):
+            return
+        fwd = world[:3, :3] @ np.array([0, 0, 1.0])  # mirrored Unity +Z
+        up = world[:3, :3] @ np.array([0, 1.0, 0])
+        self.cameras.append({"name": name, "position": world[:3, 3].tolist(), "forward": fwd.tolist(),
+                             "up": up.tolist(), "fov": getattr(c, "field of view", None) or getattr(c, "m_FieldOfView", 60.0),
+                             "orthographic": bool(getattr(c, "orthographic", False)), "depth": getattr(c, "m_Depth", 0)})
+
     def light(self, name, ptr, world):
         l = deref(ptr)
         if l is None:
@@ -621,7 +657,7 @@ class Exporter:
         self.col.save(self.out)
         (self.out / "colliders.json").write_text(json.dumps(self.colliders))
         info.update(stats=dict(self.stats), lightmap_scale=self.lightmap_scale, render=self.render,
-                    markers=self.markers, lights=self.lights)
+                    markers=self.markers, lights=self.lights, cameras=self.cameras)
         (self.out / "info.json").write_text(json.dumps(info, indent=1))
 
 
@@ -748,6 +784,58 @@ def shader_display_name(shader):
         return getattr(shader, "m_Name", "") or ""
 
 
+def place_prefab(ex, bundle, anchor):
+    """Export the root object of a bundle (e.g. the season lobby decoration) and hang it in
+    the scene at the node called `anchor` (e.g. SeasonLobbyRoot)."""
+    idx = json.loads(INDEX.read_text())
+    paths = glob.glob(f"{idx['root']}/{bundle}/*/*")
+    if not paths:
+        print(f"  no bundle {bundle}", file=sys.stderr)
+        return
+    seen, queue = {paths[0]}, [paths[0]]
+    while queue:
+        e = UnityPy.load(queue.pop())
+        for sf in iter_serialized(e):
+            for ext in sf.externals:
+                rel = idx["cab"].get(ext.path.split("/")[-1])
+                if rel and os.path.join(idx["root"], rel) not in seen:
+                    seen.add(os.path.join(idx["root"], rel))
+                    queue.append(os.path.join(idx["root"], rel))
+    env = UnityPy.load(*sorted(seen))
+    saved_env, ex.env = ex.env, env
+    target = next((i for i, n in enumerate(ex.vis.doc["nodes"]) if n["name"] == anchor), None)
+    bundle_files = [sf for k, f in env.files.items() if os.path.abspath(k) == os.path.abspath(paths[0])
+                    for sf in serialized_in(f)]
+    for o in (x for f in bundle_files for x in f.objects.values()):
+        if o.type.name == "AudioClip":
+            # season lobby music
+            try:
+                clip = o.read()
+                (ex.out / "sounds").mkdir(exist_ok=True)
+                for fname, data in clip.samples.items():
+                    name = "music.wav" if "music" in clip.m_Name.lower() else safe(clip.m_Name) + ".wav"
+                    (ex.out / "sounds" / name).write_bytes(data)
+                    print(f"  sound {clip.m_Name} -> sounds/{name}")
+                    break
+            except Exception as e:
+                print(f"  music: {e!r}"[:160], file=sys.stderr)
+            continue
+        if o.type.name != "Transform":
+            continue
+        t = o.read()
+        if t.m_Father.m_PathID:
+            continue
+        n = ex.walk(t, np.eye(4))
+        if n is None:
+            continue
+        if target is not None:
+            ex.vis.doc["nodes"][target].setdefault("children", []).append(n)
+        else:
+            ex.vis.doc["scenes"][0]["nodes"].append(n)
+        print(f"  placed {t.m_GameObject.read().m_Name} under {anchor if target is not None else 'scene root'}")
+    ex.env = saved_env
+
+
 def list_maps():
     idx = json.loads(INDEX.read_text())
     root = pathlib.Path(idx["root"])
@@ -760,14 +848,27 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("map", nargs="?")
     ap.add_argument("--list", action="store_true")
+    ap.add_argument("--out", help="output folder name (default: the map name)")
+    ap.add_argument("--skip", nargs="*", default=[], help="GameObject names to leave out")
+    ap.add_argument("--animate", nargs="*", default=[], help="objects whose legacy Animation clips to export")
+    ap.add_argument("--prefab", nargs="*", default=[],
+                    help="extra bundle prefabs to place: <bundle>:<scene object to put it under>")
     a = ap.parse_args()
     if a.list or not a.map:
         return list_maps()
     env, scene_path, nbundles = load_env(a.map)
-    out = OUT_ROOT / a.map
+    out = OUT_ROOT / (a.out or a.map)
     ex = Exporter(env, out)
+    ex.skip_names = set(a.skip)
     ex.run(scene_path)
-    ex.save({"map": a.map, "bundles_loaded": nbundles})
+    for spec in a.prefab:
+        place_prefab(ex, *spec.split(":", 1))
+    clips = {}
+    if a.animate:
+        import export_weapons as ew
+        for name in a.animate:
+            clips[name] = ew.export_animations(ex, env, name)
+    ex.save({"map": a.map, "bundles_loaded": nbundles, "clips": clips})
     print(json.dumps(dict(map=a.map, bundles=nbundles, **ex.stats)))
     print(f"-> {out}")
 

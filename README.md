@@ -43,6 +43,12 @@ Game install (read-only, never modify, never copy into git):
     `tools/venv/bin/python scripts/export_rockets.py` → `private/export/rockets/` (all projectile settings +
     models of rockets fired by exported weapons). Shooting bots' bullet colour/size is in bots.json.
 
+11. Menu: `scripts/export_ngui.py level17 MainMenuNGUI lobby` (the lobby's NGUI screen: widget tree,
+    atlases, bitmap fonts, English strings from bundle l_en-gb), `scripts/export_map.py level17 --out lobby
+    --skip MainMenuNGUI FriendsWindowGUI --prefab slo_seasonlobby_current:SeasonLobbyRoot` (3D lobby + season
+    decoration + music) and `scripts/export_character.py` (default player model with the lobby idle animation).
+    The lobby scene is `level17` = Assets/Sources/Scenes/Menu_Custom.unity.
+
 **Shortcut:** `scripts/export_all.sh [maps...]` runs all of the above (indexes only if missing).
 
 Other helpers: `scripts/dump_behaviour.py` (any MonoBehaviour's fields as JSON), `scripts/find_text.py`
