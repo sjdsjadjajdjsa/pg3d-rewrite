@@ -180,6 +180,7 @@ class Exporter:
         self.textures = {}       # texture key -> gltf texture index
         self.colliders = []
         self.lights = []
+        self.sounds = {}         # filled by export_weapons.export_sounds for prefabs
         self.skip_names = set()  # GameObject names to leave out (with their children)
         self.markers = []        # spawn zones etc. (empty GameObjects with telling names)
         self.lightmaps = []      # lightmap index -> png path (or None)
@@ -454,6 +455,10 @@ class Exporter:
                 self.vis.doc["nodes"][idx]["mesh"] = mesh_idx
                 if extras:
                     self.vis.doc["nodes"][idx]["extras"] = extras
+        particle = self.particle_texture(comps)
+        if particle:
+            self.vis.doc["nodes"][idx].setdefault("extras", {}).update(particle_texture=particle,
+                                                                        particle=particle_settings(comps))
         self.collect_colliders(go.m_Name, comps, world)
         if MARKER_RE.search(go.m_Name):
             self.markers.append({"name": go.m_Name, "position": world[:3, 3].tolist()})
@@ -468,6 +473,22 @@ class Exporter:
         if children:
             self.vis.doc["nodes"][idx]["children"] = children
         return idx
+
+    def particle_texture(self, comps):
+        """Texture of a ParticleSystemRenderer's material (muzzle flashes, smoke, ...), as
+        a path relative to the glTF, or None. The particle simulation itself is not exported."""
+        if "ParticleSystemRenderer" not in comps:
+            return None
+        r = deref(comps["ParticleSystemRenderer"][0])
+        mats = list(getattr(r, "m_Materials", []) or []) if r is not None else []
+        if not mats:
+            return None
+        mi = self.material(mats[0])
+        info = self.vis.doc["materials"][mi].get("pbrMetallicRoughness", {}).get("baseColorTexture")
+        if info is None:
+            return None
+        tex = self.vis.doc["textures"][info["index"]]
+        return self.vis.doc["images"][tex["source"]]["uri"]
 
     def visual(self, comps):
         if "MeshRenderer" in comps and "MeshFilter" in comps:
@@ -623,6 +644,36 @@ def texture_float_rgb(tex):
     except Exception as e:
         print(f"  lightmap {tex.m_Name} fmt {fmt}: {e!r}"[:200], file=sys.stderr)
         return None
+
+
+def _minmax(x, default):
+    """Unity MinMaxCurve -> one representative value (constant or middle of two constants)."""
+    if not isinstance(x, dict):
+        return default
+    state, hi, lo = x.get("minMaxState", 0), x.get("scalar", default), x.get("minScalar", default)
+    return (hi + lo) / 2 if state == 3 else hi
+
+
+def particle_settings(comps):
+    """The few ParticleSystem settings we use to fake a burst (muzzle flash, smoke)."""
+    ps = comps.get("ParticleSystem")
+    if not ps:
+        return {}
+    try:
+        d = ps[0].deref().read_typetree()
+    except Exception:
+        return {}
+    init, uv = d.get("InitialModule", {}), d.get("UVModule", {})
+    c = init.get("startColor", {}).get("maxColor", {"r": 1, "g": 1, "b": 1, "a": 1})
+    return {
+        "life": _minmax(init.get("startLifetime"), 0.2),
+        "size": _minmax(init.get("startSize"), 0.5),
+        "color": [c["r"], c["g"], c["b"], c["a"]],
+        "tiles": [uv.get("tilesX", 1), uv.get("tilesY", 1)] if uv.get("enabled") else [1, 1],
+        "row": uv.get("rowIndex", 0),
+        "single_row": uv.get("animationType", 0) == 1,
+        "max": init.get("maxNumParticles", 0),
+    }
 
 
 def obj_key(o):

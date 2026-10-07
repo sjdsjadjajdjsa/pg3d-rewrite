@@ -104,14 +104,83 @@ def export_prefab(row, idx, out, gltf_name, anim_holder, skip=()):
         ex.col.node(name="empty")
     ex.col.doc["scenes"][0]["nodes"] = list(range(len(ex.col.doc["nodes"])))
     clips = export_animations(ex, assets, anim_holder)
+    ex.sounds = export_sounds(assets, go, out)
     return ex, assets, clips
 
 
 def export_model(row, idx):
     name = row[2]
     ex, assets, clips = export_prefab(row, idx, OUT / name, "weapon", f"{name}_Inner")
-    ex.save({"weapon": name, "animations": animation_lengths(assets, f"{name}_Inner"), "clips": clips})
+    ex.save({"weapon": name, "animations": animation_lengths(assets, f"{name}_Inner"), "clips": clips,
+             "sounds": ex.sounds})
     print(f"model {name}: {json.dumps(dict(ex.stats))}")
+
+
+def export_sounds(assets, go, out):
+    """Find AudioClips referenced by the prefab's scripts / AudioSources and write them as
+    <out>/sounds/<field>.wav. Returns {field name: relative file}. The field names are the
+    original ones (e.g. shoot, reload, attackSound, deathSound)."""
+    gen = typetree_generator()
+    assets.typetree_generator = gen
+    files = {f.name: f for f in em.iter_serialized(assets)}
+    found = {}
+
+    def resolve(sf, ptr):
+        fid, pid = ptr["m_FileID"], ptr["m_PathID"]
+        target = sf if fid == 0 else files.get(sf.externals[fid - 1].path.split("/")[-1]) if fid <= len(sf.externals) else None
+        if target is None or pid not in target.objects:
+            return None
+        return target.objects[pid]
+
+    def scan(reader):
+        try:
+            tree = reader.read_typetree()
+        except Exception:
+            return
+        sf = reader.assets_file
+
+        def walk(x, field):
+            if isinstance(x, dict):
+                if set(x) == {"m_FileID", "m_PathID"} and x["m_PathID"]:
+                    ob = resolve(sf, x)
+                    if ob is not None and ob.type.name == "AudioClip" and field not in found:
+                        found[field] = ob
+                    return
+                for k, v in x.items():
+                    walk(v, k)
+            elif isinstance(x, list):
+                for i, v in enumerate(x):
+                    walk(v, f"{field}{i}" if len(x) > 1 else field)
+        walk(tree, "")
+
+    def visit(g):
+        for c in g.m_Component:
+            ptr = getattr(c, "component", c)
+            try:
+                r = ptr.deref()
+            except Exception:
+                continue
+            if r.type.name in ("MonoBehaviour", "AudioSource"):
+                scan(r)
+            if r.type.name == "Transform":
+                for ch in r.read().m_Children:
+                    t = em.deref(ch)
+                    if t is not None and em.deref(t.m_GameObject) is not None:
+                        visit(t.m_GameObject.read())
+    visit(go)
+    result = {}
+    (out / "sounds").mkdir(parents=True, exist_ok=True)
+    for field, ob in found.items():
+        try:
+            clip = ob.read()
+            for _name, data in clip.samples.items():
+                rel = f"sounds/{em.safe(field)}.wav"
+                (out / rel).write_bytes(data)
+                result[field] = rel
+                break
+        except Exception as e:
+            print(f"  sound {field}: {e!r}"[:200], file=sys.stderr)
+    return result
 
 
 FPS = 30.0

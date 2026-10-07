@@ -71,8 +71,8 @@ def main():
         holder = n[:-3] if n.endswith("_go") else n
         # Healt_Point is the floating health bar; the game drives it, we draw our own
         ex, assets, clips = ew.export_prefab(by_name[n], idx, OUT / n, "bot", holder, skip=("Healt_Point",))
-        ex.save({"bot": n, "animations": ew.animation_lengths(assets, holder), "clips": clips})
-        print(f"model {n}: clips={clips} {json.dumps(dict(ex.stats))}")
+        ex.save({"bot": n, "animations": ew.animation_lengths(assets, holder), "clips": clips, "sounds": ex.sounds})
+        print(f"model {n}: clips={clips} sounds={sorted(ex.sounds)} {json.dumps(dict(ex.stats))}")
 
 
 if __name__ == "__main__":

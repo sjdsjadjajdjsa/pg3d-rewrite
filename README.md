@@ -36,6 +36,9 @@ Game install (read-only, never modify, never copy into git):
    ShootingBossBot StalkerBot > private/index/bots.tsv`, then `tools/venv/bin/python scripts/export_bots.py`
    → `private/export/bots/` (stats of all ~250 campaign enemies + models/animations of selected ones).
 
+9. `tools/venv/bin/python scripts/export_navmesh.py <map>` → `private/export/maps/<map>/navmesh.json` (walkable
+   polygons for enemy path finding). Weapon/bot exports now also write `sounds/*.wav` and muzzle-flash particle data.
+
 Other helpers: `scripts/dump_behaviour.py` (any MonoBehaviour's fields as JSON), `scripts/find_text.py`
 (find a string in the asset files), `scripts/probe_settings.py` (colour space, physics, time settings).
 
