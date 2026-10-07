@@ -192,6 +192,10 @@ fn set_lightmap_exposure(
         if let AssetEvent::Added { id } = ev {
             if let Some(mut m) = materials.get_mut(*id) {
                 m.lightmap_exposure = info.lightmap_scale;
+                // Unity's legacy Diffuse/Lambert shaders have no specular highlight or
+                // Fresnel reflection; Bevy's default 0.5 reflectance whitens glass and
+                // anything seen at a grazing angle.
+                m.reflectance = 0.0;
             }
         }
     }
