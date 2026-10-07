@@ -120,6 +120,7 @@ fn collect(
     mut stats: ResMut<PlayerStats>,
     mut loadout: ResMut<Loadout>,
     sounds: Option<Res<PickupSounds>>,
+    mut wallet: ResMut<crate::wallet::Wallet>,
 ) {
     if stats.health <= 0.0 {
         return;
@@ -152,6 +153,8 @@ fn collect(
             p.respawn = RESPAWN_SECS;
             *vis = Visibility::Hidden;
             if p.kind == Kind::Coin {
+                // the prize is one coin (OBSERVED: 5 076 -> 5 077 in clip e_rec2)
+                wallet.add_coins(1);
                 commands.entity(e).despawn();
             }
             if let Some(s) = &sounds {

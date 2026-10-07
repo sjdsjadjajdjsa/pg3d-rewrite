@@ -75,6 +75,9 @@ pub struct WidgetDef {
     pub enabled: bool,
     #[serde(default)]
     pub anchors: HashMap<String, AnchorDef>,
+    /// keepAspectRatio (0 free, 1 based on width, 2 based on height) and aspectRatio
+    #[serde(default)]
+    pub aspect: Option<(i32, f32)>,
 }
 
 #[derive(Deserialize, Clone, Copy, Default)]
@@ -486,7 +489,13 @@ fn compute(screen: &NguiScreen, vw: f32, vh: f32) -> Vec<Placed> {
                 if nd.parent.is_none() || nd.root.is_some() { (Vec2::ZERO, Vec2::ONE) } else { (ppos + pscale * local, pscale * lscale) };
             let mut rect = None;
             if let Some(w) = &nd.widget {
-                let base_size = screen.size_override.get(&i).copied().unwrap_or(Vec2::new(w.w, w.h));
+                let mut base_size = screen.size_override.get(&i).copied().unwrap_or(Vec2::new(w.w, w.h));
+                // "Resize Freely" labels take the size of their text (UILabel.ProcessText)
+                if nd.label.as_ref().is_some_and(|l| l.overflow == 2) {
+                    if let Some(sz) = label_size(screen, i) {
+                        base_size = sz;
+                    }
+                }
                 let size = base_size * scale;
                 let pv = pivot_offset(w.pivot);
                 let mut r = Rect::from_corners(pos - pv * size, pos - pv * size + size);
@@ -535,6 +544,20 @@ fn compute(screen: &NguiScreen, vw: f32, vh: f32) -> Vec<Placed> {
                     r.max.y = r.min.y + size.y;
                 } else if has_t && !has_b {
                     r.min.y = r.max.y - size.y;
+                }
+                // keep aspect ratio: the anchored side decides, the other follows around the
+                // pivot (UIWidget.OnAnchor)
+                if let (false, Some((mode, ratio))) = (w.anchors.is_empty(), w.aspect) {
+                    let c = r.min + pv * r.size();
+                    if mode == 1 {
+                        let h = r.width() / ratio.max(1e-3);
+                        r.min.y = c.y - pv.y * h;
+                        r.max.y = r.min.y + h;
+                    } else if mode == 2 {
+                        let wd = r.height() * ratio;
+                        r.min.x = c.x - pv.x * wd;
+                        r.max.x = r.min.x + wd;
+                    }
                 }
                 if !w.anchors.is_empty() {
                     // anchored: the widget moves so its pivot sits at the same spot of the new rect
@@ -815,25 +838,32 @@ fn build_frame(commands: &mut Commands, screen: &mut NguiScreen, i: usize, e: En
     // source columns/rows in the atlas and target columns/rows on screen
     let sx = [x, x + bl, x + sw - br, x + sw];
     let sy = [y, y + bt, y + sh - bb, y + sh];
-    let tx = [0.0, bl * k, (tw - br * k).max(bl * k), tw];
-    let ty = [0.0, bt * k, (th - bb * k).max(bt * k), th];
+    // a flipped sprite mirrors the whole frame: the pieces swap sides and are drawn mirrored
+    let (fx, fy) = (s.flip == 1 || s.flip == 3, s.flip == 2 || s.flip == 3);
+    let (bl_, br_) = if fx { (br, bl) } else { (bl, br) };
+    let (bt_, bb_) = if fy { (bb, bt) } else { (bt, bb) };
+    let tx = [0.0, bl_ * k, (tw - br_ * k).max(bl_ * k), tw];
+    let ty = [0.0, bt_ * k, (th - bb_ * k).max(bt_ * k), th];
     let mut kids = vec![];
     for row in 0..3 {
         for col in 0..3 {
             if row == 1 && col == 1 {
                 continue;
             }
-            let (w_, h_) = (tx[col + 1] - tx[col], ty[row + 1] - ty[row]);
+            let (c, rw) = (if fx { 2 - col } else { col }, if fy { 2 - row } else { row });
+            let (w_, h_) = (tx[c + 1] - tx[c], ty[rw + 1] - ty[rw]);
             if w_ <= 0.0 || h_ <= 0.0 || sx[col + 1] <= sx[col] || sy[row + 1] <= sy[row] {
                 continue;
             }
             let mut im = ImageNode::new(img.clone()).with_color(color);
             im.rect = Some(Rect::new(sx[col], sy[row], sx[col + 1], sy[row + 1]));
             im.image_mode = NodeImageMode::Stretch;
+            im.flip_x = fx;
+            im.flip_y = fy;
             let node = Node {
                 position_type: PositionType::Absolute,
-                left: px(tx[col]),
-                top: px(ty[row]),
+                left: px(tx[c]),
+                top: px(ty[rw]),
                 width: px(w_),
                 height: px(h_),
                 ..default()
@@ -971,6 +1001,33 @@ fn make_widget(screen: &NguiScreen, i: usize, alpha: f32, k: f32, sr: Rect) -> O
     }
     // labels and plain widgets: an empty container
     Some((base, None))
+}
+
+/// Printed size of a label's text in virtual units at scale 1, rounded up to even numbers
+/// like NGUI's "Resize Freely" labels.
+fn label_size(screen: &NguiScreen, i: usize) -> Option<Vec2> {
+    let l = screen.nodes[i].label.as_ref()?;
+    let (_, font) = l.font.as_ref().and_then(|f| screen.fonts.get(f)).or_else(|| screen.fonts.values().next())?;
+    let text = screen.text(i);
+    let (mut w, mut x, mut lines) = (0.0f32, 0.0f32, 1);
+    for (ch, _) in parse_markup(&text, Color::WHITE) {
+        if ch == '\n' {
+            lines += 1;
+            x = 0.0;
+            continue;
+        }
+        let g = font.glyphs.get(&(ch as u32).to_string()).or_else(|| font.glyphs.get(&(ch.to_ascii_uppercase() as u32).to_string()));
+        let Some(g) = g else { continue };
+        x += g[6] + l.spacing[0] * font.size / l.size.max(1.0);
+        w = w.max(x);
+    }
+    let s = l.size / font.size;
+    let h = (font.size + l.spacing[1] * font.size / l.size.max(1.0)) * lines as f32 * s;
+    let even = |v: f32| {
+        let v = v.round().max(2.0);
+        v + (v as i32 & 1) as f32
+    };
+    Some(Vec2::new(even(w * s), even(h)))
 }
 
 /// Lay out a bitmap-font label as one image node per glyph (plus outline/shadow copies).

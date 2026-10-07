@@ -22,7 +22,7 @@ pub struct InGameUiPlugin;
 impl Plugin for InGameUiPlugin {
     fn build(&self, app: &mut App) {
         app.add_systems(Startup, spawn)
-            .add_systems(Update, (setup, place_corners, update, update_arena_box, wave_messages, reload_ring, key_tips, invincibility).chain());
+            .add_systems(Update, (setup, place_corners, update, update_arena_box, wave_messages, reload_ring, key_tips, invincibility, wallet_bar).chain());
     }
 }
 
@@ -58,6 +58,10 @@ struct HudNodes {
     reload_label: Option<usize>,
     reload_bar: Option<usize>,
     reload_fill: Option<usize>,
+    /// the coin/gem bar in the top-right corner (BankShopViewPrefab under TopRightAnchor)
+    top_right: Option<usize>,
+    coins: Option<usize>,
+    gems: Option<usize>,
     last: String,
 }
 
@@ -141,7 +145,7 @@ fn setup(mut commands: Commands, mut screens: Query<(Entity, &mut NguiScreen), A
             let name = s.nodes[i].name.as_str();
             if (p == Some(camera) && i != interface && Some(i) != joystick)
                 || (p == Some(interface) && i != container)
-                || (p == Some(container) && !["WeaponToggles", "TopLeftAnchor", "InGameNotifications", "CenterAnchor SCOPE", "GadgetsSFX"].contains(&name))
+                || (p == Some(container) && !["WeaponToggles", "TopLeftAnchor", "InGameNotifications", "CenterAnchor SCOPE", "GadgetsSFX", "TopRightAnchor"].contains(&name))
             {
                 s.set_active(i, false);
             }
@@ -196,6 +200,17 @@ fn setup(mut commands: Commands, mut screens: Query<(Entity, &mut NguiScreen), A
                 if let Some(t) = s.find_in(b, name).and_then(|t| s.find_in(t, "Texture_Tip")) {
                     nodes.tips.push((t, action));
                 }
+            }
+        }
+        if let Some(t) = s.find("TopRightAnchor") {
+            nodes.top_right = Some(t);
+            nodes.coins = s.find_in(t, "CoinsLabel");
+            nodes.gems = s.find_in(t, "GemLabel");
+            // BankShopViewGuiElement: with neither the Armory nor the bank button shown (as in
+            // a match) the bar is moved to x = 0 (ObjectForCenter is saved at x = 2)
+            if let Some(o) = s.find_in(t, "ObjectForCenter") {
+                let y = s.nodes[o].pos[1];
+                s.set_pos(o, Vec2::new(0.0, y));
             }
         }
         if let Some(t) = s.find("TopLeftAnchor") {
@@ -256,6 +271,9 @@ fn place_corners(window: Single<&Window, Changed<Window>>, mut screens: Query<(&
         let vw = vh * window.width() / window.height().max(1.0);
         if let Some(t) = n.top_left {
             s.set_pos(t, Vec2::new(-vw / 2.0, vh / 2.0));
+        }
+        if let Some(t) = n.top_right {
+            s.set_pos(t, Vec2::new(vw / 2.0, vh / 2.0));
         }
         if let Some(t) = n.bottom_right {
             s.set_pos(t, Vec2::new(vw / 2.0, -vh / 2.0));
@@ -470,5 +488,27 @@ fn invincibility(stats: Res<PlayerStats>, hud: Res<Hud>, mut screens: Query<(&mu
     if let (Some(f), true) = (n.immortal_fill, on) {
         let left = stats.protected + (crate::bots::SPAWN_PROTECTION_BAR - crate::bots::SPAWN_PROTECTION);
         s.set_fill(f, (left / crate::bots::SPAWN_PROTECTION_BAR * 100.0).round() / 100.0);
+    }
+}
+
+/// Coins and gems in the top-right bar, grouped like the original ("5 076").
+fn wallet_bar(
+    wallet: Res<crate::wallet::Wallet>,
+    hud: Res<Hud>,
+    mut screens: Query<(&mut NguiScreen, &HudNodes)>,
+    mut last: Local<Option<crate::wallet::Wallet>>,
+) {
+    let Some(e) = hud.0 else { return };
+    let Ok((mut s, n)) = screens.get_mut(e) else { return };
+    if n.coins.is_none() || *last == Some(*wallet) {
+        return;
+    }
+    *last = Some(*wallet);
+    let group = |v: i64| crate::results::group(v.clamp(i32::MIN as i64, i32::MAX as i64) as i32);
+    if let Some(i) = n.coins {
+        s.set_text(i, group(wallet.coins));
+    }
+    if let Some(i) = n.gems {
+        s.set_text(i, group(wallet.gems));
     }
 }

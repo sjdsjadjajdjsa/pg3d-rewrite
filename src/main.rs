@@ -31,6 +31,7 @@ mod settings;
 mod settings_ui;
 mod pause;
 mod sound;
+mod wallet;
 mod weapons;
 
 use avian3d::prelude::*;
@@ -134,6 +135,7 @@ fn main() {
         .insert_resource(DataDir(data_dir.into()))
         .insert_resource(settings::Settings::load())
         .insert_resource(controls::Controls::load())
+        .insert_resource(wallet::Wallet::load())
         .insert_resource(map::CurrentMap(map_name))
         .add_plugins((
             map::MapPlugin,
