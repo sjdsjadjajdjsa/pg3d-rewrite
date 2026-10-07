@@ -991,7 +991,19 @@ fn build_glyphs(commands: &mut Commands, screen: &mut NguiScreen, i: usize, e: E
     let effect_color = tint(srgba(l.effect_color), alpha);
     let mut kids = vec![];
     for (li, line) in lines.iter().enumerate() {
-        let lx = (align * (box_w - widths[li] * s)).round();
+        // NGUIText.Align: right = rect - printed; centre = half of that, plus half a font
+        // pixel when the rounded leftover and the rounded width differ in parity ("keep it
+        // pixel-perfect"); UILabel.ApplyOffset then rounds the pivot offset
+        let printed = widths[li] * s;
+        let mut lx = align * (box_w - printed);
+        if align == 0.5 && box_w > printed {
+            let diff = (box_w - printed).round() as i64;
+            let int_w = box_w.round() as i64;
+            if (diff & 1 == 1) != (int_w & 1 == 1) {
+                lx += 0.5 * s;
+            }
+        }
+        lx += pv.x * box_w - (pv.x * box_w).round();
         for (_, col, g, gx) in line {
             if g[2] <= 0.0 || g[3] <= 0.0 {
                 continue;

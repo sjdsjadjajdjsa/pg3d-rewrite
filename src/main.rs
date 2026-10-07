@@ -105,6 +105,22 @@ fn main() {
                         } else {
                             bevy::window::WindowLevel::Normal
                         },
+                        // PG3D_RES=1920x1080 (testing): exact window size, to compare with
+                        // screenshots of the original
+                        resolution: std::env::var("PG3D_RES")
+                            .ok()
+                            .and_then(|r| {
+                                let (w, h) = r.split_once('x')?;
+                                Some(bevy::window::WindowResolution::new(w.parse().ok()?, h.parse().ok()?).with_scale_factor_override(1.0))
+                            })
+                            .unwrap_or_default(),
+                        decorations: std::env::var("PG3D_RES").is_err(),
+                        // a desktop panel keeps a normal window shorter than the screen
+                        mode: if std::env::var("PG3D_RES").is_ok_and(|r| r == "1920x1080") {
+                            bevy::window::WindowMode::BorderlessFullscreen(bevy::window::MonitorSelection::Index(1))
+                        } else {
+                            bevy::window::WindowMode::Windowed
+                        },
                         ..default()
                     }),
                     ..default()
