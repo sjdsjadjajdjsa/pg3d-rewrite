@@ -143,6 +143,9 @@ pub struct TextureDef {
     /// a custom material, e.g. "Unlit/Transparent Colored SDF" for signed-distance icons
     #[serde(default)]
     pub material: Option<MaterialDef>,
+    /// UIBasicSprite.mFlip: 1 horizontally, 2 vertically, 3 both
+    #[serde(default)]
+    pub flip: i32,
 }
 
 #[derive(Deserialize, Clone, Default)]
@@ -1070,6 +1073,8 @@ fn make_widget(screen: &NguiScreen, i: usize, alpha: f32, k: f32, sr: Rect) -> O
         let h = screen.textures.get(t.png.as_ref()?)?;
         let mut im = ImageNode::new(h.clone()).with_color(color);
         im.image_mode = NodeImageMode::Stretch;
+        im.flip_x = t.flip == 1 || t.flip == 3;
+        im.flip_y = t.flip == 2 || t.flip == 3;
         return Some((base, Some(im)));
     }
     // labels and plain widgets: an empty container
