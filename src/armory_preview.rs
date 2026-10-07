@@ -42,6 +42,10 @@ pub struct PreviewImage(pub Handle<Image>);
 #[derive(Component)]
 struct PreviewRoot;
 
+/// The preview's camera (only drawn while the Armory is open).
+#[derive(Component)]
+pub struct PreviewCamera;
+
 #[derive(Component)]
 struct PreviewChar {
     graph: Handle<AnimationGraph>,
@@ -67,6 +71,7 @@ fn spawn(
     let layer = RenderLayers::layer(LAYER);
     commands.spawn((
         Name::new("armory preview camera"),
+        PreviewCamera,
         Camera3d::default(),
         Camera { order: -1, clear_color: ClearColorConfig::Custom(Color::NONE), ..default() },
         RenderTarget::from(handle),

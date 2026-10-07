@@ -19,7 +19,7 @@ pub struct ArmoryPlugin;
 impl Plugin for ArmoryPlugin {
     fn build(&self, app: &mut App) {
         app.add_plugins(crate::armory_preview::ArmoryPreviewPlugin)
-            .add_systems(Update, (setup, clicks, refresh).chain());
+            .add_systems(Update, ((setup, clicks, refresh).chain(), preview_on_when_open));
     }
 }
 
@@ -320,6 +320,19 @@ fn refresh(
         // stats panel of the selected weapon
         let item = selected.as_ref().and_then(|n| list.iter().find(|(m, _)| m == n)).map(|(_, i)| i.clone());
         stats_panel(&mut s, item.as_ref());
+    }
+}
+
+/// Draw the character preview only while the Armory is on screen.
+fn preview_on_when_open(
+    screens: Query<&InheritedVisibility, With<Armory>>,
+    mut cams: Query<&mut Camera, With<crate::armory_preview::PreviewCamera>>,
+) {
+    let open = screens.iter().any(|v| v.get());
+    for mut c in &mut cams {
+        if c.is_active != open {
+            c.is_active = open;
+        }
     }
 }
 
