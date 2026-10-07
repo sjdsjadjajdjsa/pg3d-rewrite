@@ -11,7 +11,7 @@ installed copy of the game by the research project next door
 ## Run
 
 ```sh
-# once, in ../pixel-gun-3d-re:
+# once, in ../pixel-gun-3d-re (or simply: scripts/export_all.sh):
 tools/venv/bin/python scripts/export_map.py arena
 tools/venv/bin/python scripts/find_behaviours.py WeaponSounds > private/index/weaponsounds.tsv
 tools/venv/bin/python scripts/export_weapons.py
@@ -25,7 +25,8 @@ cargo run -- arena
 ```
 
 Controls: click = capture mouse, Esc = release, WASD = move, Space = jump,
-left mouse = fire (hold), R = reload, 1-6 / mouse wheel = switch weapon,
+left mouse = fire (hold), right mouse = zoom (scoped weapons), R = reload,
+1-8 / mouse wheel = switch weapon,
 V = toggle walk / fly camera (fly: Space/Ctrl up/down, Shift fast), F12 = screenshot.
 
 ## Layout
@@ -46,5 +47,6 @@ V = toggle walk / fly camera (fly: Space/Ctrl up/down, Shift fast), F12 = screen
 
 Debug environment variables: `PG3D_TRACE=1` (log player position), `PG3D_AUTOWALK=1`
 (walk forward + jump automatically), `PG3D_AUTOFIRE=1` / `PG3D_AUTOAIM=1` (shoot / aim at bots
-automatically), `PG3D_NOBOTS=1`, `PG3D_HUNT=1` (zombies always chase), `PG3D_CAM="x,y,z,tx,ty,tz"` (start in fly mode at a
+automatically), `PG3D_NOBOTS=1`, `PG3D_HUNT=1` (zombies always chase), `PG3D_BOTS=Enemy3_go,...` (only these bots),
+`PG3D_LOADOUT=Weapon2,Weapon61,...` (custom weapons), `PG3D_CAM="x,y,z,tx,ty,tz"` (start in fly mode at a
 position looking at a target), `PG3D_AUTOSHOT=file.png` (screenshot after load, then quit).

@@ -29,7 +29,9 @@ use crate::{
 };
 
 /// Weapons given to the player, in slot order (keys 1..6). Only ones that were exported load.
-const LOADOUT: [&str; 6] = ["Weapon2", "Weapon1", "Weapon9", "Weapon3", "Weapon5", "Weapon11"];
+/// One per original category (1 primary, 2 backup, 3 melee, 4 special, 5 sniper,
+/// 6 heavy), then extras. PG3D_LOADOUT=Weapon2,Weapon61,... overrides it.
+const LOADOUT: [&str; 8] = ["Weapon3", "Weapon1", "Weapon9", "Weapon5", "Weapon61", "Weapon50", "Weapon2", "Weapon11"];
 /// Render layer used for the first-person weapon so it never clips into walls.
 const VIEW_MODEL_LAYER: usize = 1;
 
@@ -48,6 +50,7 @@ impl Plugin for WeaponsPlugin {
                     animate_view_model,
                     fade_impacts,
                     update_hud,
+                    zoom,
                 ),
             );
     }
@@ -187,7 +190,12 @@ fn load_loadout(mut commands: Commands, data: Res<DataDir>, assets: Res<AssetSer
     };
     info!("{} weapon definitions", all.len());
     let mut loadout = Loadout::default();
-    for name in LOADOUT {
+    let custom = std::env::var("PG3D_LOADOUT").ok();
+    let names: Vec<&str> = match &custom {
+        Some(c) => c.split(',').map(str::trim).collect(),
+        None => LOADOUT.to_vec(),
+    };
+    for name in names {
         let Some(def) = all.get(name) else { continue };
         if !dir.join(name).join("weapon.gltf").exists() {
             continue;
@@ -196,7 +204,8 @@ fn load_loadout(mut commands: Commands, data: Res<DataDir>, assets: Res<AssetSer
             .ok()
             .and_then(|s| serde_json::from_str(&s).ok())
             .unwrap_or_default();
-        let anim = |k: &str, default: f32| info.animations.get(k).copied().filter(|v| *v > 0.01).unwrap_or(default);
+        // clips of a few frames are placeholders (e.g. heavy weapons without a reload animation)
+        let anim = |k: &str, default: f32| info.animations.get(k).copied().filter(|v| *v > 0.05).unwrap_or(default);
         let clip = if def.isMelee != 0 { 0 } else { def.ammoInClip };
         loadout.weapons.push(Weapon {
             name: name.to_string(),
@@ -342,7 +351,16 @@ fn switch_weapon(
     if n == 0 {
         return;
     }
-    let digits = [KeyCode::Digit1, KeyCode::Digit2, KeyCode::Digit3, KeyCode::Digit4, KeyCode::Digit5, KeyCode::Digit6];
+    let digits = [
+        KeyCode::Digit1,
+        KeyCode::Digit2,
+        KeyCode::Digit3,
+        KeyCode::Digit4,
+        KeyCode::Digit5,
+        KeyCode::Digit6,
+        KeyCode::Digit7,
+        KeyCode::Digit8,
+    ];
     let mut next = loadout.current;
     for (i, k) in digits.iter().enumerate() {
         if keys.just_pressed(*k) && i < n {
@@ -566,4 +584,41 @@ fn update_hud(loadout: Res<Loadout>, mut text: Single<&mut Text, With<HudText>>)
     let ammo = if w.def.isMelee != 0 { "melee".to_string() } else { format!("{} / {}", w.clip, w.reserve) };
     let state = if loadout.reloading > 0.0 { "  reloading…" } else { "" };
     text.0 = format!("[{}] {}   {}{}", loadout.current + 1, w.name, ammo, state);
+}
+
+/// Right mouse on a scoped weapon (isZooming): narrow the field of view to the weapon's
+/// fieldOfViewZomm and hide the gun model. Unity's default view is 75 degrees vertical;
+/// we use 70, so scale by the same ratio.
+#[allow(clippy::type_complexity)]
+fn zoom(
+    mouse: Res<ButtonInput<MouseButton>>,
+    mut commands: Commands,
+    mut loadout: ResMut<Loadout>,
+    mut cam: Single<&mut Projection, (With<PlayerCamera>, Without<ViewModel>)>,
+    mut view_models: Query<&mut Visibility, With<ViewModel>>,
+    mut zoomed: Local<bool>,
+    time: Res<Time>,
+) {
+    let Some(w) = loadout.current() else { return };
+    let want = w.def.isZooming != 0 && mouse.pressed(MouseButton::Right) && loadout.reloading <= 0.0;
+    let target = if want { 70.0 * w.def.fieldOfViewZomm / 75.0 } else { 70.0 };
+    if want != *zoomed {
+        let key = if want { "zoomIn" } else { "zoomOut" };
+        crate::sound::play(&mut commands, w.sounds.get(key), None, 0.7);
+        *zoomed = want;
+    }
+    if let Projection::Perspective(p) = &mut **cam {
+        let cur = p.fov.to_degrees();
+        p.fov = (cur + (target - cur) * (time.delta_secs() * 15.0).min(1.0)).to_radians();
+    }
+    for mut v in &mut view_models {
+        *v = if want { Visibility::Hidden } else { Visibility::Inherited };
+    }
+    // scoped shots are accurate: no spread while zoomed (sniper behaviour)
+    let cur = loadout.current;
+    if want {
+        if let Some(w) = loadout.weapons.get_mut(cur) {
+            w.spread = 0.0;
+        }
+    }
 }

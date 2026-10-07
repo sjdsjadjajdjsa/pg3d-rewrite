@@ -21,8 +21,7 @@ use crate::{
     player::{GRAVITY, Player},
 };
 
-/// Bot types we spawn, picked at random. Only exported ones are used.
-const ROSTER: [&str; 3] = ["Enemy1_go", "Enemy2_go", "Enemy3_go"];
+/// Bot types we spawn are every exported bot folder in <data>/bots/ (picked at random).
 /// How many bots are alive at once (GUESS: the original uses per-level wave settings).
 const MAX_ALIVE: usize = 6;
 /// Seconds between spawns while below MAX_ALIVE.
@@ -66,6 +65,8 @@ pub struct BotDef {
     pub notAttackingSpeed: f32,
     pub detectRadius: f32,
     pub scorePerKill: i32,
+    /// NavMeshAgent.baseOffset: how far above the ground the bot floats (flying zombies)
+    pub agentBaseOffset: f32,
 }
 
 #[derive(Deserialize, Default)]
@@ -135,6 +136,8 @@ struct Bot {
     stuck: f32,
     detour: Vec3,
     detour_time: f32,
+    /// current height above the walking position (agentBaseOffset; drops to 0 on death)
+    hover: f32,
     /// waypoints from the navigation mesh towards the current target
     path: Vec<Vec3>,
     /// seconds until the path is recalculated
@@ -159,7 +162,20 @@ fn load_bot_defs(mut commands: Commands, data: Res<DataDir>, assets: Res<AssetSe
         .and_then(|s| serde_json::from_str(&s).ok())
         .unwrap_or_default();
     let mut types = BotTypes::default();
-    for name in ROSTER {
+    let mut names: Vec<String> = std::fs::read_dir(&dir)
+        .map(|r| r.filter_map(|e| e.ok()).filter(|e| e.path().join("bot.gltf").exists()))
+        .into_iter()
+        .flatten()
+        .filter_map(|e| e.file_name().into_string().ok())
+        .collect();
+    names.sort();
+    // PG3D_BOTS=Enemy3_go,Enemy6_go limits which bots spawn (testing)
+    if let Ok(only) = std::env::var("PG3D_BOTS") {
+        let only: Vec<&str> = only.split(',').map(str::trim).collect();
+        names.retain(|n| only.contains(&n.as_str()));
+    }
+    for name in &names {
+        let name = name.as_str();
         let Some(def) = all.get(name) else { continue };
         let Some(info) = std::fs::read_to_string(dir.join(name).join("info.json"))
             .ok()
@@ -255,12 +271,13 @@ fn spawner(
                 stuck: 0.0,
                 detour: Vec3::ZERO,
                 detour_time: 0.0,
+                hover: ty.def.agentBaseOffset,
                 path: Vec::new(),
                 repath: 0.0,
             },
             anims,
             WorldAssetRoot(assets.load(GltfAssetLabel::Scene(0).from_asset(path))),
-            Transform::from_translation(pos + Vec3::Y * 0.5),
+            Transform::from_translation(pos + Vec3::Y * (0.5 + ty.def.agentBaseOffset)),
             RigidBody::Kinematic,
             CustomPositionIntegration,
             TransformInterpolation,
@@ -344,7 +361,7 @@ fn bot_brain(
         } else {
             b.timer = types.0[b.kind].attack_time * 0.5; // first hit lands mid-swing
         }
-        if b.state == BotState::Idle && t.translation.distance(b.wander) < 1.0 {
+        if b.state == BotState::Idle && t.translation.xz().distance(b.wander.xz()) < 1.0 {
             let s = time.elapsed_secs() + t.translation.x;
             b.wander = t.translation + Vec3::new(rand01(s) * 10.0 - 5.0, 0.0, rand01(s * 1.3) * 10.0 - 5.0);
         }
@@ -366,6 +383,12 @@ fn bot_move(
     for (e, mut t, mut b, children) in &mut bots {
         let Some((ce, col)) = children.iter().find_map(|c| colliders.get(c).ok().map(|x| (c, x))) else { continue };
         let def = &types.0[b.kind].def;
+        // flying bots: physics and path finding work on the point below them
+        let hover_before = b.hover;
+        if b.state == BotState::Dead {
+            b.hover = (b.hover - dt * 6.0).max(0.0); // fall when killed
+        }
+        t.translation.y -= hover_before;
         let (target, speed) = match b.state {
             BotState::Chase => (player.translation, def.attackingSpeed.max(0.5)),
             BotState::Idle => (b.wander, def.notAttackingSpeed.max(0.5) * 0.5),
@@ -426,8 +449,15 @@ fn bot_move(
         let before = t.translation;
         t.translation = out.position - Vec3::Y;
         b.grounded = grounded;
+        let bob = if b.hover > 0.0 && b.state != BotState::Dead {
+            (time.elapsed_secs() * 2.0 + e.index().index() as f32).sin() * 0.15
+        } else {
+            0.0
+        };
+        let foot = t.translation;
+        t.translation.y += b.hover + bob;
         // blocked by a wall? (moved less than a third of what we wanted)
-        let moved = Vec2::new(t.translation.x - before.x, t.translation.z - before.z).length();
+        let moved = Vec2::new(foot.x - before.x, foot.z - before.z).length();
         if speed > 0.0 && moved < speed * dt * 0.33 {
             b.stuck += dt;
             if b.stuck > 0.4 && b.detour_time <= 0.0 {
