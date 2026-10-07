@@ -51,7 +51,8 @@ Game install (read-only, never modify, never copy into git):
     `scripts/export_ngui.py resources.assets AllModesView modes` exports the "To Battle" game mode hub and
     `scripts/export_previews.py` the map loading pictures (bundles level_loading_previews_*).
     `scripts/export_ngui.py resources.assets SettingsWindow settings` exports the settings window and
-    `scripts/export_ngui.py resources.assets SettingsPanel pause` the in-match pause screen, and
+    `scripts/export_ngui.py resources.assets SettingsPanel pause` the in-match pause screen,
+    `scripts/export_ngui.py level6 "UI Root (2D)" results` the end-of-match results (level6 = LevelComplete), and
     `scripts/export_pickups.py` the in-match bonus models/sounds (prefab BonusGeneric).
     `scripts/find_behaviours.py` now also searches the built-in scenes (levelN) and resolves their scripts
     through globalgamemanagers.assets.
