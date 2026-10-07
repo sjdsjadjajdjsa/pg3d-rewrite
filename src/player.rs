@@ -90,29 +90,17 @@ fn start_point(markers: &MapMarkers) -> Option<Vec3> {
     bonus.into_iter().min_by(|a, b| a.distance(mid).total_cmp(&b.distance(mid)))
 }
 
-/// Start looking towards the nearest zombie spawn, so the first wave comes into view
-/// (in the original Arena you start facing the arena, not a wall).
-fn face_start(
-    markers: Res<MapMarkers>,
-    player: Single<&Transform, (With<Player>, Without<crate::camera::PlayerCamera>)>,
-    mut camera: Single<&mut Transform, With<crate::camera::PlayerCamera>>,
-) {
+/// Start looking along the map's +Z axis (Unity forward; glTF/Bevy -Z after the exporter's
+/// axis flip), i.e. the player object's default rotation. OBSERVED in 1920x1080 screenshots
+/// of the original: the ice rink (goal ahead, ice machine left), castle (door with the red
+/// emblem ahead) and space arena (tower ahead) all start this way.
+/// PG3D_YAW=degrees (testing) turns the start view.
+fn face_start(mut camera: Single<&mut Transform, With<crate::camera::PlayerCamera>>) {
     if std::env::var("PG3D_CAM").is_ok() {
         return;
     }
-    let p = player.translation;
-    let target = markers
-        .0
-        .iter()
-        .filter(|m| m.name.starts_with("EnemyCreationZone"))
-        .map(|m| m.position)
-        .min_by(|a, b| a.distance(p).total_cmp(&b.distance(p)));
-    if let Some(t) = target {
-        let dir = (t - p).with_y(0.0);
-        if dir.length() > 0.5 {
-            camera.rotation = Quat::from_rotation_y(f32::atan2(-dir.x, -dir.z));
-        }
-    }
+    let yaw = std::env::var("PG3D_YAW").ok().and_then(|v| v.parse::<f32>().ok()).unwrap_or(0.0);
+    camera.rotation = Quat::from_rotation_y(yaw.to_radians());
 }
 
 fn spawn_player(mut commands: Commands, markers: Res<MapMarkers>) {
