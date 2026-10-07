@@ -160,6 +160,8 @@ pub struct PlayerHit {
 pub struct BotDamage {
     pub bot: Entity,
     pub amount: f32,
+    /// slow the bot down: (speed factor, seconds), e.g. the Freeze Ray (0.7 for 1.5 s)
+    pub slow: Option<(f32, f32)>,
 }
 
 /// Put on bot colliders; points at the bot's root entity.
@@ -193,6 +195,8 @@ struct Bot {
     stuck: f32,
     detour: Vec3,
     detour_time: f32,
+    /// slowed by a freeze weapon: speed factor and seconds left
+    slow: (f32, f32),
     /// current height above the walking position (agentBaseOffset; drops to 0 on death)
     hover: f32,
     /// waypoints from the navigation mesh towards the current target
@@ -367,6 +371,7 @@ fn spawner(
                 stuck: 0.0,
                 detour: Vec3::ZERO,
                 detour_time: 0.0,
+                slow: (1.0, 0.0),
                 hover: ty.def.agentBaseOffset,
                 path: Vec::new(),
                 repath: 0.0,
@@ -521,6 +526,8 @@ fn bot_move(
             BotState::Attack => (player.translation, 0.0),
             BotState::Dead => (t.translation, 0.0),
         };
+        b.slow.1 = (b.slow.1 - dt).max(0.0);
+        let speed = if b.slow.1 > 0.0 { speed * b.slow.0 } else { speed };
         // follow the navigation mesh; recompute the route twice a second
         let mut aim = target;
         if speed > 0.0 && !nav.is_empty() {
@@ -619,6 +626,9 @@ fn apply_damage(
             continue;
         }
         b.health -= hit.amount;
+        if let Some((k, secs)) = hit.slow {
+            b.slow = (k, secs);
+        }
         b.state = BotState::Chase; // shot bots always come for you
         let snd = &types.0[b.kind].sounds;
         if b.health > 0.0 && *hurt_sound_cooldown <= 0.0 {

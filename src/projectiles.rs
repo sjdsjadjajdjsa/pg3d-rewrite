@@ -136,7 +136,7 @@ fn fly(
                 match p.spec.owner {
                     Owner::Player => {
                         if let Ok(part) = bot_parts.get(h.entity) {
-                            hits.write(BotDamage { bot: part.0, amount: p.spec.damage });
+                            hits.write(BotDamage { bot: part.0, amount: p.spec.damage, slow: None });
                         }
                     }
                     Owner::Enemy => {
@@ -166,7 +166,7 @@ fn fly(
                         let d = gt.translation().distance(point).min((gt.translation() + Vec3::Y).distance(point));
                         let k = falloff(d);
                         if k > 0.0 {
-                            hits.write(BotDamage { bot, amount: p.spec.damage * k });
+                            hits.write(BotDamage { bot, amount: p.spec.damage * k, slow: None });
                         }
                     }
                 }

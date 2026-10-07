@@ -77,6 +77,10 @@ pub struct WeaponDef {
     pub railgun: i32,
     /// laser / freeze rays: a beam to what was hit
     pub freezer: i32,
+    /// hits slow enemies to `slowdownCoeff` of their speed for `slowdownTime` seconds
+    pub isSlowdown: i32,
+    pub slowdownCoeff: f32,
+    pub slowdownTime: f32,
     pub isZooming: i32,
     pub fieldOfViewZomm: f32,
     /// movement speed multiplier while holding this weapon
@@ -560,13 +564,14 @@ fn fire(
                 && !done.contains(&part.0)
             {
                 done.push(part.0);
-                hits.write(BotDamage { bot: part.0, amount: base_damage });
+                hits.write(BotDamage { bot: part.0, amount: base_damage, slow: None });
             }
         }
         beams.write(crate::beams::SpawnBeam { weapon: w.name.clone(), from: muzzle, to: origin + *dir * 150.0, life: None });
         return;
     }
     let filter = SpatialQueryFilter::from_mask([Layer::World, Layer::Enemy]);
+    let slow = (w.def.isSlowdown != 0).then_some((w.def.slowdownCoeff.clamp(0.05, 1.0), w.def.slowdownTime.max(0.1)));
     if w.def.freezer != 0 {
         // a ray to the first thing in the way, redrawn each shot while firing
         let dir = spread_dir(camera.rotation(), spread_deg, time.elapsed_secs(), 0);
@@ -585,7 +590,7 @@ fn fire(
             // random variation of +-damageRange percent, like the original
             let r = (time.elapsed_secs() * 91.7 + i as f32 * 3.3).sin() * 0.5 + 0.5;
             let amount = base_damage * (1.0 + (dmin + (dmax - dmin) * r) / 100.0);
-            hits.write(BotDamage { bot: part.0, amount });
+            hits.write(BotDamage { bot: part.0, amount, slow });
         } else {
             let p = origin + dir * hit.distance + hit.normal * 0.01;
             commands.spawn((Mesh3d(mesh.clone()), MeshMaterial3d(mat.clone()), Transform::from_translation(p), Impact(8.0)));
