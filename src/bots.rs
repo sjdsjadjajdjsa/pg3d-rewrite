@@ -674,8 +674,9 @@ fn player_death(
     time: Res<Time>,
     mut stats: ResMut<PlayerStats>,
     player: Single<(&mut Transform, &mut Player)>,
+    over: Res<crate::results::MatchOver>,
 ) {
-    if stats.health > 0.0 {
+    if stats.health > 0.0 || over.0 {
         return;
     }
     if stats.respawn_in <= 0.0 {

@@ -76,9 +76,13 @@ fn toggle(
     mut cursor: Single<&mut CursorOptions>,
     mut commands: Commands,
     screen: Res<PauseScreen>,
+    over: Res<crate::results::MatchOver>,
 ) {
     // PG3D_PAUSE=1 (automated tests): open the pause screen after 2 seconds
     let test = std::env::var("PG3D_PAUSE").is_ok() && !paused.0 && time.elapsed_secs() > 2.0;
+    if over.0 {
+        return; // the results screen is up
+    }
     if keys.just_pressed(KeyCode::Escape) || test {
         let on = !paused.0;
         set_paused(on, &mut paused, &mut time, &mut cursor, &mut commands, &screen);

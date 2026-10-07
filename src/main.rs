@@ -21,6 +21,7 @@ mod particles;
 mod pickups;
 mod player;
 mod projectiles;
+mod results;
 mod screenshot;
 mod settings;
 mod settings_ui;
@@ -123,6 +124,7 @@ fn main() {
             pickups::PickupsPlugin,
             crate::ngui::NguiPlugin,
             pause::PausePlugin,
+            results::ResultsPlugin,
         ))
         .add_systems(Update, menu::back_to_menu)
         .add_systems(

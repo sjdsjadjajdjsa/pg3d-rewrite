@@ -29,6 +29,7 @@ tools/venv/bin/python scripts/export_previews.py
 tools/venv/bin/python scripts/export_ngui.py resources.assets SettingsWindow settings
 tools/venv/bin/python scripts/export_pickups.py
 tools/venv/bin/python scripts/export_ngui.py resources.assets SettingsPanel pause
+tools/venv/bin/python scripts/export_ngui.py level6 "UI Root (2D)" results
 
 # here:
 cargo run            # start menu: pick a map
@@ -59,6 +60,7 @@ V = toggle walk / fly camera (fly: Space/Ctrl up/down, Shift fast), F12 = screen
 | `src/settings.rs` | saved settings (music / sound FX volume, mouse sensitivity) in ~/.config/pixel-gun-3d-rs/settings.json |
 | `src/settings_ui.rs` | the original settings window's sliders, shared by menu and pause screen |
 | `src/pause.rs` | Esc pause screen (original pause panel): stops the match, settings, resume |
+| `src/results.rs` | end of a Campaign match: original "You are zombified!" results screen, best score per map, Retry / Menu |
 | `src/pickups.rs` | health and ammo pickups at the map's BonusCreationZone points |
 | `src/bots.rs` | campaign zombies in waves (wave n = 4 + 2n, harder types later): chase/attack/die, player health, score |
 | `src/screenshot.rs` | F12 screenshots, `PG3D_AUTOSHOT` for automated checks |

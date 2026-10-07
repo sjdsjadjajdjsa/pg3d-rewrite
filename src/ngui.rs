@@ -106,6 +106,9 @@ pub struct LabelDef {
     pub effect_color: [f32; 4],
     pub effect_dist: [f32; 2],
     pub spacing: [f32; 2],
+    /// translation key (NGUI/I2 "term"); the text field is then just a placeholder
+    #[serde(default)]
+    pub key: String,
 }
 
 #[derive(Deserialize, Clone, Default)]
@@ -256,8 +259,13 @@ impl NguiScreen {
             return t.clone();
         }
         let Some(l) = &self.nodes[i].label else { return String::new() };
-        // labels store translation keys ("Key_5072" -> "To Battle")
-        self.strings.get(&l.text).cloned().unwrap_or_else(|| l.text.clone())
+        // labels store translation keys ("Key_5072" -> "To Battle"), either as their
+        // term or in place of the text
+        self.strings
+            .get(&l.key)
+            .or_else(|| self.strings.get(&l.text))
+            .cloned()
+            .unwrap_or_else(|| l.text.clone())
     }
 }
 
@@ -815,7 +823,11 @@ fn build_glyphs(commands: &mut Commands, screen: &mut NguiScreen, i: usize, e: E
     }
     screen.glyph_key.insert(i, key);
     commands.entity(e).despawn_related::<Children>();
-    let Some((img, font)) = l.font.as_ref().and_then(|f| screen.fonts.get(f)) else { return };
+    // labels with a TrueType font (not exported) use the screen's bitmap font instead
+    let Some((img, font)) = l.font.as_ref().and_then(|f| screen.fonts.get(f)).or_else(|| screen.fonts.values().next())
+    else {
+        return;
+    };
     let runs = parse_markup(&text, tint(srgba(w.color), alpha));
     // lines of (glyph rect in font page, x, advance-adjusted) in virtual units at scale 1
     let mut lines: Vec<Vec<(char, Color, [f32; 7], f32)>> = vec![vec![]];
