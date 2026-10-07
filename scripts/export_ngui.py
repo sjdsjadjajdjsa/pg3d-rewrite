@@ -29,7 +29,7 @@ import find_behaviours as fb  # noqa: E402
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 G = fb.GAME
 WIDGETS = {"UIWidget", "UISprite", "UILabel", "UITexture", "UI2DSprite"}
-KEEP = WIDGETS | {"UIPanel", "UIButton", "UIRoot", "UIToggle", "UIScrollView", "UIGrid", "UITable"}
+KEEP = WIDGETS | {"UIPanel", "UIButton", "UIRoot", "UIToggle", "UIScrollView", "UIGrid", "UITable", "UISlider", "UIProgressBar"}
 
 
 class Ngui:
@@ -62,6 +62,13 @@ class Ngui:
             except Exception:
                 self.classes[key] = None
         return self.classes[key]
+
+    def ref(self, owner, ptr):
+        """Remember an object reference; turned into a node index after the walk."""
+        if not ptr or not ptr.get("m_PathID"):
+            return None
+        o = self.resolve(owner, ptr)
+        return None if o is None else ["ref", o.assets_file.name, o.path_id]
 
     def tree(self, o):
         self.env.typetree_generator = self.gen
@@ -220,6 +227,21 @@ class Ngui:
                     gobj = self.resolve(tgt.assets_file, g)
                     ti = tr_index.get((gobj.assets_file.name, gobj.path_id)) if gobj else None
             nodes[idx]["widget"]["anchors"][side] = {"target": ti, "rel": a["relative"], "abs": a["absolute"]}
+        # other references (slider foreground / thumb) -> node indices
+        for nd in nodes:
+            sl = nd.get("slider")
+            if not sl:
+                continue
+            for k in ("fg", "thumb"):
+                v = sl.get(k)
+                if isinstance(v, list):
+                    f = self.by_name.get(v[1])
+                    o = f.objects.get(v[2]) if f else None
+                    ti = tr_index.get((v[1], v[2]))
+                    if ti is None and o is not None and o.type.name == "MonoBehaviour":
+                        g = self.resolve(o.assets_file, o.read(check_read=False).m_GameObject)
+                        ti = tr_index.get((g.assets_file.name, g.path_id)) if g else None
+                    sl[k] = ti
         return nodes
 
     def component(self, node, k, d, r, out, pending, idx):
@@ -263,6 +285,10 @@ class Ngui:
         elif k == "UIRoot":
             node["root"] = {"manual_height": d["manualHeight"], "manual_width": d["manualWidth"],
                             "fit_width": bool(d["fitWidth"]), "fit_height": bool(d["fitHeight"])}
+        elif k in ("UISlider", "UIProgressBar"):
+            node["slider"] = {"value": d.get("mValue", d.get("rawValue", 1.0)), "steps": d.get("numberOfSteps", 0),
+                              "fill_dir": d.get("mFill", 0),
+                              "fg": self.ref(r.assets_file, d.get("mFG")), "thumb": self.ref(r.assets_file, d.get("thumb"))}
         elif k in ("UIToggle", "UIScrollView", "UIGrid", "UITable"):
             node.setdefault("tags", []).append(k)
 
