@@ -28,7 +28,7 @@ import find_behaviours as fb  # noqa: E402
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 G = fb.GAME
-WIDGETS = {"UIWidget", "UISprite", "UILabel", "UITexture", "UI2DSprite"}
+WIDGETS = {"UIWidget", "UISprite", "UILabel", "UITexture", "UITextureMasked", "UI2DSprite"}
 KEEP = WIDGETS | {"UIPanel", "UIButton", "UIRoot", "UIToggle", "UIScrollView", "UIGrid", "UITable", "UISlider", "UIProgressBar"}
 
 
@@ -97,6 +97,19 @@ class Ngui:
         if not (out / path).exists():
             (out / folder).mkdir(parents=True, exist_ok=True)
             tex_obj.read().image.save(out / path)
+        return path
+
+    def masked_png(self, tex_obj, alpha_obj, folder, out):
+        name = f"{tex_obj.read().m_Name}_{tex_obj.path_id & 0xffffff:x}_m{alpha_obj.path_id & 0xffffff:x}"
+        path = f"{folder}/{em_safe(name)}.png"
+        self.filters[path] = tex_obj.read().m_TextureSettings.m_FilterMode
+        if not (out / path).exists():
+            (out / folder).mkdir(parents=True, exist_ok=True)
+            im = tex_obj.read().image.convert("RGBA")
+            a = alpha_obj.read().image
+            a = (a.getchannel("A") if a.mode in ("RGBA", "LA") and a.getextrema()[-1][0] < 255 else a.convert("L")).resize(im.size)
+            im.putalpha(a)
+            im.save(out / path)
         return path
 
     def material_texture(self, mat_obj):
@@ -285,7 +298,7 @@ class Ngui:
                 if a and a["target"]["m_PathID"]:
                     pending.append((idx, side[:-6], a, owner))
             node["widget"] = w
-            node["kind"] = k
+            node["kind"] = "UITexture" if k == "UITextureMasked" else k
         if k == "UISprite":
             a = self.atlas(owner, d["mAtlas"], out) if d["mAtlas"]["m_PathID"] else None
             node["sprite"] = {"atlas": a, "name": d["mSpriteName"], "type": d["mType"], "flip": d["mFlip"],
@@ -303,10 +316,17 @@ class Ngui:
                              "gradient_top": [d.get("mGradientTop", {}).get(c, 1.0) for c in "rgba"],
                              "gradient_bottom": [d.get("mGradientBottom", {}).get(c, 1.0) for c in "rgba"],
                              "key": d.get("mTextTerm", "")}
-        elif k == "UITexture":
+        elif k in ("UITexture", "UITextureMasked"):
             tex = self.resolve(owner, d["mTexture"]) if d["mTexture"]["m_PathID"] else None
             rc = d["mRect"]
-            node["texture"] = {"png": self.texture_png(tex, "textures", out) if tex and tex.type.name == "Texture2D" else None,
+            # UITextureMasked: same as UITexture, with the alpha taken from a second texture
+            am = d.get("mTextureAlpha", {})
+            alpha = self.resolve(owner, am) if am.get("m_PathID") else None
+            png = None
+            if tex and tex.type.name == "Texture2D":
+                png = (self.masked_png(tex, alpha, "textures", out) if alpha is not None and alpha.type.name == "Texture2D"
+                       else self.texture_png(tex, "textures", out))
+            node["texture"] = {"png": png,
                                "uv": [rc["x"], rc["y"], rc["width"], rc["height"]]}
             # a custom material (e.g. the SDF icon shader of the PC key tips): its shader name
             # and number/colour settings
