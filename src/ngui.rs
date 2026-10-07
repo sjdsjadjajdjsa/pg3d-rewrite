@@ -376,16 +376,25 @@ pub fn spawn_screen(commands: &mut Commands, assets: &AssetServer, data: &DataDi
         .and_then(|s| serde_json::from_str(&s).ok())
         .unwrap_or_default();
     let base = format!("ui/{name}");
-    let atlases = atlas_defs
-        .into_iter()
-        .map(|(k, a)| (k, (assets.load(format!("{base}/{}", a.png)), a)))
-        .collect();
-    let fonts = font_defs.into_iter().map(|(k, f)| (k, (assets.load(format!("{base}/{}", f.png)), f))).collect();
-    let textures = nodes
-        .iter()
-        .filter_map(|n| n.texture.as_ref()?.png.clone())
-        .map(|p| (p.clone(), assets.load(format!("{base}/{p}"))))
-        .collect();
+    // Unity filter mode per picture (filters.json): 0 = point, drawn with nearest-pixel
+    // sampling (the GameAtlas sprites are crisp in the original, not smoothed)
+    let filters: HashMap<String, i32> = read("filters.json").and_then(|s| serde_json::from_str(&s).ok()).unwrap_or_default();
+    let load = |png: &str| -> Handle<Image> {
+        let path = format!("{base}/{png}");
+        if filters.get(png) == Some(&0) {
+            assets
+                .load_builder()
+                .with_settings(|s: &mut bevy::image::ImageLoaderSettings| {
+                    s.sampler = bevy::image::ImageSampler::nearest();
+                })
+                .load(path)
+        } else {
+            assets.load(path)
+        }
+    };
+    let atlases = atlas_defs.into_iter().map(|(k, a)| (k, (load(&a.png), a))).collect();
+    let fonts = font_defs.into_iter().map(|(k, f)| (k, (load(&f.png), f))).collect();
+    let textures = nodes.iter().filter_map(|n| n.texture.as_ref()?.png.clone()).map(|p| (p.clone(), load(&p))).collect();
     let n = nodes.len();
     // things the game switches off right after loading
     let active_override: HashMap<usize, bool> =
