@@ -168,6 +168,9 @@ pub struct PanelDef {
 pub struct ButtonDef {
     #[serde(default)]
     pub on_click: Vec<String>,
+    /// a full-screen "tap anywhere to close" backdrop: clickable, but not lit up on hover
+    #[serde(default)]
+    pub backdrop: bool,
 }
 
 #[derive(Deserialize, Clone, Default)]
@@ -318,6 +321,11 @@ impl NguiScreen {
     /// Make a node clickable (for widgets the game drives through other scripts).
     pub fn make_button(&mut self, i: usize) {
         self.nodes[i].button.get_or_insert_with(ButtonDef::default);
+        self.dirty = true;
+    }
+    /// Like `make_button`, without the hover and press highlight (full-screen backdrops).
+    pub fn make_backdrop(&mut self, i: usize) {
+        self.nodes[i].button.get_or_insert_with(ButtonDef::default).backdrop = true;
         self.dirty = true;
     }
     /// `i` and every node below it, in list order.
@@ -1274,19 +1282,22 @@ fn aiming(cursors: &Query<&bevy::window::CursorOptions>) -> bool {
 }
 
 fn hover(
-    mut q: Query<(Ref<Interaction>, &mut BackgroundColor), With<Hit>>,
+    mut q: Query<(Ref<Interaction>, &mut BackgroundColor, &Hit)>,
+    screens: Query<&NguiScreen>,
     cursors: Query<&bevy::window::CursorOptions>,
     mut was_aiming: Local<bool>,
 ) {
     let aim = aiming(&cursors);
     let changed_mode = aim != *was_aiming;
     *was_aiming = aim;
-    for (i, mut bg) in &mut q {
+    for (i, mut bg, h) in &mut q {
         if !i.is_changed() && !changed_mode {
             continue;
         }
+        let backdrop = screens.get(h.screen).ok().and_then(|s| s.nodes[h.node].button.as_ref()).is_some_and(|b| b.backdrop);
         let want = match (*i, aim) {
             (_, true) => Color::NONE,
+            _ if backdrop => Color::NONE,
             (Interaction::Pressed, _) => Color::srgba(0.0, 0.0, 0.0, 0.15),
             (Interaction::Hovered, _) => Color::srgba(1.0, 1.0, 1.0, 0.08),
             (Interaction::None, _) => Color::NONE,
@@ -1302,8 +1313,14 @@ fn clicks(
     screens: Query<&NguiScreen>,
     mut out: MessageWriter<NguiClick>,
     cursors: Query<&bevy::window::CursorOptions>,
+    mouse: Res<ButtonInput<MouseButton>>,
 ) {
     if aiming(&cursors) {
+        return;
+    }
+    // only a new press: a button that appears under a held mouse (a popup opened by this
+    // very click) reads as pressed too
+    if !mouse.just_pressed(MouseButton::Left) {
         return;
     }
     for (i, h) in &q {

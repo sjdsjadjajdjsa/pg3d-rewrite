@@ -162,22 +162,22 @@ impl Item {
     }
 }
 
-/// InShopEffects value -> (translation key, stat icon). Values matched against the
-/// screenshots (Machine Gun 0 "Automatic", Pixel Gun 1 "Single shots", Shotgun 5,
-/// Combat Knife 39 "Melee", sniper rifles 11 "Zoom", Wizard Wand / Apocalypse 10
-/// "Area damage", Apocalypse 2 "Rockets").
-fn shop_effect(v: i32) -> Option<(&'static str, &'static str)> {
-    Some(match v {
-        0 => ("Key_1391", "shop_stats_auto"),
-        1 => ("Key_1392", "shop_stats_sngl"),
-        2 => ("Key_1394", "shop_stats_rkt"),
-        5 => ("Key_1390", "shop_stats_shtgn"),
-        10 => ("Key_0403", "shop_stats_area_dmg"),
-        11 => ("Key_0404", "shop_stats_zoom"),
-        39 => ("Key_0441", "shop_stats_melee"),
-        _ => return None,
-    })
+/// One weapon effect (export_effects.py: the table in Weapons.T_2001B54's static
+/// constructor), keyed by InShopEffects value.
+#[derive(Deserialize, Clone, Default)]
+#[serde(default)]
+struct EffectDef {
+    /// translation keys
+    title: String,
+    desc: Option<String>,
+    /// stat icon sprite
+    icon: String,
 }
+
+/// Heights of the Properties popup for 1, 2 and 3 effects (PropertiesPopupController).
+const POPUP_HEIGHTS: [f32; 3] = [204.0, 324.0, 444.0];
+/// Spacing of the effects in the popup (its UIGrid).
+const POPUP_ROW: f32 = 120.0;
 
 /// State of the Armory screen.
 #[derive(Component)]
@@ -195,6 +195,9 @@ struct Armory {
     selected: Option<String>,
     loadout: SavedLoadout,
     dirty: bool,
+    effects: HashMap<i32, EffectDef>,
+    /// the Properties popup is open
+    popup: bool,
 }
 
 /// The weapon picked in a category: the saved one, or the default (weapons.rs LOADOUT).
@@ -242,6 +245,8 @@ fn setup(
             "ArmoryView/Properties (OFF)",
             // the "+" next to the gems (OBSERVED)
             "ObjectForCenter/BankButton",
+            // the Properties popup sits under it, closed
+            "Right (OFF)/PopupProperties_Hint (OFF)",
         ] {
             if let Some(i) = s.find_path(path) {
                 s.set_active(i, true);
@@ -250,6 +255,29 @@ fn setup(
         for name in TABS.into_iter().chain(["BtnShoot"]) {
             if let Some(i) = s.find(name) {
                 s.make_button(i);
+            }
+        }
+        // the effect row under the stats and its "i" (PopupProperties_Btn) open the
+        // Properties popup; anywhere closes it (its full-screen Darken)
+        if let Some(sp) = s.find_path("PanelProperties (OFF)/Special") {
+            for j in s.subtree(sp) {
+                if s.nodes[j].name.starts_with("EffectsLabel") || s.nodes[j].name == "PopupProperties_Btn" {
+                    s.make_button(j);
+                }
+            }
+        }
+        if let Some(pp) = s.find_path("PopupProperties_Hint (OFF)") {
+            s.set_active(pp, false);
+            if let Some(d) = s.find_in(pp, "Darken") {
+                s.make_backdrop(d);
+            }
+            // OBSERVED: "Properties" and "Press anywhere to close" (the prefab's own texts
+            // are placeholders)
+            for (name, key) in [("Title_Label", "Key_10691"), ("Title_Label (1)", "Key_10691"), ("Title_Label (2)", "Key_10691"), ("Label_close", "Key_2380")] {
+                if let Some(i) = s.find_in(pp, name) {
+                    let t = s.string(key);
+                    s.set_text(i, t);
+                }
             }
         }
         // the Equip row sits under the right edge of the stats panel (OBSERVED). btn0 is
@@ -365,6 +393,14 @@ fn setup(
             selected: None,
             loadout: SavedLoadout::load(),
             dirty: true,
+            effects: std::fs::read_to_string(dir.join("effects.json"))
+                .ok()
+                .and_then(|t| serde_json::from_str::<HashMap<String, EffectDef>>(&t).ok())
+                .unwrap_or_default()
+                .into_iter()
+                .filter_map(|(k, v)| Some((k.parse().ok()?, v)))
+                .collect(),
+            popup: false,
         });
         // the character holding the selected weapon, behind the stats panel
         if let Some(p) = &preview {
@@ -403,7 +439,16 @@ fn clicks(
 ) {
     for c in clicks.read() {
         let Ok((s, mut a)) = screens.get_mut(c.screen) else { continue };
-        if let Some(k) = SECTIONS.iter().position(|(b, _)| *b == c.name) {
+        if a.popup {
+            // "Press anywhere to close"
+            a.popup = false;
+            a.dirty = true;
+            continue;
+        }
+        if c.name.starts_with("EffectsLabel") || c.name == "PopupProperties_Btn" {
+            a.popup = true;
+            a.dirty = true;
+        } else if let Some(k) = SECTIONS.iter().position(|(b, _)| *b == c.name) {
             a.section = k;
             a.tab = 0;
             a.dirty = true;
@@ -623,7 +668,9 @@ fn refresh(
         // stats panel of the selected weapon
         let item = selected.as_ref().and_then(|n| list.iter().find(|(m, _)| m == n)).map(|(_, i)| i.clone());
         let equipped_item = equipped.as_ref().and_then(|n| list.iter().find(|(m, _)| m == n)).map(|(_, i)| i.clone());
-        stats_panel(&mut s, item.as_ref(), equipped_item.as_ref());
+        stats_panel(&mut s, item.as_ref(), equipped_item.as_ref(), &a.effects);
+        let open = a.popup && item.is_some();
+        popup(&mut s, item.as_ref().filter(|_| open), &a.effects);
     }
 }
 
@@ -711,7 +758,7 @@ fn rarity_color(r: i32) -> &'static str {
     ["ffffff", "5fe35f", "37c8ff", "c86bff", "ffd200", "ff4f6e"].get(r.max(0) as usize).copied().unwrap_or("ffffff")
 }
 
-fn stats_panel(s: &mut NguiScreen, item: Option<&Item>, equipped: Option<&Item>) {
+fn stats_panel(s: &mut NguiScreen, item: Option<&Item>, equipped: Option<&Item>, defs: &HashMap<i32, EffectDef>) {
     let guns = s.find("Guns_Properties");
     let melee = s.find("Melee_Properties");
     let Some(item) = item else {
@@ -781,18 +828,19 @@ fn stats_panel(s: &mut NguiScreen, item: Option<&Item>, equipped: Option<&Item>)
             }
         }
     }
-    effects(s, item);
+    effects(s, item, defs);
 }
 
 /// The row under the stats with the weapon's effects ("Automatic", "Zoom", ...), at most
 /// three: two side by side, a third centred below (the prefab's layout).
-fn effects(s: &mut NguiScreen, item: &Item) {
+fn effects(s: &mut NguiScreen, item: &Item, defs: &HashMap<i32, EffectDef>) {
     let Some(special) = s.find_path("PanelProperties (OFF)/Special") else { return };
     s.set_active(special, true);
     if let Some(i) = s.find_in(special, "DescriptionGadget") {
         s.set_active(i, false);
     }
-    let fx: Vec<(&str, &str)> = item.InShopEffects.iter().filter_map(|v| shop_effect(*v)).take(3).collect();
+    let fx: Vec<(&str, &str)> =
+        item.InShopEffects.iter().filter_map(|v| defs.get(v)).map(|d| (d.title.as_str(), d.icon.as_str())).take(3).collect();
     let slots = ["EffectsLabel1", "EffectsLabel3", "EffectsLabel5", "EffectsLabel2", "EffectsLabel4"];
     let pos: &[Vec2] = match fx.len() {
         1 => &[Vec2::new(21.0, 0.0)],
@@ -813,6 +861,42 @@ fn effects(s: &mut NguiScreen, item: &Item) {
         }
         if let Some(sp) = s.subtree(l).into_iter().find(|&j| j != l && s.nodes[j].sprite.is_some()) {
             s.set_sprite(sp, icon);
+        }
+    }
+}
+
+/// The Properties popup (PopupProperties_Hint): one row per effect of the weapon, with its
+/// icon, name and description; closed when `item` is None.
+fn popup(s: &mut NguiScreen, item: Option<&Item>, defs: &HashMap<i32, EffectDef>) {
+    let Some(pp) = s.find_path("PopupProperties_Hint (OFF)") else { return };
+    let fx: Vec<&EffectDef> = item.map(|i| i.InShopEffects.iter().filter_map(|v| defs.get(v)).take(3).collect()).unwrap_or_default();
+    s.set_active(pp, !fx.is_empty());
+    if fx.is_empty() {
+        return;
+    }
+    if let Some(h) = s.find_in(pp, "Hint_cont") {
+        s.set_size(h, Vec2::new(348.0, POPUP_HEIGHTS[fx.len() - 1]));
+    }
+    let Some(grid) = s.find_in(pp, "Grid") else { return };
+    let rows: Vec<usize> = s.subtree(grid).into_iter().filter(|&j| s.nodes[j].parent == Some(grid)).collect();
+    for (k, &row) in rows.iter().enumerate() {
+        let Some(d) = fx.get(k) else {
+            s.set_active(row, false);
+            continue;
+        };
+        s.set_active(row, true);
+        // the first effect at the top; the last one sits on the grid's origin
+        s.set_pos(row, Vec2::new(0.0, (fx.len() - 1 - k) as f32 * POPUP_ROW));
+        if let Some(i) = s.find_in(row, "Perk_Icon") {
+            s.set_sprite(i, &d.icon);
+        }
+        if let Some(i) = s.find_in(row, "Title_Label") {
+            let t = s.string(&d.title);
+            s.set_text(i, t);
+        }
+        if let Some(i) = s.find_in(row, "Description_Label") {
+            let t = d.desc.as_deref().map(|k| s.string(k)).unwrap_or_default();
+            s.set_text(i, t);
         }
     }
 }
