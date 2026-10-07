@@ -27,8 +27,9 @@ use crate::{
 const WAVE_SIZE: u32 = 45;
 /// How many bots are alive at once (GUESS: about 10 were on screen in the reference clips).
 const MAX_ALIVE: usize = 10;
-/// Pause between waves, seconds (GUESS).
-const WAVE_BREAK: f32 = 6.0;
+/// Pause between waves, seconds. OBSERVED (reference clip d_rec7, wave 2 -> 3): "Wave is
+/// over! Pick up the prize!" for 5 s, then a 5-4-3-2-1 countdown, then "New wave!".
+pub const WAVE_BREAK: f32 = 10.25;
 /// Seconds between spawns while below MAX_ALIVE (GUESS: a 45-zombie wave took ~75 s).
 const SPAWN_INTERVAL: f32 = 1.2;
 /// Player health. GUESS: the original value is obfuscated; classic campaign had 9 hearts.
@@ -53,7 +54,7 @@ impl Plugin for BotsPlugin {
             .add_systems(FixedUpdate, (bot_brain, bot_move).chain())
             .add_systems(
                 Update,
-                (spawner, apply_damage, bot_death, bot_animation, player_death, auto_aim, fade_banners),
+                (spawner, apply_damage, bot_death, bot_animation, player_death, auto_aim),
             );
     }
 }
@@ -128,6 +129,8 @@ pub struct Wave {
     pub break_left: f32,
     /// zombies of this wave still alive or not spawned yet (the HUD counter)
     pub left: u32,
+    /// seconds since this wave started
+    pub age: f32,
 }
 
 #[derive(Resource)]
@@ -289,22 +292,22 @@ fn spawner(
     let dt = time.delta_secs();
     let alive = bots.iter().filter(|b| b.state != BotState::Dead).count();
     wave.left = alive as u32 + wave.to_spawn;
+    wave.age += dt;
     // waves: every wave sends WAVE_SIZE zombies; when they are all dead there is a short
     // break, then the next, harder wave starts
     if wave.to_spawn == 0 && alive == 0 {
         if wave.break_left <= 0.0 {
+            // the in-match HUD shows the original wave messages (ingame_ui.rs)
             wave.break_left = if wave.number == 0 { 2.0 } else { WAVE_BREAK };
-            if wave.number > 0 {
-                banner(&mut commands, "WAVE CLEARED!", Color::srgb(0.3, 1.0, 0.3));
-            }
         }
         wave.break_left -= dt;
         if wave.break_left <= 0.0 {
             wave.number += 1;
-            wave.to_spawn = WAVE_SIZE;
+            // PG3D_WAVE_SIZE=n (automated tests): smaller waves to reach the breaks quickly
+            wave.to_spawn = std::env::var("PG3D_WAVE_SIZE").ok().and_then(|v| v.parse().ok()).unwrap_or(WAVE_SIZE);
             wave.break_left = 0.0;
+            wave.age = 0.0;
             info!("wave {} ({} zombies)", wave.number, wave.to_spawn);
-            banner(&mut commands, &format!("WAVE {}", wave.number), Color::srgb(1.0, 0.85, 0.1));
         }
         return;
     }
@@ -703,48 +706,6 @@ fn player_death(
         stats.health = PLAYER_MAX_HEALTH;
         stats.respawn_in = 0.0;
         stats.protected = 3.0; // GUESS: spawn protection time
-    }
-}
-
-/// Big centred message that fades out ("WAVE 2", "WAVE CLEARED!").
-#[derive(Component)]
-struct Banner(f32);
-
-fn banner(commands: &mut Commands, text: &str, color: Color) {
-    commands.spawn((
-        Banner(2.5),
-        Node {
-            position_type: PositionType::Absolute,
-            width: percent(100.0),
-            top: percent(28.0),
-            justify_content: JustifyContent::Center,
-            ..default()
-        },
-        children![(
-            Text::new(text),
-            TextFont { font_size: FontSize::Px(64.0), ..default() },
-            TextColor(color),
-            TextShadow { offset: Vec2::splat(3.0), color: Color::BLACK },
-        )],
-    ));
-}
-
-fn fade_banners(
-    mut commands: Commands,
-    time: Res<Time>,
-    mut q: Query<(Entity, &mut Banner, &Children)>,
-    mut texts: Query<&mut TextColor>,
-) {
-    for (e, mut b, kids) in &mut q {
-        b.0 -= time.delta_secs();
-        for k in kids.iter() {
-            if let Ok(mut c) = texts.get_mut(k) {
-                c.0.set_alpha(b.0.clamp(0.0, 1.0));
-            }
-        }
-        if b.0 <= 0.0 {
-            commands.entity(e).despawn();
-        }
     }
 }
 

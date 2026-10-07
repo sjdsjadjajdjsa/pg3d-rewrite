@@ -22,7 +22,7 @@ pub struct InGameUiPlugin;
 impl Plugin for InGameUiPlugin {
     fn build(&self, app: &mut App) {
         app.add_systems(Startup, spawn)
-            .add_systems(Update, (setup, place_corners, update, update_arena_box).chain());
+            .add_systems(Update, (setup, place_corners, update, update_arena_box, wave_messages).chain());
     }
 }
 
@@ -41,6 +41,11 @@ struct HudNodes {
     health_label: Option<usize>,
     health_fill: Option<usize>,
     top_left: Option<usize>,
+    /// InGameNotifications labels: "Wave is over! Pick up the prize!", "New wave!", and
+    /// Wave1_And_Counter (the 5-4-3-2-1 countdown between waves)
+    wave_done: Option<usize>,
+    new_wave: Option<usize>,
+    counter: Option<usize>,
     last: String,
 }
 
@@ -110,10 +115,20 @@ fn setup(mut commands: Commands, mut screens: Query<(Entity, &mut NguiScreen), A
             let name = s.nodes[i].name.as_str();
             if (p == Some(camera) && i != interface)
                 || (p == Some(interface) && i != container)
-                || (p == Some(container) && name != "WeaponToggles" && name != "TopLeftAnchor")
+                || (p == Some(container) && !["WeaponToggles", "TopLeftAnchor", "InGameNotifications"].contains(&name))
             {
                 s.set_active(i, false);
             }
+        }
+        if let Some(t) = s.find("InGameNotifications") {
+            for i in s.subtree(t) {
+                if s.nodes[i].parent == Some(t) {
+                    s.set_active(i, false);
+                }
+            }
+            nodes.wave_done = s.find_in(t, "WaveDone");
+            nodes.new_wave = s.find_in(t, "NewWave");
+            nodes.counter = s.find_in(t, "Wave1_And_Counter");
         }
         if let Some(t) = s.find("TopLeftAnchor") {
             nodes.top_left = Some(t);
@@ -217,5 +232,39 @@ fn update(
         if let Some(c) = selected {
             s.set_active(c, slot == loadout.current);
         }
+    }
+}
+
+/// Between Arena waves (timings OBSERVED in reference clip d_rec7): "Wave is over! Pick up
+/// the prize!" for the first 5 s of the break, then a 5-4-3-2-1 countdown, then "New wave!"
+/// for about a second once the next wave has started.
+fn wave_messages(
+    wave: Res<crate::bots::Wave>,
+    stats: Res<PlayerStats>,
+    hud: Res<Hud>,
+    mut screens: Query<(&mut NguiScreen, &mut HudNodes)>,
+    mut last: Local<String>,
+) {
+    let Some(e) = hud.0 else { return };
+    let Ok((mut s, n)) = screens.get_mut(e) else { return };
+    let between = wave.number > 0 && wave.left == 0 && wave.break_left > 0.0 && stats.health > 0.0;
+    let elapsed = crate::bots::WAVE_BREAK - wave.break_left;
+    let done = between && elapsed < 5.0;
+    let count = if between && !done { wave.break_left.ceil().clamp(1.0, 5.0) as u32 } else { 0 };
+    let new = wave.number > 1 && wave.break_left <= 0.0 && wave.age < 1.25 && stats.health > 0.0;
+    let key = format!("{done} {count} {new}");
+    if *last == key {
+        return;
+    }
+    *last = key;
+    if let Some(i) = n.wave_done {
+        s.set_active(i, done);
+    }
+    if let Some(i) = n.new_wave {
+        s.set_active(i, new);
+    }
+    if let Some(i) = n.counter {
+        s.set_active(i, count > 0);
+        s.set_text(i, count.to_string());
     }
 }

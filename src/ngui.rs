@@ -109,6 +109,17 @@ pub struct LabelDef {
     /// translation key (NGUI/I2 "term"); the text field is then just a placeholder
     #[serde(default)]
     pub key: String,
+    /// NGUI "Gradient": each glyph's colour fades from `gradient_top` to `gradient_bottom`
+    #[serde(default)]
+    pub gradient: bool,
+    #[serde(default = "white")]
+    pub gradient_top: [f32; 4],
+    #[serde(default = "white")]
+    pub gradient_bottom: [f32; 4],
+}
+
+fn white() -> [f32; 4] {
+    [1.0; 4]
 }
 
 #[derive(Deserialize, Clone, Default)]
@@ -963,10 +974,30 @@ fn build_glyphs(commands: &mut Commands, screen: &mut NguiScreen, i: usize, e: E
                 im.image_mode = NodeImageMode::Stretch;
                 kids.push((place(*off), im, Pickable::IGNORE, ZIndex(0)));
             }
-            let mut im = ImageNode::new(img.clone()).with_color(*col);
-            im.rect = Some(rect);
-            im.image_mode = NodeImageMode::Stretch;
-            kids.push((place(Vec2::ZERO), im, Pickable::IGNORE, ZIndex(1)));
+            if !l.gradient {
+                let mut im = ImageNode::new(img.clone()).with_color(*col);
+                im.rect = Some(rect);
+                im.image_mode = NodeImageMode::Stretch;
+                kids.push((place(Vec2::ZERO), im, Pickable::IGNORE, ZIndex(1)));
+                continue;
+            }
+            // vertical gradient: draw the glyph as horizontal strips, each tinted by the
+            // gradient at its middle (NGUI interpolates between the quad's top and bottom)
+            const STRIPS: usize = 4;
+            let c = col.to_srgba();
+            for j in 0..STRIPS {
+                let (a, b) = (j as f32 / STRIPS as f32, (j + 1) as f32 / STRIPS as f32);
+                let t = (a + b) / 2.0;
+                let gc: Vec<f32> = (0..4).map(|i| l.gradient_top[i] + (l.gradient_bottom[i] - l.gradient_top[i]) * t).collect();
+                let tint_c = Color::srgba(c.red * gc[0], c.green * gc[1], c.blue * gc[2], c.alpha * gc[3]);
+                let mut im = ImageNode::new(img.clone()).with_color(tint_c);
+                im.rect = Some(Rect::new(g[0], g[1] + g[3] * a, g[0] + g[2], g[1] + g[3] * b));
+                im.image_mode = NodeImageMode::Stretch;
+                let mut n = place(Vec2::ZERO);
+                n.top = px((y + g[3] * a * s) * k);
+                n.height = px(g[3] * (b - a) * s * k);
+                kids.push((n, im, Pickable::IGNORE, ZIndex(1)));
+            }
         }
     }
     let ids: Vec<Entity> = kids.into_iter().map(|b| commands.spawn((b, Glyphs)).id()).collect();
