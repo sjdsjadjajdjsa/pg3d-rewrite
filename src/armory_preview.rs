@@ -3,11 +3,12 @@
 //! Drawn by its own camera into a picture that the Armory screen shows behind its stats
 //! panel (as in the original, where the panel covers the legs). The character and weapon
 //! live on their own render layer far below the lobby so the lobby's lights and models
-//! don't mix in. The original fits the character's arms to the weapon's hand points (IK);
-//! we only place the weapon at the character's Weapon_point for now.
+//! don't mix in. As in the original (CharacterInterfaceV2), the weapon prefab sits at the
+//! character's gun point with its own arms, posed by the weapon's profile animation, and
+//! the character's arms are hidden.
 
 use bevy::{
-    camera::{primitives::Aabb, visibility::RenderLayers, RenderTarget},
+    camera::{visibility::RenderLayers, RenderTarget},
     core_pipeline::tonemapping::Tonemapping,
     input::mouse::MouseMotion,
     math::Affine2,
@@ -24,7 +25,7 @@ impl Plugin for ArmoryPreviewPlugin {
         app.init_resource::<PreviewWeapon>()
             .add_systems(Startup, spawn)
             .init_resource::<PreviewShoot>()
-            .add_systems(Update, (tag_meshes, play_idle, attach_weapon, hide_weapon_extras, fit_weapon, shoot, drag_spin).chain());
+            .add_systems(Update, (tag_meshes, play_idle, attach_weapon, hide_weapon_extras, hide_char_arms, shoot, play_profile, drag_spin).chain());
     }
 }
 
@@ -59,18 +60,34 @@ struct PreviewChar {
     playing: bool,
 }
 
-/// Parts of a weapon file that are not the gun (first-person arms, muzzle effects).
-#[derive(Component)]
-struct NotGun;
-
 #[derive(Component)]
 struct HeldWeapon {
     cleaned: bool,
-    /// centre of the gun model in the weapon file's space (measured once loaded)
-    centre: Option<Vec3>,
     /// "Shoot" sound and the time between shots (weapon info.json)
     sound: Option<Handle<AudioSource>>,
     interval: f32,
+    /// the Armory pose (export_profiles.py), its tracks resolved to entities once loaded
+    profile: Option<Profile>,
+    tracks: Vec<(Entity, usize)>,
+    age: f32,
+}
+
+#[derive(Deserialize, Clone)]
+struct Profile {
+    length: f32,
+    fps: f32,
+    tracks: Vec<Track>,
+}
+
+#[derive(Deserialize, Clone)]
+struct Track {
+    path: String,
+    #[serde(default)]
+    rotation: Vec<[f32; 4]>,
+    #[serde(default)]
+    translation: Vec<[f32; 3]>,
+    #[serde(default)]
+    scale: Vec<[f32; 3]>,
 }
 
 /// The Armory's Shoot button: the character raises the weapon to the side and fires a
@@ -214,13 +231,18 @@ fn attach_weapon(
     }
     let Ok(ch) = chars.single() else { return };
     // wait until the character is loaded
-    if !children.iter_descendants(ch).any(|d| names.get(d).is_ok_and(|n| n.as_str() == "Weapon_point")) {
+    let Some(point) = children.iter_descendants(ch).find(|d| names.get(*d).is_ok_and(|n| n.as_str() == "Weapon_point")) else {
         return;
-    }
+    };
     if let Some((_, old)) = want.held.take() {
         commands.entity(old).despawn();
     }
     let Some(name) = want.wanted.clone() else { return };
+    // CharacterInterfaceV2 puts the gun point at (0.04, 0, -0.52) (0 across for
+    // exoskeletons; glTF x is mirrored)
+    commands.entity(point).insert(Transform::from_xyz(-0.04, 0.0, -0.52)
+        .with_rotation(Quat::from_xyzw(0.5, -0.5, -0.5, 0.5))
+        .with_scale(Vec3::splat(0.6299208)));
     let info: WeaponInfo = std::fs::read_to_string(data.0.join(format!("weapons/{name}/info.json")))
         .ok()
         .and_then(|t| serde_json::from_str(&t).ok())
@@ -230,26 +252,34 @@ fn attach_weapon(
     let w = commands
         .spawn((
             Name::new(format!("preview {name}")),
-            HeldWeapon { cleaned: false, centre: None, sound, interval },
+            HeldWeapon {
+                cleaned: false,
+                sound,
+                interval,
+                profile: std::fs::read_to_string(data.0.join(format!("weapons/{name}/profile.json")))
+                    .ok()
+                    .and_then(|t| serde_json::from_str(&t).ok()),
+                tracks: vec![],
+                age: 0.0,
+            },
             crate::particles::AssetDir(format!("weapons/{name}")),
             RenderLayers::layer(LAYER),
             WorldAssetRoot(assets.load(GltfAssetLabel::Scene(0).from_asset(format!("weapons/{name}/weapon.gltf")))),
-            // held low at the right hip, pointing ahead (OBSERVED pose); the weapon files
-            // are first-person, with the gun 1.5 up and 0.8 ahead of their origin
-            weapon_transform(),
-            ChildOf(ch),
+            // the original parents the weapon prefab to the character's Weapon_point as it
+            // is, and moves the character's arms onto the prefab's arm points (snap_arms)
+            Transform::IDENTITY,
+            ChildOf(point),
         ))
         .id();
     want.held = Some((name, w));
 }
 
-/// The weapon files are first-person: hide their arms and muzzle effects.
+/// Hide the weapon file's muzzle effects until it fires.
 fn hide_weapon_extras(
     mut commands: Commands,
     mut weapons: Query<(Entity, &mut HeldWeapon)>,
     children: Query<&Children>,
     names: Query<&Name>,
-    meshes: Query<(), With<Mesh3d>>,
 ) {
     for (w, mut h) in &mut weapons {
         if h.cleaned {
@@ -262,43 +292,18 @@ fn hide_weapon_extras(
         for e in all {
             let Ok(n) = names.get(e) else { continue };
             if n.as_str() == "BulletSpawnPoint" {
-                commands.entity(e).insert((Visibility::Hidden, NotGun));
-            }
-            if n.as_str() == "Arms_Mesh" {
-                // the arm mesh itself (its primitives), not the gun mesh below it
-                for c in children.get(e).into_iter().flatten() {
-                    if meshes.contains(*c) {
-                        commands.entity(*c).insert((Visibility::Hidden, NotGun));
-                    }
-                }
+                commands.entity(e).insert(Visibility::Hidden);
             }
         }
         h.cleaned = true;
     }
 }
 
-fn weapon_transform() -> Transform {
-    pose(0.0, DEFAULT_CENTRE)
-}
-
-/// Gun centre of the Machine Gun's file, used until a weapon's own is measured.
-const DEFAULT_CENTRE: Vec3 = Vec3::new(0.0, 1.5, 0.82);
-
-/// Weapon pose between holding it low at the side (0) and aiming it level to the
-/// character's right, our left (1).
-fn pose(aim: f32, centre: Vec3) -> Transform {
-    let low = Quat::from_rotation_z(1.0) * Quat::from_rotation_y(-std::f32::consts::FRAC_PI_2);
-    let up = Quat::from_rotation_y(-std::f32::consts::FRAC_PI_2);
-    let rot = low.slerp(up, aim);
-    let gun = Vec3::new(-0.68, 0.92, 0.45).lerp(Vec3::new(-0.25, 1.2, 0.4), aim);
-    Transform::from_translation(gun - rot * centre).with_rotation(rot)
-}
-
 fn shoot(
     mut commands: Commands,
     time: Res<Time>,
     mut st: ResMut<PreviewShoot>,
-    mut weapons: Query<(Entity, &HeldWeapon, &mut Transform)>,
+    weapons: Query<(Entity, &HeldWeapon)>,
     mut flashes: MessageWriter<crate::particles::Burst>,
 ) {
     let dt = time.delta_secs();
@@ -306,8 +311,7 @@ fn shoot(
     st.time = (st.time - dt).max(0.0);
     let target = if firing { 1.0 } else { 0.0 };
     st.aim += (target - st.aim) * (dt * 10.0).min(1.0);
-    let Ok((we, w, mut tf)) = weapons.single_mut() else { return };
-    *tf = pose(st.aim, w.centre.unwrap_or(DEFAULT_CENTRE));
+    let Ok((we, w)) = weapons.single() else { return };
     if firing && st.aim > 0.9 {
         st.next_shot -= dt;
         if st.next_shot <= 0.0 {
@@ -315,66 +319,6 @@ fn shoot(
             // the weapon's own muzzle flash particles (particles.rs)
             flashes.write(crate::particles::Burst(we));
             crate::sound::play(&mut commands, w.sound.as_ref(), None, 0.6);
-        }
-    }
-}
-
-/// Measure where the gun model sits in its file (weapons differ: knives, pistols and
-/// launchers are not where the Machine Gun is) so every weapon lands in the hands.
-fn fit_weapon(
-    mut weapons: Query<(Entity, &mut HeldWeapon, &GlobalTransform)>,
-    children: Query<&Children>,
-    boxes: Query<(&Aabb, &GlobalTransform, &InheritedVisibility), With<Mesh3d>>,
-    all_meshes: Query<(), With<Mesh3d>>,
-    not_gun: Query<(), With<NotGun>>,
-    skinned: Query<(), With<bevy::mesh::skinning::SkinnedMesh>>,
-    parents: Query<&ChildOf>,
-) {
-    for (w, mut h, root) in &mut weapons {
-        if h.centre.is_some() || !h.cleaned {
-            continue;
-        }
-        // wait until every part has its bounds
-        let is_gun = |e: Entity| !not_gun.contains(e) && !parents.iter_ancestors(e).any(|a| not_gun.contains(a));
-        let parts: Vec<Entity> = children.iter_descendants(w).filter(|e| all_meshes.contains(*e) && is_gun(*e)).collect();
-        if parts.is_empty() || parts.iter().any(|e| !boxes.contains(*e)) {
-            continue;
-        }
-        // skinned guns: their bounds are those of the bind pose, not where the gun is drawn;
-        // those keep the default (they are the first-person rifles the default was made from)
-        if parts.iter().any(|e| skinned.contains(*e)) {
-            h.centre = Some(DEFAULT_CENTRE);
-            continue;
-        }
-        let inv = root.affine().inverse();
-        let (mut lo, mut hi) = (Vec3::splat(f32::MAX), Vec3::splat(f32::MIN));
-        let mut any = false;
-        for &e in &parts {
-            let Ok((aabb, gt, _)) = boxes.get(e) else { continue };
-            for sx in [-1.0, 1.0] {
-                for sy in [-1.0, 1.0] {
-                    for sz in [-1.0, 1.0] {
-                        let corner = Vec3::from(aabb.center) + Vec3::from(aabb.half_extents) * Vec3::new(sx, sy, sz);
-                        let p = inv.transform_point3(gt.transform_point(corner));
-                        lo = lo.min(p);
-                        hi = hi.max(p);
-                        any = true;
-                    }
-                }
-            }
-        }
-        if any {
-            h.centre = Some((lo + hi) / 2.0);
-            debug!("armory preview: gun box {lo:?}..{hi:?}");
-            if std::env::var("PG3D_TRACE_PREVIEW").is_ok() {
-                info!("armory preview: gun box {lo:?}..{hi:?}");
-                for e in children.iter_descendants(w) {
-                    if let Ok((aabb, gt, vis)) = boxes.get(e) {
-                        let c = inv.transform_point3(gt.transform_point(Vec3::from(aabb.center)));
-                        info!("  part {e:?} centre {c:?} half {:?} visible {}", aabb.half_extents, vis.get());
-                    }
-                }
-            }
         }
     }
 }
@@ -407,6 +351,86 @@ fn drag_spin(
     if *dragging && dx != 0.0 {
         for mut t in &mut chars {
             t.rotate_y(dx * 0.01);
+        }
+    }
+}
+
+/// The weapon prefab brings its own arms (Arms_Mesh, posed by its profile animation); the
+/// character's arms are hidden (CharacterInterfaceV2).
+fn hide_char_arms(chars: Query<Entity, With<PreviewChar>>, children: Query<&Children>, names: Query<&Name>, mut vis: Query<&mut Visibility>) {
+    let Ok(ch) = chars.single() else { return };
+    for d in children.iter_descendants(ch) {
+        if names.get(d).is_ok_and(|n| n.as_str() == "Arm_left" || n.as_str() == "Arm_right")
+            && let Ok(mut v) = vis.get_mut(d)
+        {
+            *v = Visibility::Hidden;
+        }
+    }
+}
+
+/// Play the weapon's profile animation (its Armory pose, looping) on the prefab's arms and
+/// gun bones.
+fn play_profile(
+    time: Res<Time>,
+    mut weapons: Query<(Entity, &mut HeldWeapon)>,
+    children: Query<&Children>,
+    names: Query<&Name>,
+    mut tf: Query<&mut Transform>,
+) {
+    for (w, mut h) in &mut weapons {
+        let Some(p) = h.profile.clone() else { continue };
+        if h.tracks.is_empty() {
+            // paths start below the weapon's "*_Inner" object
+            let all: Vec<Entity> = children.iter_descendants(w).collect();
+            let inner = all.iter().copied().find(|e| names.get(*e).is_ok_and(|n| n.as_str().to_lowercase().ends_with("_inner")));
+            let Some(inner) = inner else { continue };
+            for (k, t) in p.tracks.iter().enumerate() {
+                let mut node = inner;
+                let mut ok = true;
+                for part in t.path.split('/').filter(|x| !x.is_empty()) {
+                    let hit = children
+                        .get(node)
+                        .into_iter()
+                        .flatten()
+                        .copied()
+                        .find(|c| names.get(*c).is_ok_and(|n| n.as_str().eq_ignore_ascii_case(part)));
+                    match hit {
+                        Some(c) => node = c,
+                        None => {
+                            ok = false;
+                            break;
+                        }
+                    }
+                }
+                if ok {
+                    h.tracks.push((node, k));
+                }
+            }
+            if h.tracks.is_empty() {
+                h.profile = None;
+                continue;
+            }
+        }
+        h.age += time.delta_secs();
+        let t = if p.length > 0.0 { h.age % p.length } else { 0.0 };
+        let f = t * p.fps;
+        let (i, a) = (f.floor() as usize, f.fract());
+        for &(e, k) in &h.tracks {
+            let tr = &p.tracks[k];
+            let Ok(mut x) = tf.get_mut(e) else { continue };
+            let pick = |n: usize| (i.min(n.saturating_sub(1)), (i + 1).min(n.saturating_sub(1)));
+            if !tr.rotation.is_empty() {
+                let (i0, i1) = pick(tr.rotation.len());
+                x.rotation = Quat::from_array(tr.rotation[i0]).slerp(Quat::from_array(tr.rotation[i1]), a);
+            }
+            if !tr.translation.is_empty() {
+                let (i0, i1) = pick(tr.translation.len());
+                x.translation = Vec3::from(tr.translation[i0]).lerp(Vec3::from(tr.translation[i1]), a);
+            }
+            if !tr.scale.is_empty() {
+                let (i0, i1) = pick(tr.scale.len());
+                x.scale = Vec3::from(tr.scale[i0]).lerp(Vec3::from(tr.scale[i1]), a);
+            }
         }
     }
 }
