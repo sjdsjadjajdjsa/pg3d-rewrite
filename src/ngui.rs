@@ -737,7 +737,7 @@ fn is_descendant(screen: &NguiScreen, mut j: usize, ancestor: usize) -> bool {
 /// A 9-slice sprite whose middle is not drawn ("Fill Center" off in NGUI): a frame.
 fn is_hollow(s: &SpriteDef, r: &[f32]) -> bool {
     let clear_centre = r.get(12).is_some_and(|v| *v > 0.5);
-    s.kind == 1 && (!s.fill_center || clear_centre) && r[4] + r[5] + r[6] + r[7] > 0.0
+    (s.kind == 1 || s.kind == 4) && (!s.fill_center || clear_centre) && r[4] + r[5] + r[6] + r[7] > 0.0
 }
 
 /// Draw a hollow 9-slice sprite as its 8 border pieces (Bevy's slicer always fills the centre).
@@ -798,7 +798,7 @@ struct ImageNodeUpdate {
 /// Sliced sprites keep their corners at 1 virtual pixel = `k` screen pixels.
 fn slice_update(screen: &NguiScreen, nd: &NodeDef, k: f32) -> Option<ImageNodeUpdate> {
     let s = nd.sprite.as_ref()?;
-    if s.kind != 1 {
+    if s.kind != 1 && s.kind != 4 {
         return None;
     }
     let (_, a) = screen.atlases.get(s.atlas.as_ref()?)?;
@@ -881,7 +881,8 @@ fn make_widget(screen: &NguiScreen, i: usize, alpha: f32, k: f32, sr: Rect) -> O
         image.flip_x = s.flip == 1 || s.flip == 3;
         image.flip_y = s.flip == 2 || s.flip == 3;
         image.image_mode = match s.kind {
-            1 if r[4] + r[5] + r[6] + r[7] > 0.0 => NodeImageMode::Sliced(TextureSlicer {
+            // 4 = Advanced: a 9-slice whose parts can be sliced/tiled/invisible; drawn sliced
+            1 | 4 if r[4] + r[5] + r[6] + r[7] > 0.0 => NodeImageMode::Sliced(TextureSlicer {
                 border: BorderRect { min_inset: Vec2::new(r[4], r[6]), max_inset: Vec2::new(r[5], r[7]) },
                 center_scale_mode: SliceScaleMode::Stretch,
                 sides_scale_mode: SliceScaleMode::Stretch,

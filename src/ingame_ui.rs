@@ -53,6 +53,9 @@ struct HudNodes {
     last: String,
 }
 
+/// Size of the PC weapon bar relative to the prefab (see `setup`).
+const PC_BAR_SCALE: f32 = 1.1;
+
 /// Slot order of the original bar (keys 1-6 by default).
 const SLOTS: [&str; 6] = ["PrimaryToggle", "BackupToggle", "MelleToggle", "SpecialToggle", "SniperlToggle", "PremiumToggle"];
 
@@ -158,6 +161,13 @@ fn setup(mut commands: Commands, mut screens: Query<(Entity, &mut NguiScreen), A
             }
         }
         if let Some(bar) = s.find("WeaponToggles") {
+            // On PC the slot bar is 10 % bigger than the prefab's AnchorPanel (544x194): the
+            // slots are anchored to it, so they grow with it (MEASURED from 1920x1080
+            // screenshots of the original: selected frame 131x136 px instead of 118x124;
+            // the code that resizes it hasn't been found yet)
+            if let Some(a) = s.find_in(bar, "AnchorPanel") {
+                s.set_size(a, Vec2::new(544.0, 194.0) * PC_BAR_SCALE);
+            }
             for name in ["Panel_Tap_Dater", "TutorTargetAnchor"] {
                 if let Some(i) = child(&s, bar, name) {
                     s.set_active(i, false);
