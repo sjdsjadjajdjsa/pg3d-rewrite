@@ -565,8 +565,18 @@ class Exporter:
             # ExplosionObjectRespawnController: the game spawns an explosive barrel/TNT here
             # (and respawns it); we place it as a child node tagged for the game to handle
             prefab_t, info = explosive
+            fx = info.pop("_fx", None)
             self.in_explosive = True
             c = self.walk(prefab_t, world)
+            if c is not None and fx is not None:
+                # the blast effect (particle systems), fired by the game when it explodes
+                fx_go = deref(fx.m_GameObject)
+                self.force_active.add(fx_go.m_Name)
+                f = self.walk(fx, world)
+                if f is not None:
+                    self.vis.doc["nodes"][f]["translation"] = [0.0, 0.3, 0.0]
+                    self.vis.doc["nodes"][c].setdefault("children", []).append(f)
+                    info["effect"] = fx_go.m_Name
             self.in_explosive = False
             if c is not None:
                 self.vis.doc["nodes"][c]["translation"] = [0.0, 0.0, 0.0]
@@ -609,6 +619,12 @@ class Exporter:
                         if rs is not None and rs.m_ClassName == "DamagedExplosionObject":
                             info.update(radius=float(r.radiusExplosion), radius_max=float(r.radiusMaxExplosion),
                                         damage_percent=float(r.damagePercent))
+                            fx = deref(r.explosionEffect)
+                            if fx is not None:
+                                for fc in fx.m_Component:
+                                    ft = deref(getattr(fc, "component", fc))
+                                    if type(ft).__name__ == "Transform":
+                                        info["_fx"] = ft
                     elif type(r).__name__ == "BoxCollider":
                         info.update(box_center=[-r.m_Center.x, r.m_Center.y, r.m_Center.z],
                                     box_size=[r.m_Size.x, r.m_Size.y, r.m_Size.z])
@@ -830,6 +846,42 @@ def _minmax(x, default):
     return (hi + lo) / 2 if state == 3 else hi
 
 
+def _gradient_color(mm, t=0.0):
+    """Colour of a Unity MinMaxGradient: constant (state 0), gradient (1), two colours (2,
+    averaged) or two gradients (3), sampled at t (0..1)."""
+    white = {"r": 1.0, "g": 1.0, "b": 1.0, "a": 1.0}
+
+    def grad(g):
+        if not g:
+            return white
+        nc, na = g.get("m_NumColorKeys", 0), g.get("m_NumAlphaKeys", 0)
+        keys = [(g.get(f"ctime{i}", 0) / 65535.0, g.get(f"key{i}", white)) for i in range(max(nc, 1))]
+        akeys = [(g.get(f"atime{i}", 0) / 65535.0, g.get(f"key{i}", white).get("a", 1.0)) for i in range(max(na, 1))]
+
+        def lerp(ks, f):
+            if t <= ks[0][0]:
+                return f(ks[0][1])
+            for (t0, v0), (t1, v1) in zip(ks, ks[1:]):
+                if t <= t1:
+                    u = (t - t0) / max(t1 - t0, 1e-6)
+                    return [a + (b - a) * u for a, b in zip(f(v0), f(v1))]
+            return f(ks[-1][1])
+        rgb = lerp(keys, lambda k: [k.get("r", 1), k.get("g", 1), k.get("b", 1)])
+        alpha = lerp(akeys, lambda v: [v])[0]
+        return {"r": rgb[0], "g": rgb[1], "b": rgb[2], "a": alpha}
+    state = mm.get("minMaxState", 0)
+    if state == 1:
+        return grad(mm.get("maxGradient"))
+    if state == 2:
+        a, b = mm.get("minColor", white), mm.get("maxColor", white)
+        return {ch: (a.get(ch, 1) + b.get(ch, 1)) / 2 for ch in "rgba"}
+    if state == 3:
+        a, b = grad(mm.get("minGradient")), grad(mm.get("maxGradient"))
+        return {ch: (a[ch] + b[ch]) / 2 for ch in "rgba"}
+    c = mm.get("maxColor", white)
+    return {ch: c.get(ch, 1.0) for ch in "rgba"}
+
+
 def particle_settings(comps):
     """The few ParticleSystem settings we use to fake a burst (muzzle flash, smoke)."""
     ps = comps.get("ParticleSystem")
@@ -840,7 +892,13 @@ def particle_settings(comps):
     except Exception:
         return {}
     init, uv = d.get("InitialModule", {}), d.get("UVModule", {})
-    c = init.get("startColor", {}).get("maxColor", {"r": 1, "g": 1, "b": 1, "a": 1})
+    c = _gradient_color(init.get("startColor", {}))
+    col = d.get("ColorModule", {})
+    if col.get("enabled"):
+        # colour over lifetime: tint by its colour early in the life (its alpha mostly
+        # fades the particle out, which our bursts already do)
+        k = _gradient_color(col.get("gradient", {}), 0.3)
+        c = {ch: c[ch] * (k[ch] if ch != "a" else 1.0) for ch in "rgba"}
     return {
         "life": _minmax(init.get("startLifetime"), 0.2),
         "size": _minmax(init.get("startSize"), 0.5),
