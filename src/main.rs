@@ -15,6 +15,7 @@ mod camera;
 mod lighting;
 mod map;
 mod menu;
+mod ngui;
 mod navmesh;
 mod particles;
 mod player;
@@ -57,14 +58,18 @@ fn main() {
     let Some(map_name) = std::env::args().nth(1) else {
         // no map given: show the start menu
         App::new()
-            .add_plugins(DefaultPlugins.set(WindowPlugin {
-                primary_window: Some(Window {
-                    title: "Pixel Gun 3D (Rust)".into(),
-                    focused: !automated(),
-                    ..default()
-                }),
-                ..default()
-            }))
+            .add_plugins(
+                DefaultPlugins
+                    .set(AssetPlugin { file_path: data_dir.clone(), ..default() })
+                    .set(WindowPlugin {
+                        primary_window: Some(Window {
+                            title: "Pixel Gun 3D (Rust)".into(),
+                            focused: !automated(),
+                            ..default()
+                        }),
+                        ..default()
+                    }),
+            )
             .insert_resource(DataDir(data_dir.into()))
             .add_plugins((menu::MenuPlugin, screenshot::ScreenshotPlugin))
             .run();

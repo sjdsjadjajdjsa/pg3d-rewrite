@@ -19,6 +19,11 @@ tools/venv/bin/python scripts/find_behaviours.py MeleeBot ShootingBot FiringShot
     MeleeShootBot ShootingBossBot StalkerBot > private/index/bots.tsv
 tools/venv/bin/python scripts/export_bots.py
 tools/venv/bin/python scripts/export_navmesh.py arena
+# menu: lobby UI, lobby scene, character
+tools/venv/bin/python scripts/export_ngui.py level17 MainMenuNGUI lobby
+tools/venv/bin/python scripts/export_map.py level17 --out lobby --skip MainMenuNGUI FriendsWindowGUI \
+    --prefab slo_seasonlobby_current:SeasonLobbyRoot
+tools/venv/bin/python scripts/export_character.py
 
 # here:
 cargo run            # start menu: pick a map
@@ -44,7 +49,8 @@ V = toggle walk / fly camera (fly: Space/Ctrl up/down, Shift fast), F12 = screen
 | `src/sound.rs` | original sound effects (3D for zombies) |
 | `src/particles.rs` | simple particles: muzzle flash and smoke |
 | `src/projectiles.rs` | rockets (player) and bullets (shooting enemies), explosions |
-| `src/menu.rs` | start menu listing the exported maps |
+| `src/menu.rs` | the original lobby: 3D lobby scene + character + music behind the re-drawn lobby UI; To Battle / Campaign open the map picker |
+| `src/ngui.rs` | re-implementation of NGUI (the original UI system): layout, anchors, sliced sprites, bitmap fonts, buttons |
 | `src/bots.rs` | campaign zombies: spawning at EnemyCreationZone, chase/attack/die, player health, score |
 | `src/screenshot.rs` | F12 screenshots, `PG3D_AUTOSHOT` for automated checks |
 
@@ -54,5 +60,6 @@ unfocused at the bottom of the window stack.
 Debug environment variables: `PG3D_TRACE=1` (log player position), `PG3D_AUTOWALK=1`
 (walk forward + jump automatically), `PG3D_AUTOFIRE=1` / `PG3D_AUTOAIM=1` (shoot / aim at bots
 automatically), `PG3D_NOBOTS=1`, `PG3D_HUNT=1` (zombies always chase), `PG3D_BOTS=Enemy3_go,...` (only these bots),
-`PG3D_LOADOUT=Weapon2,Weapon61,...` (custom weapons), `PG3D_CAM="x,y,z,tx,ty,tz"` (start in fly mode at a
+`PG3D_LOADOUT=Weapon2,Weapon61,...` (custom weapons), `PG3D_MENU_CLICK=BtnBattle_A` (press a lobby
+button after 2 s), `PG3D_CAM="x,y,z,tx,ty,tz"` (start in fly mode at a
 position looking at a target), `PG3D_AUTOSHOT=file.png` (screenshot after load, then quit).
