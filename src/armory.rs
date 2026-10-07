@@ -74,6 +74,33 @@ struct Item {
     isMelee: i32,
     speedModifier: f32,
     dpses: Vec<f32>,
+    /// effect lines under the stats ("Automatic", "Zoom", ...)
+    InShopEffects: Vec<i32>,
+}
+
+impl Item {
+    /// our approximation of the shop's Efficiency number (the live game gets it from its
+    /// servers): damage per second at tier 0
+    fn efficiency(&self) -> i32 {
+        self.dpses.first().copied().unwrap_or(0.0).round().max(1.0) as i32
+    }
+}
+
+/// InShopEffects value -> (translation key, stat icon). Values matched against the
+/// screenshots (Machine Gun 0 "Automatic", Pixel Gun 1 "Single shots", Shotgun 5,
+/// Combat Knife 39 "Melee", sniper rifles 11 "Zoom", Wizard Wand / Apocalypse 10
+/// "Area damage", Apocalypse 2 "Rockets").
+fn shop_effect(v: i32) -> Option<(&'static str, &'static str)> {
+    Some(match v {
+        0 => ("Key_1391", "shop_stats_auto"),
+        1 => ("Key_1392", "shop_stats_sngl"),
+        2 => ("Key_1394", "shop_stats_rkt"),
+        5 => ("Key_1390", "shop_stats_shtgn"),
+        10 => ("Key_0403", "shop_stats_area_dmg"),
+        11 => ("Key_0404", "shop_stats_zoom"),
+        39 => ("Key_0441", "shop_stats_melee"),
+        _ => return None,
+    })
 }
 
 /// State of the Armory screen.
@@ -350,14 +377,16 @@ fn refresh(
         preview.wanted = selected.clone();
         // Equip for a weapon that is not equipped, the dark "Equipped" box for the one that is
         let is_equipped = selected.is_some() && selected == equipped;
-        for (name, on) in [("BtnEquip", selected.is_some() && !is_equipped), ("Equipped", is_equipped)] {
+        // nothing there for the equipped weapon (OBSERVED)
+        for (name, on) in [("BtnEquip", selected.is_some() && !is_equipped), ("Equipped", false)] {
             if let Some(i) = s.find_path(&format!("btn0/{name}")) {
                 s.set_active(i, on);
             }
         }
         // stats panel of the selected weapon
         let item = selected.as_ref().and_then(|n| list.iter().find(|(m, _)| m == n)).map(|(_, i)| i.clone());
-        stats_panel(&mut s, item.as_ref());
+        let equipped_item = equipped.as_ref().and_then(|n| list.iter().find(|(m, _)| m == n)).map(|(_, i)| i.clone());
+        stats_panel(&mut s, item.as_ref(), equipped_item.as_ref());
     }
 }
 
@@ -395,7 +424,7 @@ fn rarity_color(r: i32) -> &'static str {
     ["ffffff", "5fe35f", "37c8ff", "c86bff", "ffd200", "ff4f6e"].get(r.max(0) as usize).copied().unwrap_or("ffffff")
 }
 
-fn stats_panel(s: &mut NguiScreen, item: Option<&Item>) {
+fn stats_panel(s: &mut NguiScreen, item: Option<&Item>, equipped: Option<&Item>) {
     let guns = s.find("Guns_Properties");
     let melee = s.find("Melee_Properties");
     let Some(item) = item else {
@@ -415,7 +444,7 @@ fn stats_panel(s: &mut NguiScreen, item: Option<&Item>) {
     let name = s.string(&item.localizeWeaponKey);
     // our approximations of the shop numbers (the live game takes them from its servers):
     // efficiency = damage per second tier 0, mobility 50 at normal speed
-    let eff = item.dpses.first().copied().unwrap_or(0.0).round().max(1.0) as i32;
+    let eff = item.efficiency();
     let mobility = (50.0 + (item.speedModifier - 1.0) * 300.0).round().clamp(0.0, 100.0) as i32;
     for i in s.subtree(panel) {
         if matches!(s.nodes[i].name.as_str(), "ArrowUp" | "ArrowDown") {
@@ -446,5 +475,53 @@ fn stats_panel(s: &mut NguiScreen, item: Option<&Item>) {
         set(s, "Capacity/CapacityLabel", item.ammoInClip.to_string());
         set(s, "Mobility/MobilityLabel", mobility.to_string());
         set(s, "Rariry/Label", rarity);
+    }
+    // Efficiency compared with the equipped weapon: yellow when it is that one or as
+    // good, red when weaker, green when stronger (OBSERVED: equipped yellow, weaker red)
+    let col = match equipped.map(|e| eff.cmp(&e.efficiency())) {
+        Some(std::cmp::Ordering::Less) => [1.0, 0.25, 0.2, 1.0],
+        Some(std::cmp::Ordering::Greater) => [0.3, 1.0, 0.2, 1.0],
+        _ => [1.0, 0.93, 0.0, 1.0],
+    };
+    if let Some(we) = s.subtree(panel).into_iter().find(|&j| s.nodes[j].name == "WeaponEfficiency") {
+        for j in s.subtree(we) {
+            if matches!(s.nodes[j].name.as_str(), "Label" | "Count" | "Icon") {
+                s.set_color(j, col);
+            }
+        }
+    }
+    effects(s, item);
+}
+
+/// The row under the stats with the weapon's effects ("Automatic", "Zoom", ...), at most
+/// three: two side by side, a third centred below (the prefab's layout).
+fn effects(s: &mut NguiScreen, item: &Item) {
+    let Some(special) = s.find_path("PanelProperties (OFF)/Special") else { return };
+    s.set_active(special, true);
+    if let Some(i) = s.find_in(special, "DescriptionGadget") {
+        s.set_active(i, false);
+    }
+    let fx: Vec<(&str, &str)> = item.InShopEffects.iter().filter_map(|v| shop_effect(*v)).take(3).collect();
+    let slots = ["EffectsLabel1", "EffectsLabel3", "EffectsLabel5", "EffectsLabel2", "EffectsLabel4"];
+    let pos: &[Vec2] = match fx.len() {
+        1 => &[Vec2::new(21.0, 0.0)],
+        2 => &[Vec2::new(-45.0, 0.0), Vec2::new(87.0, 0.0)],
+        _ => &[Vec2::new(-45.0, 13.0), Vec2::new(87.0, 13.0), Vec2::new(21.0, -12.0)],
+    };
+    for (k, slot) in slots.iter().enumerate() {
+        let Some(l) = s.find_in(special, slot) else { continue };
+        let Some((key, icon)) = fx.get(k) else {
+            s.set_active(l, false);
+            continue;
+        };
+        s.set_active(l, true);
+        let text = s.string(key);
+        s.set_text(l, text);
+        if let Some(p) = pos.get(k) {
+            s.set_pos(l, *p);
+        }
+        if let Some(sp) = s.subtree(l).into_iter().find(|&j| j != l && s.nodes[j].sprite.is_some()) {
+            s.set_sprite(sp, icon);
+        }
     }
 }

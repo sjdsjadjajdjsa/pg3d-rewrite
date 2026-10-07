@@ -223,6 +223,8 @@ pub struct NguiScreen {
     pub fill_override: HashMap<usize, f32>,
     /// widgets whose colour game code changed since they were drawn
     recolor: std::collections::HashSet<usize>,
+    /// widgets to draw again from scratch (their sprite changed)
+    respawn: std::collections::HashSet<usize>,
     dirty: bool,
     last_size: Vec2,
     /// label glyph cache key (node -> (text, size)) to avoid rebuilding glyphs
@@ -295,6 +297,16 @@ impl NguiScreen {
                 w.color = color;
                 w.enabled = true;
                 self.recolor.insert(i);
+                self.dirty = true;
+            }
+        }
+    }
+    /// Show another sprite of the same atlas (UISprite.spriteName).
+    pub fn set_sprite(&mut self, i: usize, name: &str) {
+        if let Some(sp) = self.nodes[i].sprite.as_mut() {
+            if sp.name != name {
+                sp.name = name.to_string();
+                self.respawn.insert(i);
                 self.dirty = true;
             }
         }
@@ -460,6 +472,7 @@ pub fn spawn_screen(commands: &mut Commands, assets: &AssetServer, data: &DataDi
         slider_values: HashMap::new(),
         fill_override: HashMap::new(),
         recolor: Default::default(),
+        respawn: Default::default(),
         dirty: true,
         last_size: Vec2::ZERO,
         glyph_key: HashMap::new(),
@@ -696,6 +709,11 @@ fn layout(
             let sr = to_screen(vr);
             let (pdepth, palpha) = panel_of(screen, i);
             let z = pdepth * 1000 + w.depth;
+            if screen.respawn.remove(&i) {
+                if let Some(e) = screen.entities[i].take() {
+                    commands.entity(e).despawn();
+                }
+            }
             // create the entity the first time the node becomes visible
             if screen.entities[i].is_none() {
                 if !visible {
