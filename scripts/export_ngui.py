@@ -43,6 +43,19 @@ class Ngui:
         self.filters = {}
         self.classes = {}
         self.atlases, self.fonts, self.textures = {}, {}, {}
+        self.grafts = {}
+
+    def prefab_root(self, name):
+        """A prefab's root GameObject (no parent transform) in resources.assets."""
+        f = self.by_name["resources.assets"]
+        for o in f.objects.values():
+            if o.type.name in ("Transform", "RectTransform"):
+                t = o.read(check_read=False)
+                if t.m_Father.path_id == 0:
+                    g = t.m_GameObject.read()
+                    if g.m_Name == name:
+                        return g
+        raise KeyError(name)
 
     # ---- low level helpers
     def resolve(self, owner_file, ptr):
@@ -224,6 +237,11 @@ class Ngui:
             for ch in t.m_Children:
                 cobj = ch.deref()
                 walk(cobj.read().m_GameObject.read(), idx)
+            # prefabs the game instantiates under this node at run time (--graft node=prefab)
+            if go.m_Name in self.grafts:
+                gi = len(nodes)
+                walk(self.prefab_root(self.grafts[go.m_Name]), idx)
+                nodes[gi]["name"] += "(Clone)"
 
         walk(root, None)
         # anchors point at transforms/GameObjects/widgets: turn them into node indices
@@ -259,7 +277,9 @@ class Ngui:
         if k in WIDGETS:
             c = d["mColor"]
             w = {"w": d["mWidth"], "h": d["mHeight"], "depth": d["mDepth"], "pivot": d["mPivot"],
-                 "color": [c["r"], c["g"], c["b"], c["a"]], "enabled": bool(d["m_Enabled"]), "anchors": {}}
+                 "color": [c["r"], c["g"], c["b"], c["a"]], "enabled": bool(d["m_Enabled"]), "anchors": {},
+                 # keepAspectRatio: 0 free, 1 based on width, 2 based on height
+                 "aspect": [d.get("keepAspectRatio", 0), d.get("aspectRatio", 1.0)]}
             for side in ("leftAnchor", "rightAnchor", "bottomAnchor", "topAnchor"):
                 a = d.get(side)
                 if a and a["target"]["m_PathID"]:
@@ -350,6 +370,10 @@ def main():
     out = ROOT / "private/export/ui" / name
     out.mkdir(parents=True, exist_ok=True)
     ng = Ngui(level)
+    for a in sys.argv[4:]:
+        if a.startswith("--graft="):
+            node, prefab = a[len("--graft="):].split("=")
+            ng.grafts[node] = prefab
     nodes = ng.export(root, out)
     (out / "ui.json").write_text(json.dumps(nodes))
     (out / "atlases.json").write_text(json.dumps({k: v for k, v in ng.atlases.items() if v}))
