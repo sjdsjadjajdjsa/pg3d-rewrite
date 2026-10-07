@@ -30,6 +30,7 @@ tools/venv/bin/python scripts/export_ngui.py resources.assets SettingsWindow set
 tools/venv/bin/python scripts/export_pickups.py
 tools/venv/bin/python scripts/export_ngui.py resources.assets SettingsPanel pause
 tools/venv/bin/python scripts/export_ngui.py level6 "UI Root (2D)" results
+tools/venv/bin/python scripts/export_ngui.py resources.assets InGameGUI ingame
 tools/venv/bin/python scripts/export_probes.py arena hill   # light probes, per map
 
 # here:
@@ -64,6 +65,8 @@ V = toggle walk / fly camera (fly: jump key/E up, Ctrl/Q down, Shift fast), F12 
 | `src/controls.rs` | key bindings: actions → key / mouse button, saved in controls.json |
 | `src/pause.rs` | Esc pause screen (original pause panel): stops the match, settings, resume |
 | `src/results.rs` | end of a match as in the current game: hard cut to "Loading", then the Results table (waves, kills, score, best score per map), Again / back arrow |
+| `src/ingame_ui.rs` | the original in-match HUD (InGameGUI): weapon bar with key hints / ammo / selected slot, health bar, pause button |
+| `src/explosives.rs` | TNT boxes at the map's Bomb_TNT_Respawn markers: shoot to blow up nearby zombies, respawn after 90 s |
 | `src/hud.rs` | in-match HUD laid out like the original: health bar, score · wave · zombies-left box, red damage edges and hit-direction arrows |
 | `src/pickups.rs` | health and ammo pickups at the map's BonusCreationZone points |
 | `src/bots.rs` | Arena zombies in waves of 45 (as in the original HUD), up to 10 alive, harder types later: chase/attack/die, player health, score |

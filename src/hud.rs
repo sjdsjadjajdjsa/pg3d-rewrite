@@ -1,6 +1,6 @@
 //! In-match HUD, laid out like the original (reference clips in
 //! ../pixel-gun-3d-re/private/reference/, Arena mini-game):
-//!   * top left: red health bar with the percentage written on it
+//!   * (health bar and weapon bar: the original sprites, see ingame_ui.rs)
 //!   * top centre: dark box with score, wave number and zombies left
 //!   * damage: red screen edges that get stronger as health drops and flash on every
 //!     hit, plus a red arrow around the crosshair pointing at whoever hit you
@@ -15,14 +15,10 @@ pub struct HudPlugin;
 
 impl Plugin for HudPlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(Startup, spawn_hud).add_systems(Update, (update_bars, damage_flash, hit_arrows));
+        app.add_systems(Startup, spawn_hud).add_systems(Update, (update_score, damage_flash, hit_arrows));
     }
 }
 
-#[derive(Component)]
-struct HealthFill;
-#[derive(Component)]
-struct HealthText;
 #[derive(Component)]
 struct ScoreText;
 #[derive(Component)]
@@ -82,42 +78,6 @@ fn spawn_hud(mut commands: Commands, mut images: ResMut<Assets<Image>>) {
         Pickable::IGNORE,
     ));
 
-    // health: red cross + bar with the percentage
-    commands.spawn((
-        Node {
-            position_type: PositionType::Absolute,
-            left: px(70.0),
-            top: px(14.0),
-            column_gap: px(6.0),
-            align_items: AlignItems::Center,
-            ..default()
-        },
-        Pickable::IGNORE,
-        children![
-            (Text::new("+"), TextFont { font_size: FontSize::Px(30.0), ..default() }, TextColor(Color::srgb(0.95, 0.15, 0.1)), TextShadow::default()),
-            (
-                Node {
-                    width: px(104.0),
-                    height: px(20.0),
-                    border: UiRect::all(px(2.0)),
-                    justify_content: JustifyContent::Center,
-                    align_items: AlignItems::Center,
-                    ..default()
-                },
-                BorderColor::all(Color::srgb(0.12, 0.12, 0.12)),
-                BackgroundColor(Color::srgb(0.25, 0.05, 0.05)),
-                children![
-                    (
-                        HealthFill,
-                        Node { position_type: PositionType::Absolute, left: px(0.0), top: px(0.0), width: percent(100.0), height: percent(100.0), ..default() },
-                        BackgroundColor(Color::srgb(0.8, 0.05, 0.05)),
-                    ),
-                    (HealthText, Text::new("100%"), TextFont { font_size: FontSize::Px(14.0), ..default() }, TextColor(Color::WHITE), TextShadow { offset: Vec2::splat(1.0), color: Color::BLACK }),
-                ]
-            ),
-        ],
-    ));
-
     // score / wave / zombies left
     commands.spawn((
         Node { position_type: PositionType::Absolute, width: percent(100.0), top: px(12.0), justify_content: JustifyContent::Center, ..default() },
@@ -131,16 +91,7 @@ fn spawn_hud(mut commands: Commands, mut images: ResMut<Assets<Image>>) {
     ));
 }
 
-fn update_bars(
-    stats: Res<PlayerStats>,
-    wave: Res<Wave>,
-    mut fill: Single<&mut Node, With<HealthFill>>,
-    mut hp: Single<&mut Text, (With<HealthText>, Without<ScoreText>)>,
-    mut score: Single<&mut Text, (With<ScoreText>, Without<HealthText>)>,
-) {
-    let k = (stats.health / PLAYER_MAX_HEALTH).clamp(0.0, 1.0);
-    fill.width = percent(k * 100.0);
-    hp.0 = format!("{:.0}%", k * 100.0);
+fn update_score(stats: Res<PlayerStats>, wave: Res<Wave>, mut score: Single<&mut Text, With<ScoreText>>) {
     score.0 = if std::env::var("PG3D_NOBOTS").is_ok() {
         format!("Score {}", stats.score)
     } else {

@@ -427,9 +427,9 @@ fn compute(screen: &NguiScreen, vw: f32, vh: f32) -> Vec<Placed> {
             };
             let local = screen.pos_override.get(&i).copied().unwrap_or(Vec2::new(nd.pos[0], nd.pos[1]));
             let lscale = Vec2::new(nd.scale[0], nd.scale[1]);
-            // the root's own transform is set by NGUI at run time to fit the camera
+            // the root's (and a nested UIRoot's) transform is set by NGUI at run time to fit the camera
             let (mut pos, scale) =
-                if nd.parent.is_none() { (Vec2::ZERO, Vec2::ONE) } else { (ppos + pscale * local, pscale * lscale) };
+                if nd.parent.is_none() || nd.root.is_some() { (Vec2::ZERO, Vec2::ONE) } else { (ppos + pscale * local, pscale * lscale) };
             let mut rect = None;
             if let Some(w) = &nd.widget {
                 let base_size = screen.size_override.get(&i).copied().unwrap_or(Vec2::new(w.w, w.h));
@@ -469,6 +469,18 @@ fn compute(screen: &NguiScreen, vw: f32, vh: f32) -> Vec<Placed> {
                 if let Some(a) = side("top") {
                     let t = target_rect(a);
                     r.max.y = t.min.y + (t.max.y - t.min.y) * a.rel + a.abs * pscale.y;
+                }
+                // a side anchored without its opposite side keeps the widget's size (it moves)
+                let (has_l, has_r, has_b, has_t) = (side("left").is_some(), side("right").is_some(), side("bottom").is_some(), side("top").is_some());
+                if has_l && !has_r {
+                    r.max.x = r.min.x + size.x;
+                } else if has_r && !has_l {
+                    r.min.x = r.max.x - size.x;
+                }
+                if has_b && !has_t {
+                    r.max.y = r.min.y + size.y;
+                } else if has_t && !has_b {
+                    r.min.y = r.max.y - size.y;
                 }
                 if !w.anchors.is_empty() {
                     // anchored: the widget moves so its pivot sits at the same spot of the new rect

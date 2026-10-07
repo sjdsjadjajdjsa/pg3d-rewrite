@@ -638,18 +638,15 @@ fn spawn_hud(mut commands: Commands) {
         Node { position_type: PositionType::Absolute, width: percent(100.0), height: percent(100.0), justify_content: JustifyContent::Center, align_items: AlignItems::Center, ..default() },
         children![(Text::new("+"), TextFont { font_size: FontSize::Px(28.0), ..default() }, TextColor(Color::WHITE))],
     ));
-    // weapon + ammo, bottom right
+    // "Reloading" under the crosshair, as in the original (weapon slots: ingame_ui.rs)
     commands.spawn((
-        Node { position_type: PositionType::Absolute, right: px(24.0), bottom: px(20.0), ..default() },
-        children![(HudText, Text::new(""), TextFont { font_size: FontSize::Px(26.0), ..default() }, TextColor(Color::WHITE))],
+        Node { position_type: PositionType::Absolute, width: percent(100.0), top: percent(56.0), justify_content: JustifyContent::Center, ..default() },
+        children![(HudText, Text::new(""), TextFont { font_size: FontSize::Px(20.0), ..default() }, TextColor(Color::WHITE), TextShadow::default())],
     ));
 }
 
 fn update_hud(loadout: Res<Loadout>, mut text: Single<&mut Text, With<HudText>>) {
-    let Some(w) = loadout.current() else { return };
-    let ammo = if w.def.isMelee != 0 { "melee".to_string() } else { format!("{} / {}", w.clip, w.reserve) };
-    let state = if loadout.reloading > 0.0 { "  reloading…" } else { "" };
-    text.0 = format!("[{}] {}   {}{}", loadout.current + 1, w.name, ammo, state);
+    text.0 = if loadout.reloading > 0.0 { "Reloading".into() } else { String::new() };
 }
 
 /// Right mouse on a scoped weapon (isZooming): narrow the field of view to the weapon's

@@ -13,7 +13,9 @@
 mod bots;
 mod camera;
 mod controls;
+mod explosives;
 mod hud;
+mod ingame_ui;
 mod lighting;
 mod map;
 mod menu;
@@ -130,7 +132,7 @@ fn main() {
             pause::PausePlugin,
             results::ResultsPlugin,
         ))
-        .add_plugins(hud::HudPlugin)
+        .add_plugins((hud::HudPlugin, ingame_ui::InGameUiPlugin, explosives::ExplosivesPlugin))
         .add_systems(Update, (menu::back_to_menu, menu::test_click))
         .add_systems(
             PreUpdate,

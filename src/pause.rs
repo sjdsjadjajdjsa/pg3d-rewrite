@@ -106,6 +106,9 @@ fn clicks(
 ) {
     for c in clicks.read() {
         match c.name.as_str() {
+            "Pause Button" if !paused.0 => {
+                set_paused(true, &mut paused, &mut time, &mut cursor, &mut commands, &screen);
+            }
             "BtnResume" | "BtnBack" => {
                 set_paused(false, &mut paused, &mut time, &mut cursor, &mut commands, &screen);
             }
