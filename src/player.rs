@@ -38,11 +38,13 @@ pub const MAX_RISE_SPEED: f32 = 20.0;
 /// FirstPersonControlSharp.jumpUpMultiplier.
 pub const JUMP_UP_MULTIPLIER: f32 = 1.04;
 
-// --- GUESS: not recovered yet ------------------------------------------------------
+// --- OBSERVED / GUESS: not recovered from the files yet ---------------------------
 /// Walking speed, m/s.
 pub const WALK_SPEED: f32 = 7.0;
-/// Jump take-off speed before JUMP_UP_MULTIPLIER (≈1.3 m jump).
-pub const JUMP_SPEED: f32 = 5.0;
+/// Jump take-off speed before JUMP_UP_MULTIPLIER. OBSERVED: in reference clip d_rec3 a
+/// jump (take-off to landing) lasts ~0.87 s; with our gravity (9.81 up, x1.2 falling) that
+/// needs 4.46 m/s at take-off (≈1.0 m jump).
+pub const JUMP_SPEED: f32 = 4.29;
 /// Eye height above the player's origin.
 pub const EYE_HEIGHT: f32 = 0.7;
 

@@ -187,6 +187,8 @@ fn update(
     mut commands: Commands,
     assets: Res<AssetServer>,
     data: Res<DataDir>,
+    time: Res<Time>,
+    mut shown: Local<Option<f32>>,
 ) {
     let Some(e) = hud.0 else { return };
     let Ok((mut s, mut n)) = screens.get_mut(e) else { return };
@@ -202,7 +204,12 @@ fn update(
         n.icons_for = names;
     }
     let dead = stats.health <= 0.0 || over.0;
-    let k = (stats.health / PLAYER_MAX_HEALTH).clamp(0.0, 1.0);
+    // the bar slides to the new value instead of jumping (OBSERVED: ~150 %/s in clip d_rec4)
+    let target = (stats.health / PLAYER_MAX_HEALTH).clamp(0.0, 1.0);
+    let cur = shown.unwrap_or(target);
+    let step = 1.5 * time.delta_secs();
+    let k = cur + (target - cur).clamp(-step, step);
+    *shown = Some(k);
     let ammo: Vec<String> = loadout
         .weapons
         .iter()
