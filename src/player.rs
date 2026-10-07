@@ -74,6 +74,12 @@ fn spawn_player(mut commands: Commands, markers: Res<MapMarkers>) {
         })
         .map(|m| m.position + Vec3::Y * 1.0)
         .unwrap_or(Vec3::new(0.0, 5.0, 0.0));
+    // PG3D_SPAWN="x,y,z" (testing) puts the player somewhere else
+    let spawn = std::env::var("PG3D_SPAWN")
+        .ok()
+        .and_then(|s| s.split(',').map(|v| v.trim().parse::<f32>().ok()).collect::<Option<Vec<_>>>())
+        .filter(|v| v.len() == 3)
+        .map_or(spawn, |v| Vec3::new(v[0], v[1], v[2]));
     info!("player spawn at {spawn}");
 
     let cylinder = HEIGHT - 2.0 * RADIUS;

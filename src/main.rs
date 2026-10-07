@@ -18,6 +18,7 @@ mod menu;
 mod ngui;
 mod navmesh;
 mod particles;
+mod pickups;
 mod player;
 mod projectiles;
 mod screenshot;
@@ -117,6 +118,7 @@ fn main() {
             weapons::WeaponsPlugin,
             bots::BotsPlugin,
             projectiles::ProjectilesPlugin,
+            pickups::PickupsPlugin,
         ))
         .add_systems(Update, menu::back_to_menu)
         .add_systems(

@@ -25,6 +25,8 @@ use crate::{
 /// Bot types we spawn are every exported bot folder in <data>/bots/ (picked at random).
 /// How many bots are alive at once (GUESS: the original uses per-level wave settings).
 const MAX_ALIVE: usize = 6;
+/// Pause between waves, seconds.
+const WAVE_BREAK: f32 = 6.0;
 /// Seconds between spawns while below MAX_ALIVE.
 const SPAWN_INTERVAL: f32 = 2.5;
 /// Player health. GUESS: the original value is obfuscated; classic campaign had 9 hearts.
@@ -42,6 +44,7 @@ pub struct BotsPlugin;
 impl Plugin for BotsPlugin {
     fn build(&self, app: &mut App) {
         app.add_message::<BotDamage>()
+            .init_resource::<Wave>()
             .insert_resource(PlayerStats { health: PLAYER_MAX_HEALTH, protected: 0.0, score: 0, kills: 0, respawn_in: 0.0 })
             .add_systems(Startup, (load_bot_defs, spawn_hud))
             .add_systems(FixedUpdate, (bot_brain, bot_move).chain())
@@ -112,6 +115,15 @@ struct BotType {
 
 #[derive(Resource, Default)]
 struct BotTypes(Vec<BotType>);
+
+#[derive(Resource, Default)]
+pub struct Wave {
+    pub number: u32,
+    /// zombies of this wave not spawned yet
+    pub to_spawn: u32,
+    /// seconds until the next wave starts (during a break)
+    pub break_left: f32,
+}
 
 #[derive(Resource)]
 pub struct PlayerStats {
@@ -260,16 +272,34 @@ fn spawner(
     bots: Query<&Bot>,
     player: Single<&Transform, With<Player>>,
     mut next: Local<f32>,
+    mut wave: ResMut<Wave>,
 ) {
     if types.0.is_empty() || std::env::var("PG3D_NOBOTS").is_ok() {
         return;
     }
-    *next -= time.delta_secs();
+    let dt = time.delta_secs();
     let alive = bots.iter().filter(|b| b.state != BotState::Dead).count();
-    if *next > 0.0 || alive >= MAX_ALIVE {
+    // waves (our own simple campaign rule set): wave n sends 4 + 2n zombies; when they
+    // are all dead there is a short break, then the next, harder wave starts
+    if wave.to_spawn == 0 && alive == 0 {
+        if wave.break_left <= 0.0 {
+            wave.break_left = if wave.number == 0 { 2.0 } else { WAVE_BREAK };
+        }
+        wave.break_left -= dt;
+        if wave.break_left <= 0.0 {
+            wave.number += 1;
+            wave.to_spawn = 4 + 2 * wave.number;
+            wave.break_left = 0.0;
+            info!("wave {} ({} zombies)", wave.number, wave.to_spawn);
+        }
+        return;
+    }
+    *next -= dt;
+    if *next > 0.0 || alive >= MAX_ALIVE || wave.to_spawn == 0 {
         return;
     }
     *next = SPAWN_INTERVAL;
+    wave.to_spawn -= 1;
     if std::env::var("PG3D_TRACE").is_ok() {
         info!("spawning bot ({} alive)", alive);
     }
@@ -284,7 +314,11 @@ fn spawner(
         return;
     }
     let pos = candidates[(rand01(t * 1.7) * candidates.len() as f32) as usize % candidates.len()];
-    let kind = (rand01(t * 3.1) * types.0.len() as f32) as usize % types.0.len();
+    // early waves only use the weaker zombie types (sorted by health), later ones all
+    let mut order: Vec<usize> = (0..types.0.len()).collect();
+    order.sort_by(|a, b| types.0[*a].def.health.total_cmp(&types.0[*b].def.health));
+    let allowed = (2 + wave.number as usize * 2).min(order.len()).max(1);
+    let kind = order[(rand01(t * 3.1) * allowed as f32) as usize % allowed];
     let ty = &types.0[kind];
 
     let path = format!("bots/{}/bot.gltf", ty.name);
@@ -662,10 +696,31 @@ fn spawn_hud(mut commands: Commands) {
     ));
 }
 
-fn update_hud(stats: Res<PlayerStats>, mut text: Single<&mut Text, With<HudHealth>>) {
+fn update_hud(
+    stats: Res<PlayerStats>,
+    wave: Res<Wave>,
+    bots: Query<&Bot>,
+    mut text: Single<&mut Text, With<HudHealth>>,
+) {
+    let alive = bots.iter().filter(|b| b.state != BotState::Dead).count() as u32;
+    let wave_text = if std::env::var("PG3D_NOBOTS").is_ok() {
+        String::new()
+    } else if wave.to_spawn == 0 && alive == 0 && wave.break_left > 0.0 {
+        format!("   wave {} in {:.0}", wave.number + 1, wave.break_left.ceil())
+    } else {
+        format!("   wave {} - {} left", wave.number, alive + wave.to_spawn)
+    };
     text.0 = if stats.health > 0.0 {
         let hearts = stats.health.ceil().max(0.0) as usize;
-        format!("{} {:.0}/{:.0}   score {}   kills {}", "♥".repeat(hearts), stats.health, PLAYER_MAX_HEALTH, stats.score, stats.kills)
+        format!(
+            "{} {:.0}/{:.0}   score {}   kills {}{}",
+            "♥".repeat(hearts),
+            stats.health,
+            PLAYER_MAX_HEALTH,
+            stats.score,
+            stats.kills,
+            wave_text
+        )
     } else {
         format!("YOU DIED - respawn in {:.0}   score {}", stats.respawn_in.max(0.0).ceil(), stats.score)
     };
