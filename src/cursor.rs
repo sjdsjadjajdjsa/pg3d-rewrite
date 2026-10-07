@@ -56,10 +56,8 @@ fn shrink(src: &Image, n: u32) -> Option<Image> {
                 }
             }
             let o = ((y * n + x) * 4) as usize;
-            if acc[3] > 0 {
-                for c in 0..3 {
-                    out[o + c] = (acc[c] / acc[3]) as u8;
-                }
+            for c in 0..3 {
+                out[o + c] = acc[c].checked_div(acc[3]).unwrap_or(0) as u8;
             }
             out[o + 3] = (acc[3] / cnt.max(1)) as u8;
         }
