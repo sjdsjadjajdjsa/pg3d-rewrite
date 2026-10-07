@@ -414,6 +414,18 @@ class Exporter:
                 out["doubleSided"] = True
             elif "transparent" in s or "alpha" in s or "additive" in s or "particle" in s or "blend" in s:
                 out["alphaMode"] = "BLEND"
+            # Cubic/Universal picks its blending per material: _SrcBlend/_DstBlend are Unity
+            # BlendMode values (1 One, 5 SrcAlpha, 10 OneMinusSrcAlpha). One as the
+            # destination adds the colour on top (glowing light cones); the game reads
+            # extras.blend == "add". _CullMode 0 draws both sides.
+            src, dst = floats.get("_SrcBlend"), floats.get("_DstBlend")
+            if dst == 1.0 and src in (1.0, 5.0):
+                out["alphaMode"] = "BLEND"
+                out["extras"]["blend"] = "add"
+            elif dst == 10.0 and "alphaMode" not in out:
+                out["alphaMode"] = "BLEND"
+            if floats.get("_CullMode") == 0.0:
+                out["doubleSided"] = True
             if "unlit" in s or "particle" in s or "additive" in s or unlit_material:
                 out.setdefault("extensions", {})["KHR_materials_unlit"] = {}
                 self.vis.doc.setdefault("extensionsUsed", [])
