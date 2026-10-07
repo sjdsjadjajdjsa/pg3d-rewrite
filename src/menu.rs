@@ -158,20 +158,27 @@ struct Screens {
     lobby: Option<Entity>,
     modes: Option<Entity>,
     settings: Option<Entity>,
+    armory: Option<Entity>,
 }
 
 fn build_menu(mut commands: Commands, data: Res<DataDir>, assets: Res<AssetServer>) {
     let lobby = crate::ngui::spawn_screen(&mut commands, &assets, &data, "lobby");
     let modes = crate::ngui::spawn_screen(&mut commands, &assets, &data, "modes");
     let settings = crate::ngui::spawn_screen(&mut commands, &assets, &data, "settings");
-    for e in [modes, settings].into_iter().flatten() {
+    let armory = crate::ngui::spawn_screen(&mut commands, &assets, &data, "armory");
+    // PG3D_ARMORY=1 (tests): start in the Armory
+    let start_armory = std::env::var("PG3D_ARMORY").is_ok();
+    for e in [modes, settings].into_iter().chain([armory].into_iter().filter(|_| !start_armory)).flatten() {
         commands.entity(e).insert(Visibility::Hidden);
     }
     if lobby.is_none() {
         warn!("no exported lobby UI (run export_ngui.py level17 MainMenuNGUI lobby); using plain menu");
         spawn_map_picker(&mut commands, &data, &assets, false, false);
     }
-    commands.insert_resource(Screens { lobby, modes, settings });
+    if start_armory {
+        show(&mut commands, lobby, false);
+    }
+    commands.insert_resource(Screens { lobby, modes, settings, armory });
 }
 
 fn show(commands: &mut Commands, e: Option<Entity>, on: bool) {
@@ -388,6 +395,14 @@ fn lobby_clicks(
         let n = c.name.as_str();
         if n == "BtnExit" {
             exit.write(AppExit::Success);
+        } else if n == "BtnArmory" && screens.armory.is_some() {
+            show(&mut commands, screens.lobby, false);
+            show(&mut commands, screens.armory, true);
+        } else if n == "Back_Button" && Some(c.screen) == screens.armory {
+            show(&mut commands, screens.armory, false);
+            show(&mut commands, screens.lobby, true);
+        } else if Some(c.screen) == screens.armory {
+            // handled in armory.rs
         } else if n.starts_with("BtnBattle") && screens.modes.is_some() {
             show(&mut commands, screens.lobby, false);
             show(&mut commands, screens.modes, true);
@@ -608,6 +623,15 @@ fn lobby_wallet(
         return;
     }
     for mut s in &mut screens {
+        // the Armory's coin bar (BankShopView), numbers grouped like "5 079"
+        if s.nodes.first().is_some_and(|n| n.name == "ShopNGUI") {
+            for (name, v) in [("CoinsLabel", wallet.coins), ("GemLabel", wallet.gems)] {
+                if let Some(i) = s.find(name) {
+                    s.set_text(i, crate::results::group(v.clamp(0, i32::MAX as i64) as i32));
+                }
+            }
+            continue;
+        }
         let Some(panel) = s.find("CurrencyPanelLayout") else { continue };
         *done = Some(*wallet);
         for (cell, v, icon) in [("Currency (1)", wallet.coins, "coins_118d"), ("Currency", wallet.gems, "gems_118a")] {

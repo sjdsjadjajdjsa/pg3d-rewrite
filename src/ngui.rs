@@ -47,6 +47,10 @@ pub struct NodeDef {
     pub active: bool,
     pub pos: [f32; 3],
     pub scale: [f32; 2],
+    /// rotation about the screen axis, degrees anticlockwise (Unity); drawn for the widget
+    /// itself only (children of rotated widgets are rare)
+    #[serde(default)]
+    pub rot_z: f32,
     pub kind: Option<String>,
     pub widget: Option<WidgetDef>,
     pub sprite: Option<SpriteDef>,
@@ -346,6 +350,10 @@ impl NguiScreen {
             j = self.nodes[k].parent;
         }
         true
+    }
+    /// A translated string ("Key_0596" -> "Machine Gun"); the key itself if unknown.
+    pub fn string(&self, key: &str) -> String {
+        self.strings.get(key).cloned().unwrap_or_else(|| key.to_string())
     }
     pub fn text(&self, i: usize) -> String {
         if let Some(t) = self.text_override.get(&i) {
@@ -956,7 +964,13 @@ fn make_widget(screen: &NguiScreen, i: usize, alpha: f32, k: f32, sr: Rect) -> O
     let nd = &screen.nodes[i];
     let w = nd.widget.as_ref()?;
     let color = tint(srgba(w.color), alpha);
-    let base = (Name::new(nd.name.clone()), abs_node(sr), Visibility::Inherited, Pickable::IGNORE);
+    let base = (
+        Name::new(nd.name.clone()),
+        abs_node(sr),
+        Visibility::Inherited,
+        Pickable::IGNORE,
+        UiTransform::from_rotation(Rot2::degrees(-nd.rot_z)),
+    );
     if let Some(s) = &nd.sprite {
         let (img, a) = screen.atlases.get(s.atlas.as_ref()?)?;
         let r = a.sprites.get(&s.name)?;

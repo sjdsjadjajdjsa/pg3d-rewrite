@@ -10,6 +10,7 @@
 //!           left mouse = fire, R = reload, 1-6 / wheel = switch weapon,
 //!           V = toggle walk / fly camera, F12 = screenshot, F10 = back to menu.
 
+mod armory;
 mod bots;
 mod camera;
 mod controls;
@@ -89,7 +90,7 @@ fn main() {
             .insert_resource(settings::Settings::load())
             .insert_resource(controls::Controls::load())
             .insert_resource(wallet::Wallet::load())
-            .add_plugins((menu::MenuPlugin, screenshot::ScreenshotPlugin, cursor::CursorPlugin))
+            .add_plugins((menu::MenuPlugin, screenshot::ScreenshotPlugin, cursor::CursorPlugin, armory::ArmoryPlugin))
             .run();
         return;
     };

@@ -33,7 +33,7 @@ use crate::{
 /// Weapons given to the player, in slot order (keys 1..6). Only ones that were exported load.
 /// One per original category (1 primary, 2 backup, 3 melee, 4 special, 5 sniper,
 /// 6 heavy), then extras. PG3D_LOADOUT=Weapon2,Weapon61,... overrides it.
-const LOADOUT: [&str; 9] = [
+pub const DEFAULT_LOADOUT: [&str; 9] = [
     "Weapon3", "Weapon1", "Weapon9", "Weapon5", "Weapon61", "Weapon50", "Weapon2", "Weapon11", "Weapon75",
 ];
 /// Render layer used for the first-person weapon so it never clips into walls.
@@ -231,9 +231,22 @@ fn load_loadout(mut commands: Commands, data: Res<DataDir>, assets: Res<AssetSer
     info!("{} weapon definitions", all.len());
     let mut loadout = Loadout::default();
     let custom = std::env::var("PG3D_LOADOUT").ok();
+    // the weapons picked in the Armory replace the default of their category (slots 1-6)
+    let saved = crate::armory::SavedLoadout::load();
+    let mut picked: Vec<String> = DEFAULT_LOADOUT.iter().map(|s| s.to_string()).collect();
+    for (k, slot) in picked.iter_mut().enumerate().take(6) {
+        if let Some(w) = saved.equipped.get(&(k as i32 + 1)).filter(|w| all.contains_key(w.as_str())) {
+            *slot = w.clone();
+        }
+    }
+    let first: Vec<String> = picked[..6].to_vec();
+    // every default weapon not in slots 1-6 stays available on the extra keys
+    let extras: Vec<String> =
+        DEFAULT_LOADOUT.iter().map(|s| s.to_string()).filter(|w| !first.contains(w)).collect();
+    let picked: Vec<String> = first.into_iter().chain(extras).collect();
     let names: Vec<&str> = match &custom {
         Some(c) => c.split(',').map(str::trim).collect(),
-        None => LOADOUT.to_vec(),
+        None => picked.iter().map(String::as_str).collect(),
     };
     for name in names {
         let Some(def) = all.get(name) else { continue };
