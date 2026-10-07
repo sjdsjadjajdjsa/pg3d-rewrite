@@ -53,7 +53,6 @@ impl Plugin for WeaponsPlugin {
                     tag_view_model_meshes,
                     animate_view_model,
                     fade_impacts,
-                    update_hud,
                     zoom,
                 ),
             );
@@ -152,7 +151,8 @@ pub struct Loadout {
     pub weapons: Vec<Weapon>,
     pub current: usize,
     cooldown: f32,
-    reloading: f32,
+    /// seconds of reloading left (the HUD's "Reloading" ring: ingame_ui.rs)
+    pub reloading: f32,
     kick: f32,
     view_model: Option<Entity>,
     /// one-shot animation the view model should play next ("Shoot", "Reload")
@@ -181,9 +181,6 @@ struct ViewModelAnims {
 /// Bullet hole marker, fades out.
 #[derive(Component)]
 struct Impact(f32);
-
-#[derive(Component)]
-struct HudText;
 
 /// Original RocketSettings fields we use.
 #[derive(Deserialize, Clone, Debug, Default)]
@@ -638,15 +635,6 @@ fn spawn_hud(mut commands: Commands) {
         Node { position_type: PositionType::Absolute, width: percent(100.0), height: percent(100.0), justify_content: JustifyContent::Center, align_items: AlignItems::Center, ..default() },
         children![(Text::new("+"), TextFont { font_size: FontSize::Px(28.0), ..default() }, TextColor(Color::WHITE))],
     ));
-    // "Reloading" under the crosshair, as in the original (weapon slots: ingame_ui.rs)
-    commands.spawn((
-        Node { position_type: PositionType::Absolute, width: percent(100.0), top: percent(56.0), justify_content: JustifyContent::Center, ..default() },
-        children![(HudText, Text::new(""), TextFont { font_size: FontSize::Px(20.0), ..default() }, TextColor(Color::WHITE), TextShadow::default())],
-    ));
-}
-
-fn update_hud(loadout: Res<Loadout>, mut text: Single<&mut Text, With<HudText>>) {
-    text.0 = if loadout.reloading > 0.0 { "Reloading".into() } else { String::new() };
 }
 
 /// Right mouse on a scoped weapon (isZooming): narrow the field of view to the weapon's

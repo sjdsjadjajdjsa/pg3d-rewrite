@@ -22,7 +22,7 @@ pub struct InGameUiPlugin;
 impl Plugin for InGameUiPlugin {
     fn build(&self, app: &mut App) {
         app.add_systems(Startup, spawn)
-            .add_systems(Update, (setup, place_corners, update, update_arena_box, wave_messages).chain());
+            .add_systems(Update, (setup, place_corners, update, update_arena_box, wave_messages, reload_ring).chain());
     }
 }
 
@@ -46,6 +46,10 @@ struct HudNodes {
     wave_done: Option<usize>,
     new_wave: Option<usize>,
     counter: Option<usize>,
+    /// "Reloading" label and the ring that fills while reloading (CenterAnchor SCOPE/ReloadBar)
+    reload_label: Option<usize>,
+    reload_bar: Option<usize>,
+    reload_fill: Option<usize>,
     last: String,
 }
 
@@ -115,7 +119,7 @@ fn setup(mut commands: Commands, mut screens: Query<(Entity, &mut NguiScreen), A
             let name = s.nodes[i].name.as_str();
             if (p == Some(camera) && i != interface)
                 || (p == Some(interface) && i != container)
-                || (p == Some(container) && !["WeaponToggles", "TopLeftAnchor", "InGameNotifications"].contains(&name))
+                || (p == Some(container) && !["WeaponToggles", "TopLeftAnchor", "InGameNotifications", "CenterAnchor SCOPE"].contains(&name))
             {
                 s.set_active(i, false);
             }
@@ -129,6 +133,17 @@ fn setup(mut commands: Commands, mut screens: Query<(Entity, &mut NguiScreen), A
             nodes.wave_done = s.find_in(t, "WaveDone");
             nodes.new_wave = s.find_in(t, "NewWave");
             nodes.counter = s.find_in(t, "Wave1_And_Counter");
+            nodes.reload_label = s.find_in(t, "ReloadLabel");
+        }
+        if let Some(t) = s.find("CenterAnchor SCOPE") {
+            // only the reload ring for now (our own crosshair is drawn by weapons.rs)
+            for i in s.subtree(t) {
+                if s.nodes[i].parent == Some(t) {
+                    s.set_active(i, false);
+                }
+            }
+            nodes.reload_bar = s.find_in(t, "ReloadBar");
+            nodes.reload_fill = nodes.reload_bar.and_then(|b| s.find_in(b, "Loading"));
         }
         if let Some(t) = s.find("TopLeftAnchor") {
             nodes.top_left = Some(t);
@@ -273,5 +288,71 @@ fn wave_messages(
     if let Some(i) = n.counter {
         s.set_active(i, count > 0);
         s.set_text(i, count.to_string());
+    }
+}
+
+/// Steps of the reload ring's fill (pictures made once from the ring texture).
+const RING_STEPS: usize = 48;
+
+/// While reloading: the original "Reloading" label under the crosshair and a ring around it
+/// whose bright part grows anticlockwise from the top (OBSERVED in clip d_rec4) over a
+/// faint full ring (ReloadBar/Loading over ReloadBar/LoadingBg, same texture).
+#[allow(clippy::too_many_arguments)]
+fn reload_ring(
+    loadout: Res<Loadout>,
+    stats: Res<PlayerStats>,
+    hud: Res<Hud>,
+    mut screens: Query<(&mut NguiScreen, &HudNodes)>,
+    assets: Res<AssetServer>,
+    mut images: ResMut<Assets<Image>>,
+    mut src: Local<Option<Handle<Image>>>,
+    mut steps: Local<Vec<Handle<Image>>>,
+    mut last: Local<Option<usize>>,
+) {
+    let Some(e) = hud.0 else { return };
+    let Ok((mut s, n)) = screens.get_mut(e) else { return };
+    if steps.is_empty() {
+        let h = src.get_or_insert_with(|| assets.load("ui/ingame/textures/loading_kruzhok_11d9.png")).clone();
+        let Some(img) = images.get(&h) else { return };
+        let (w, ht) = (img.width() as usize, img.height() as usize);
+        let Some(data) = img.data.clone() else { return };
+        let fmt = img.texture_descriptor.format;
+        let sampler = img.sampler.clone();
+        for k in 0..=RING_STEPS {
+            let f = k as f32 / RING_STEPS as f32;
+            let mut d = data.clone();
+            for y in 0..ht {
+                for x in 0..w {
+                    let (dx, dy) = (x as f32 + 0.5 - w as f32 / 2.0, y as f32 + 0.5 - ht as f32 / 2.0);
+                    // angle anticlockwise from the top, 0..1
+                    let a = ((-dx).atan2(-dy) / std::f32::consts::TAU).rem_euclid(1.0);
+                    if a > f {
+                        d[(y * w + x) * 4 + 3] = 0;
+                    }
+                }
+            }
+            let mut im = Image::new(
+                bevy::render::render_resource::Extent3d { width: w as u32, height: ht as u32, depth_or_array_layers: 1 },
+                bevy::render::render_resource::TextureDimension::D2,
+                d,
+                fmt,
+                bevy::asset::RenderAssetUsages::RENDER_WORLD,
+            );
+            im.sampler = sampler.clone();
+            steps.push(images.add(im));
+        }
+    }
+    let reload = loadout.weapons.get(loadout.current).map_or(1.0, |w| w.reload_time.max(0.01));
+    let on = loadout.reloading > 0.0 && stats.health > 0.0;
+    let k = on.then(|| (((1.0 - loadout.reloading / reload) * RING_STEPS as f32) as usize).min(RING_STEPS));
+    if *last == k {
+        return;
+    }
+    *last = k;
+    for i in [n.reload_label, n.reload_bar].into_iter().flatten() {
+        s.set_active(i, on);
+    }
+    if let (Some(i), Some(k)) = (n.reload_fill, k) {
+        s.set_texture(i, steps[k].clone());
     }
 }
