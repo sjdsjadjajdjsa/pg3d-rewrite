@@ -391,11 +391,14 @@ fn switch_weapon(
     camera: Single<Entity, With<PlayerCamera>>,
     assets: Res<AssetServer>,
     mut graphs: ResMut<Assets<AnimationGraph>>,
+    time: Res<Time>,
 ) {
     let n = loadout.weapons.len();
     if n == 0 {
         return;
     }
+    // PG3D_SOAK (automated stability test): switch to the next weapon every 2.5 s
+    let soak = std::env::var("PG3D_SOAK").is_ok() && (time.elapsed_secs() % 2.5) < time.delta_secs();
     let digits = [
         KeyCode::Digit1,
         KeyCode::Digit2,
@@ -415,7 +418,7 @@ fn switch_weapon(
     }
     if scroll.delta.y > 0.0 {
         next = (loadout.current + n - 1) % n;
-    } else if scroll.delta.y < 0.0 {
+    } else if scroll.delta.y < 0.0 || soak {
         next = (loadout.current + 1) % n;
     }
     if next == loadout.current {

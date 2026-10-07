@@ -68,6 +68,9 @@ fn main() {
     let Some(map_name) = std::env::args().nth(1) else {
         // no map given: show the start menu
         App::new()
+            // a command on an entity that is already gone (e.g. a zombie despawned the same
+            // frame) logs a warning instead of stopping the game
+            .set_error_handler(bevy::ecs::error::warn)
             .add_plugins(
                 DefaultPlugins
                     .set(AssetPlugin { file_path: data_dir.clone(), ..default() })
@@ -89,6 +92,7 @@ fn main() {
     };
 
     App::new()
+        .set_error_handler(bevy::ecs::error::warn)
         .add_plugins(
             DefaultPlugins
                 .set(AssetPlugin {

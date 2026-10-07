@@ -25,7 +25,7 @@ pub struct PickupsPlugin;
 impl Plugin for PickupsPlugin {
     fn build(&self, app: &mut App) {
         app.add_systems(Startup, spawn_pickups)
-            .add_systems(Update, (spin, collect, respawn));
+            .add_systems(Update, (spin, collect, respawn, wave_prize));
     }
 }
 
@@ -33,6 +33,8 @@ impl Plugin for PickupsPlugin {
 pub enum Kind {
     Health,
     Ammo,
+    /// the prize after each Arena wave
+    Coin,
 }
 
 impl Kind {
@@ -41,6 +43,7 @@ impl Kind {
         match self {
             Kind::Health => ("health", 1),
             Kind::Ammo => ("ammo", 0),
+            Kind::Coin => ("Coin", 17),
         }
     }
 }
@@ -54,13 +57,17 @@ struct Pickup {
 }
 
 #[derive(Resource)]
-struct PickupSounds(Vec<Handle<AudioSource>>);
+struct PickupSounds(Vec<Option<Handle<AudioSource>>>);
 
 fn spawn_pickups(mut commands: Commands, markers: Res<MapMarkers>, data: Res<DataDir>, assets: Res<AssetServer>) {
     if !data.0.join("pickups/pickups.gltf").exists() {
         return;
     }
-    let sounds = (0..2).map(|i| assets.load(format!("pickups/sounds/{i}.wav"))).collect();
+    // BonusItem.itemSounds has gaps (no sound for some bonus types)
+    let sounds = (0..18)
+        .map(|i| format!("pickups/sounds/{i}.wav"))
+        .map(|f| data.0.join(&f).exists().then(|| assets.load(f)))
+        .collect();
     commands.insert_resource(PickupSounds(sounds));
     let points: Vec<Vec3> =
         markers.0.iter().filter(|m| m.name.starts_with("BonusCreationZone")).map(|m| m.position).collect();
@@ -88,7 +95,7 @@ fn show_only_kind(
 ) {
     let Ok(p) = pickups.get(ready.entity) else { return };
     let keep = p.kind.model().0;
-    let models = ["ammo", "health", "armor", "grenade", "mech"];
+    let models = ["ammo", "health", "armor", "grenade", "mech", "Coin"];
     for d in children.iter_descendants(ready.entity) {
         if let Ok(n) = names.get(d) {
             if models.contains(&n.as_str()) && n.as_str() != keep {
@@ -109,7 +116,7 @@ fn spin(time: Res<Time>, mut q: Query<(&mut Transform, &Pickup)>) {
 fn collect(
     mut commands: Commands,
     player: Single<&Transform, (With<Player>, Without<Pickup>)>,
-    mut q: Query<(&Transform, &mut Pickup, &mut Visibility)>,
+    mut q: Query<(Entity, &Transform, &mut Pickup, &mut Visibility)>,
     mut stats: ResMut<PlayerStats>,
     mut loadout: ResMut<Loadout>,
     sounds: Option<Res<PickupSounds>>,
@@ -117,7 +124,7 @@ fn collect(
     if stats.health <= 0.0 {
         return;
     }
-    for (t, mut p, mut vis) in &mut q {
+    for (e, t, mut p, mut vis) in &mut q {
         if p.respawn > 0.0 || t.translation.distance(player.translation) > PICKUP_RADIUS + 0.9 {
             continue;
         }
@@ -138,13 +145,17 @@ fn collect(
                     _ => false,
                 }
             }
+            Kind::Coin => true,
             _ => false,
         };
         if used {
             p.respawn = RESPAWN_SECS;
             *vis = Visibility::Hidden;
+            if p.kind == Kind::Coin {
+                commands.entity(e).despawn();
+            }
             if let Some(s) = &sounds {
-                crate::sound::play(&mut commands, s.0.get(p.kind.model().1), None, 1.0);
+                crate::sound::play(&mut commands, s.0.get(p.kind.model().1).and_then(Option::as_ref), None, 1.0);
             }
             info!("picked up {:?}", p.kind);
         }
@@ -161,4 +172,50 @@ fn respawn(time: Res<Time>, mut q: Query<(&mut Pickup, &mut Visibility)>) {
             }
         }
     }
+}
+
+/// Between Arena waves a coin (the "prize") appears in the middle of the map. OBSERVED in
+/// clip d_rec7: it is there as "Wave is over! Pick up the prize!" shows, stays until taken,
+/// and taking it adds 1 coin. Its exact spot is not recovered yet: we use the middle of the
+/// map's BonusCreationZone points.
+fn wave_prize(
+    mut commands: Commands,
+    wave: Res<crate::bots::Wave>,
+    markers: Res<MapMarkers>,
+    data: Res<DataDir>,
+    assets: Res<AssetServer>,
+    coins: Query<(Entity, &Pickup)>,
+    mut given: Local<u32>,
+) {
+    let between = wave.number > 0 && wave.left == 0 && wave.break_left > 0.0;
+    // PG3D_PRIZE (automated screenshots): a prize right at the start
+    let test = *given == 0 && std::env::var("PG3D_PRIZE").is_ok();
+    if !test && (!between || *given == wave.number) {
+        return;
+    }
+    *given = wave.number.max(1);
+    // one prize at a time: an old one not taken is replaced
+    for (e, p) in &coins {
+        if p.kind == Kind::Coin {
+            commands.entity(e).despawn();
+        }
+    }
+    if !data.0.join("pickups/pickups.gltf").exists() {
+        return;
+    }
+    let pts: Vec<Vec3> =
+        markers.0.iter().filter(|m| m.name.starts_with("BonusCreationZone")).map(|m| m.position).collect();
+    if pts.is_empty() {
+        return;
+    }
+    let home = pts.iter().sum::<Vec3>() / pts.len() as f32;
+    commands
+        .spawn((
+            Name::new("pickup Coin"),
+            Pickup { kind: Kind::Coin, home, respawn: 0.0 },
+            WorldAssetRoot(assets.load(GltfAssetLabel::Scene(0).from_asset("pickups/pickups.gltf"))),
+            Transform::from_translation(home),
+        ))
+        .observe(show_only_kind);
+    info!("wave prize at {home}");
 }
