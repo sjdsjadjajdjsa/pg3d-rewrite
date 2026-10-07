@@ -28,7 +28,14 @@ ROOT = pathlib.Path(__file__).resolve().parent.parent
 GAME = em.GAME_DATA
 INDEX = ROOT / "private/index/weaponsounds.tsv"
 OUT = ROOT / "private/export/weapons"
-DEFAULT_MODELS = ["Weapon1", "Weapon2", "Weapon3", "Weapon5", "Weapon9", "Weapon11", "Weapon50", "Weapon61", "Weapon75"]
+DEFAULT_MODELS = [
+    "Weapon1", "Weapon2", "Weapon3", "Weapon5", "Weapon9", "Weapon11", "Weapon50", "Weapon61", "Weapon75",
+    # second batch: classics from each category, and the Prototype sniper (Weapon77)
+    "Weapon8", "Weapon10", "Weapon16", "Weapon51", "Weapon53", "Weapon66", "Weapon84", "Weapon102", "Weapon13",
+    "Weapon96", "Weapon4", "Weapon17", "Weapon25", "Weapon52", "Weapon95", "Weapon164", "Weapon6", "Weapon19",
+    "Weapon20", "Weapon31", "Weapon43", "Weapon90", "Weapon105", "Weapon178", "Weapon123", "Weapon77", "Weapon65",
+    "Weapon67", "Weapon129", "Weapon188", "Weapon79", "Weapon82", "Weapon94", "Weapon99", "Weapon162", "Weapon137",
+]
 KEEP_LISTS = ("damageByTier", "dpses", "InShopEffects")
 KEEP_DICTS = ("damageRange", "gunPosition", "positionShop", "rotationShop")
 
