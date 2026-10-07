@@ -292,23 +292,23 @@ impl NguiScreen {
     /// Change a widget's tint (and switch it on if it was disabled), like setting
     /// UIWidget.color / enabled from game code.
     pub fn set_color(&mut self, i: usize, color: [f32; 4]) {
-        if let Some(w) = self.nodes[i].widget.as_mut() {
-            if w.color != color || !w.enabled {
-                w.color = color;
-                w.enabled = true;
-                self.recolor.insert(i);
-                self.dirty = true;
-            }
+        if let Some(w) = self.nodes[i].widget.as_mut()
+            && (w.color != color || !w.enabled)
+        {
+            w.color = color;
+            w.enabled = true;
+            self.recolor.insert(i);
+            self.dirty = true;
         }
     }
     /// Show another sprite of the same atlas (UISprite.spriteName).
     pub fn set_sprite(&mut self, i: usize, name: &str) {
-        if let Some(sp) = self.nodes[i].sprite.as_mut() {
-            if sp.name != name {
-                sp.name = name.to_string();
-                self.respawn.insert(i);
-                self.dirty = true;
-            }
+        if let Some(sp) = self.nodes[i].sprite.as_mut()
+            && sp.name != name
+        {
+            sp.name = name.to_string();
+            self.respawn.insert(i);
+            self.dirty = true;
         }
     }
     pub fn set_pos(&mut self, i: usize, pos: Vec2) {
