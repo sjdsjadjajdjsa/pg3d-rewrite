@@ -185,6 +185,12 @@ fn setup(mut commands: Commands, mut screens: Query<(Entity, &mut NguiScreen), A
                 for name in SLOTS {
                     let Some(t) = child(&s, tap, name) else { continue };
                     nodes.slots.push((t, child(&s, t, "Label"), child(&s, t, "Checkmark"), child(&s, t, "ShopIcon")));
+                    // the key hint above the slot: GamepadTipView shows the bound key's kb_*
+                    // picture at its own size (64x64, or 164x64 for keys like L Ctrl), not the
+                    // prefab's 128x64 (MEASURED: "2" box 45 px wide at 1920x1080, "L Ctrl" 115)
+                    if let Some(tip) = child(&s, t, "GamepadTip").and_then(|g| child(&s, g, "Texture_Tip")) {
+                        s.set_size(tip, Vec2::new(64.0, 64.0));
+                    }
                 }
             }
         }
