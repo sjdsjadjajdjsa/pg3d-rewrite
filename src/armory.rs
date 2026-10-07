@@ -19,7 +19,7 @@ pub struct ArmoryPlugin;
 impl Plugin for ArmoryPlugin {
     fn build(&self, app: &mut App) {
         app.add_plugins((crate::armory_preview::ArmoryPreviewPlugin, crate::particles::ParticlesPlugin))
-            .add_systems(Update, ((setup, clicks, refresh).chain(), preview_on_when_open));
+            .add_systems(Update, ((setup, clicks, refresh).chain(), preview_on_when_open, fade_toasts));
     }
 }
 
@@ -52,6 +52,8 @@ const MAX_CELLS: usize = 16;
 #[serde(default)]
 pub struct SavedLoadout {
     pub equipped: HashMap<i32, String>,
+    /// weapons bought in the Armory (the starter weapons are always owned)
+    pub owned: Vec<String>,
 }
 
 impl SavedLoadout {
@@ -163,7 +165,6 @@ fn setup(
             "ArmoryView/Slider",
             "Properties (OFF)/btn0/EggButtons_ShopNGUI",
             "Properties (OFF)/btn1",
-            "Properties (OFF)/btn2",
             "Properties (OFF)/ReturnEveryDay",
         ] {
             if let Some(i) = s.find_path(path) {
@@ -321,9 +322,11 @@ fn setup(
 }
 
 fn clicks(
+    mut commands: Commands,
     mut clicks: MessageReader<NguiClick>,
     mut screens: Query<(&NguiScreen, &mut Armory)>,
     mut shoot: ResMut<crate::armory_preview::PreviewShoot>,
+    mut wallet: ResMut<crate::wallet::Wallet>,
 ) {
     for c in clicks.read() {
         let Ok((s, mut a)) = screens.get_mut(c.screen) else { continue };
@@ -345,8 +348,30 @@ fn clicks(
             a.dirty = true;
         } else if c.name == "BtnShoot" {
             shoot.start();
+        } else if c.name == "BtnBuy" {
+            let Some(name) = a.selected.clone() else { continue };
+            let Some(price) = a.items.iter().find(|(n, _)| *n == name).map(|(_, i)| price(i)) else { continue };
+            if a.loadout.owns(&name) {
+                continue;
+            }
+            if wallet.coins < price {
+                info!("armory: {name} costs {price}, only {} coins", wallet.coins);
+                toast(&mut commands, format!("Not enough coins: {price} needed, you have {}", wallet.coins));
+                continue;
+            }
+            wallet.add_coins(-price);
+            // bought weapons are equipped straight away (OBSERVED in clip h_rec1)
+            let cat = a.category;
+            a.loadout.owned.push(name.clone());
+            a.loadout.equipped.insert(cat, name.clone());
+            a.loadout.save();
+            info!("armory: bought {name} for {price} coins and equipped it");
+            a.dirty = true;
         } else if c.name == "BtnEquip" {
             let Some(name) = a.selected.clone() else { continue };
+            if !a.loadout.owns(&name) {
+                continue;
+            }
             let cat = a.category;
             a.loadout.equipped.insert(cat, name.clone());
             a.loadout.save();
@@ -450,6 +475,17 @@ fn refresh(
             if let Some(i) = s.find_in(c, "Level_Label_newbalance") {
                 s.set_text(i, "Lvl. 1");
             }
+            let owned = a.loadout.owns(name);
+            // locked weapons show their price next to a coin (OBSERVED "Lvl. 55  530")
+            if let Some(i) = s.find_in(c, "GunPrice") {
+                s.set_active(i, !owned);
+                s.set_text(i, crate::results::group(price(&list[k].1) as i32));
+                for (icon, on) in [("UpgradeArrow", false), ("Coin", true), ("Gem", false)] {
+                    if let Some(j) = s.find_in(i, icon) {
+                        s.set_active(j, on);
+                    }
+                }
+            }
             let rarity = list[k].1.rarity;
             // band behind "Lvl." in the rarity's colour (OBSERVED: light blue for Common)
             if let Some(i) = s.find_in(c, "BGrare") {
@@ -458,7 +494,7 @@ fn refresh(
             // owned items get a blue "bought" tint (BoughtIndicatorBg, off in the prefab);
             // the equipped one stays green. OBSERVED colour: about [50, 83, 137] in the cell
             if let Some(i) = s.find_in(c, "BoughtIndicatorBg") {
-                let on = equipped.as_deref() != Some(name);
+                let on = owned && equipped.as_deref() != Some(name);
                 s.set_color(i, [0.07, 0.31, 0.6, if on { 0.5 } else { 0.0 }]);
             }
             if let Some(i) = s.find_in(c, "EQUIPPED") {
@@ -471,16 +507,91 @@ fn refresh(
         preview.wanted = selected.clone();
         // Equip for a weapon that is not equipped, the dark "Equipped" box for the one that is
         let is_equipped = selected.is_some() && selected == equipped;
+        let sel_owned = selected.as_ref().is_some_and(|n| a.loadout.owns(n));
         // nothing there for the equipped weapon (OBSERVED)
-        for (name, on) in [("BtnEquip", selected.is_some() && !is_equipped), ("Equipped", false)] {
+        for (name, on) in [("BtnEquip", sel_owned && !is_equipped), ("Equipped", false)] {
             if let Some(i) = s.find_path(&format!("btn0/{name}")) {
                 s.set_active(i, on);
+            }
+        }
+        // a locked weapon: its price and "Buy" in the same place
+        let sel_price = selected.as_ref().and_then(|n| list.iter().find(|(m, _)| m == n)).map(|(_, i)| price(i));
+        if let Some(b2) = s.find_path("Properties (OFF)/btn2") {
+            s.set_active(b2, selected.is_some() && !sel_owned);
+            let kids: Vec<usize> = s.subtree(b2).into_iter().filter(|&j| s.nodes[j].parent == Some(b2)).collect();
+            for j in kids {
+                let n = s.nodes[j].name.clone();
+                s.set_active(j, n == "BtnBuy" || n == "PriceContainer");
+            }
+            if let Some(pc) = s.find_in(b2, "PriceContainer") {
+                if let Some(inner) = s.subtree(pc).into_iter().find(|&j| s.nodes[j].parent == Some(pc)) {
+                    s.set_active(inner, true);
+                }
+                if let Some(l) = s.find_in(pc, "PriceInfoLabel") {
+                    s.set_text(l, crate::results::group(sel_price.unwrap_or(0) as i32));
+                }
+                if let Some(g) = s.find_in(pc, "Gem") {
+                    s.set_active(g, false);
+                }
             }
         }
         // stats panel of the selected weapon
         let item = selected.as_ref().and_then(|n| list.iter().find(|(m, _)| m == n)).map(|(_, i)| i.clone());
         let equipped_item = equipped.as_ref().and_then(|n| list.iter().find(|(m, _)| m == n)).map(|(_, i)| i.clone());
         stats_panel(&mut s, item.as_ref(), equipped_item.as_ref());
+    }
+}
+
+impl SavedLoadout {
+    /// Starter weapons (the default loadout) and bought ones.
+    pub fn owns(&self, weapon: &str) -> bool {
+        crate::weapons::DEFAULT_LOADOUT.contains(&weapon) || self.owned.iter().any(|w| w == weapon)
+    }
+}
+
+/// Coin price of a weapon. The live game takes prices from its servers; ours go by rarity,
+/// in the range seen in the recordings (475 .. 1 915 coins).
+fn price(item: &Item) -> i64 {
+    match item.rarity {
+        0 => 475,
+        1 => 530,
+        2 => 965,
+        3 => 1_390,
+        4 => 1_915,
+        _ => 2_500,
+    }
+}
+
+/// A short message at the bottom of the screen.
+#[derive(Component)]
+struct Toast(f32);
+
+fn toast(commands: &mut Commands, text: String) {
+    commands.spawn((
+        Toast(2.5),
+        Text::new(text),
+        TextFont { font_size: FontSize::Px(20.0), ..default() },
+        TextColor(Color::WHITE),
+        BackgroundColor(Color::srgba(0.0, 0.0, 0.0, 0.7)),
+        Node {
+            position_type: PositionType::Absolute,
+            bottom: px(40.0),
+            left: percent(25.0),
+            width: percent(50.0),
+            padding: UiRect::all(px(10.0)),
+            justify_content: JustifyContent::Center,
+            ..default()
+        },
+        GlobalZIndex(100_000),
+    ));
+}
+
+fn fade_toasts(mut commands: Commands, time: Res<Time>, mut q: Query<(Entity, &mut Toast)>) {
+    for (e, mut t) in &mut q {
+        t.0 -= time.delta_secs();
+        if t.0 <= 0.0 {
+            commands.entity(e).despawn();
+        }
     }
 }
 
