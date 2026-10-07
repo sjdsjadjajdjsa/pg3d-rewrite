@@ -24,7 +24,7 @@ impl Plugin for MenuPlugin {
             .add_systems(PreStartup, lobby_scene)
             .add_systems(Startup, build_menu)
             .add_systems(Update, (character_idle, test_click))
-            .add_systems(Update, (button_colors, button_clicks, lobby_clicks, fade_toast, setup_lobby));
+            .add_systems(Update, (button_colors, button_clicks, lobby_clicks, fade_toast, setup_lobby, settings_sliders));
     }
 }
 
@@ -77,6 +77,9 @@ struct LobbyInfo {
 }
 
 #[derive(Component)]
+struct LobbyMusic;
+
+#[derive(Component)]
 struct LobbyCharacter {
     graph: Handle<AnimationGraph>,
     idle: AnimationNodeIndex,
@@ -87,6 +90,7 @@ struct LobbyCharacter {
 /// decoration, the player character playing its idle animation, and the lobby music.
 /// Falls back to a plain background if the lobby was not exported.
 fn lobby_scene(
+    settings: Res<crate::settings::Settings>,
     mut commands: Commands,
     data: Res<DataDir>,
     assets: Res<AssetServer>,
@@ -121,7 +125,8 @@ fn lobby_scene(
     if dir.join("sounds/music.wav").exists() {
         commands.spawn((
             AudioPlayer::new(assets.load("maps/lobby/sounds/music.wav")),
-            PlaybackSettings::LOOP.with_volume(bevy::audio::Volume::Linear(0.5)),
+            PlaybackSettings::LOOP.with_volume(bevy::audio::Volume::Linear(settings.music)),
+            LobbyMusic,
         ));
     }
 }
@@ -155,19 +160,21 @@ fn character_idle(
 struct Screens {
     lobby: Option<Entity>,
     modes: Option<Entity>,
+    settings: Option<Entity>,
 }
 
 fn build_menu(mut commands: Commands, data: Res<DataDir>, assets: Res<AssetServer>) {
     let lobby = crate::ngui::spawn_screen(&mut commands, &assets, &data, "lobby");
     let modes = crate::ngui::spawn_screen(&mut commands, &assets, &data, "modes");
-    if let Some(m) = modes {
-        commands.entity(m).insert(Visibility::Hidden);
+    let settings = crate::ngui::spawn_screen(&mut commands, &assets, &data, "settings");
+    for e in [modes, settings].into_iter().flatten() {
+        commands.entity(e).insert(Visibility::Hidden);
     }
     if lobby.is_none() {
         warn!("no exported lobby UI (run export_ngui.py level17 MainMenuNGUI lobby); using plain menu");
         spawn_map_picker(&mut commands, &data, &assets, false, false);
     }
-    commands.insert_resource(Screens { lobby, modes });
+    commands.insert_resource(Screens { lobby, modes, settings });
 }
 
 fn show(commands: &mut Commands, e: Option<Entity>, on: bool) {
@@ -182,8 +189,13 @@ fn setup_lobby(
     mut screens: Query<&mut crate::ngui::NguiScreen, Added<crate::ngui::NguiScreen>>,
     assets: Res<AssetServer>,
     data: Res<DataDir>,
+    settings: Res<crate::settings::Settings>,
 ) {
     for mut s in &mut screens {
+        if s.nodes.first().is_some_and(|n| n.name == "SettingsWindow") {
+            setup_settings(&mut s, &settings);
+            continue;
+        }
         if s.nodes.first().is_some_and(|n| n.name == "AllModesView") {
             setup_modes(&mut s, &assets, &data);
             continue;
@@ -244,6 +256,84 @@ fn test_click(
             *done += 1;
             return;
         }
+    }
+}
+
+/// Settings window: we use the Multimedia tab. Music and Sound FX are the original
+/// sliders; the brightness slider becomes mouse sensitivity. Phone-only options are hidden.
+fn setup_settings(s: &mut crate::ngui::NguiScreen, settings: &crate::settings::Settings) {
+    let hide = [
+        "3DTouchCont",
+        "CheckBoxCont_4",
+        "CheckBoxCont_5",
+        "LobbyMusicToggleGroup",
+        "FPSToggleCont",
+        "ChatCont",
+        "NotificaionsCont",
+        "GS_StreamerCont",
+        "CheckBox",
+    ];
+    for i in 0..s.nodes.len() {
+        let name = s.nodes[i].name.clone();
+        if hide.contains(&name.as_str()) {
+            s.set_active(i, false);
+        }
+        // switched on by the game once the window has opened
+        if name == "BtnBack" || (name == "Header_Label" && s.nodes[i].parent == Some(0)) {
+            s.set_active(i, true);
+        }
+    }
+    for (cont, value) in [("MusicCont", settings.music), ("SoundFXCont", settings.sfx), ("BrightnessCont", settings.sensitivity)] {
+        let Some(c) = s.nodes.iter().position(|n| n.name == cont) else { continue };
+        let prefix = s.path(c);
+        let kids: Vec<usize> = (c..s.nodes.len()).filter(|&j| s.path(j).starts_with(&prefix)).collect();
+        for j in kids {
+            let n = s.nodes[j].name.clone();
+            if s.nodes[j].slider.is_some() {
+                s.set_slider(j, value);
+            } else if n == "Amound_Label" {
+                s.set_text(j, format!("{:.0}%", value * 100.0));
+            } else if cont == "BrightnessCont" && (n == "NameSettings_Label" || n == "label_param") {
+                s.set_text(j, if n == "label_param" { "Mouse" } else { "Mouse sensitivity" });
+            }
+        }
+    }
+}
+
+/// Slider moved in the settings window: apply and save.
+fn settings_sliders(
+    mut moved: MessageReader<crate::ngui::NguiSlider>,
+    mut screens: Query<&mut crate::ngui::NguiScreen>,
+    mut settings: ResMut<crate::settings::Settings>,
+    music: Query<&mut AudioSink, With<LobbyMusic>>,
+) {
+    let mut changed = false;
+    let mut music = music;
+    for m in moved.read() {
+        let Ok(mut s) = screens.get_mut(m.screen) else { continue };
+        let path = s.path(m.node);
+        let (field, cont) = if path.contains("MusicCont") {
+            (&mut settings.music, "MusicCont")
+        } else if path.contains("SoundFXCont") {
+            (&mut settings.sfx, "SoundFXCont")
+        } else if path.contains("BrightnessCont") {
+            (&mut settings.sensitivity, "BrightnessCont")
+        } else {
+            continue;
+        };
+        *field = m.value;
+        changed = true;
+        let label = (0..s.nodes.len()).find(|&j| s.nodes[j].name == "Amound_Label" && s.path(j).contains(cont));
+        if let Some(j) = label {
+            s.set_text(j, format!("{:.0}%", m.value * 100.0));
+        }
+    }
+    if changed {
+        crate::sound::set_sfx_volume(settings.sfx);
+        for mut sink in &mut music {
+            sink.set_volume(bevy::audio::Volume::Linear(settings.music));
+        }
+        settings.save();
     }
 }
 
@@ -332,6 +422,12 @@ fn lobby_clicks(
             show(&mut commands, screens.modes, true);
         } else if n == "btn_back" {
             show(&mut commands, screens.modes, false);
+            show(&mut commands, screens.lobby, true);
+        } else if n == "BtnSettings" && screens.settings.is_some() {
+            show(&mut commands, screens.lobby, false);
+            show(&mut commands, screens.settings, true);
+        } else if n == "BtnBack" {
+            show(&mut commands, screens.settings, false);
             show(&mut commands, screens.lobby, true);
         } else if n.starts_with("BtnBattle") || n == "BtnLobby_Campaign" || n == "GMH_GameMode_Cell_New_Big" || n == "Button_Battle" {
             if pickers.is_empty() {

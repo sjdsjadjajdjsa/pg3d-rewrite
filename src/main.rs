@@ -21,6 +21,7 @@ mod particles;
 mod player;
 mod projectiles;
 mod screenshot;
+mod settings;
 mod sound;
 mod weapons;
 
@@ -54,6 +55,7 @@ fn ignore_real_input(
 }
 
 fn main() {
+    sound::set_sfx_volume(settings::Settings::load().sfx);
     let data_dir = std::env::var("PG3D_DATA").unwrap_or_else(|_| DEFAULT_DATA.to_string());
     let Some(map_name) = std::env::args().nth(1) else {
         // no map given: show the start menu
@@ -71,6 +73,7 @@ fn main() {
                     }),
             )
             .insert_resource(DataDir(data_dir.into()))
+            .insert_resource(settings::Settings::load())
             .add_plugins((menu::MenuPlugin, screenshot::ScreenshotPlugin))
             .run();
         return;
@@ -100,6 +103,7 @@ fn main() {
         )
         .add_plugins(PhysicsPlugins::default())
         .insert_resource(DataDir(data_dir.into()))
+            .insert_resource(settings::Settings::load())
         .insert_resource(map::CurrentMap(map_name))
         .add_plugins((
             map::MapPlugin,

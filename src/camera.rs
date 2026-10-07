@@ -49,7 +49,7 @@ pub struct PlayerCamera {
     pub sensitivity: f32,
 }
 
-pub fn spawn_camera(mut commands: Commands) {
+pub fn spawn_camera(mut commands: Commands, settings: Res<crate::settings::Settings>) {
     // PG3D_CAM="x,y,z,tx,ty,tz" overrides the start position (x,y,z) and look target (t*).
     let start = std::env::var("PG3D_CAM")
         .ok()
@@ -60,7 +60,7 @@ pub fn spawn_camera(mut commands: Commands) {
     commands.spawn((
         Camera3d::default(),
         Projection::Perspective(PerspectiveProjection { fov: 70f32.to_radians(), ..default() }),
-        PlayerCamera { fly_speed: 10.0, sensitivity: 0.002 },
+        PlayerCamera { fly_speed: 10.0, sensitivity: settings.mouse_sensitivity() },
         start,
     ));
 }

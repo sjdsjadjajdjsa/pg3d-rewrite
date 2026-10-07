@@ -30,7 +30,8 @@ pub struct NguiPlugin;
 impl Plugin for NguiPlugin {
     fn build(&self, app: &mut App) {
         app.add_message::<NguiClick>()
-            .add_systems(Update, (layout, (hover, clicks, cover_crop)).chain());
+            .add_message::<NguiSlider>()
+            .add_systems(Update, (layout, (hover, clicks, cover_crop, drag_sliders)).chain());
     }
 }
 
@@ -52,6 +53,14 @@ pub struct NodeDef {
     pub panel: Option<PanelDef>,
     pub button: Option<ButtonDef>,
     pub root: Option<RootDef>,
+    pub slider: Option<SliderDef>,
+}
+
+/// NGUI UISlider: the thumb moves along the slider's width with the value (0..1).
+#[derive(Deserialize, Clone, Default)]
+pub struct SliderDef {
+    pub value: f32,
+    pub thumb: Option<usize>,
 }
 
 #[derive(Deserialize, Clone, Default)]
@@ -164,6 +173,10 @@ pub struct NguiScreen {
     pub texture_override: HashMap<usize, Handle<Image>>,
     /// node index -> replacement widget size (virtual pixels)
     pub size_override: HashMap<usize, Vec2>,
+    /// node index -> replacement local position (virtual pixels)
+    pub pos_override: HashMap<usize, Vec2>,
+    /// slider node -> current value 0..1
+    pub slider_values: HashMap<usize, f32>,
     dirty: bool,
     last_size: Vec2,
     /// label glyph cache key (node -> (text, size)) to avoid rebuilding glyphs
@@ -196,6 +209,21 @@ impl NguiScreen {
     pub fn set_active(&mut self, i: usize, on: bool) {
         self.active_override.insert(i, on);
         self.dirty = true;
+    }
+    /// Set a slider's value (0..1) and move its thumb.
+    pub fn set_slider(&mut self, i: usize, value: f32) {
+        let v = value.clamp(0.0, 1.0);
+        self.slider_values.insert(i, v);
+        let (Some(sl), Some(w)) = (self.nodes[i].slider.clone(), self.nodes[i].widget.clone()) else { return };
+        if let Some(t) = sl.thumb {
+            let pv = pivot_offset(w.pivot);
+            let y = self.nodes[t].pos[1];
+            self.pos_override.insert(t, Vec2::new(-pv.x * w.w + v * w.w, y));
+        }
+        self.dirty = true;
+    }
+    pub fn slider(&self, i: usize) -> f32 {
+        self.slider_values.get(&i).copied().or(self.nodes[i].slider.as_ref().map(|s| s.value)).unwrap_or(0.0)
     }
     pub fn set_size(&mut self, i: usize, size: Vec2) {
         self.size_override.insert(i, size);
@@ -240,6 +268,14 @@ pub struct NguiClick {
     pub screen: Entity,
     pub node: usize,
     pub name: String,
+}
+
+/// "The player moved this slider" (index, new value 0..1).
+#[derive(Message, Clone, Debug)]
+pub struct NguiSlider {
+    pub screen: Entity,
+    pub node: usize,
+    pub value: f32,
 }
 
 #[derive(Component)]
@@ -288,6 +324,8 @@ pub fn spawn_screen(commands: &mut Commands, assets: &AssetServer, data: &DataDi
         text_override: HashMap::new(),
         texture_override: HashMap::new(),
         size_override: HashMap::new(),
+        pos_override: HashMap::new(),
+        slider_values: HashMap::new(),
         dirty: true,
         last_size: Vec2::ZERO,
         glyph_key: HashMap::new(),
@@ -333,7 +371,7 @@ fn compute(screen: &NguiScreen, vw: f32, vh: f32) -> Vec<Placed> {
                 Some(p) => (out[p].pos, out[p].scale),
                 None => (Vec2::ZERO, Vec2::ONE),
             };
-            let local = Vec2::new(nd.pos[0], nd.pos[1]);
+            let local = screen.pos_override.get(&i).copied().unwrap_or(Vec2::new(nd.pos[0], nd.pos[1]));
             let lscale = Vec2::new(nd.scale[0], nd.scale[1]);
             // the root's own transform is set by NGUI at run time to fit the camera
             let (mut pos, scale) =
@@ -554,7 +592,11 @@ fn layout(
         }
         // clickable areas: the button's own widget, or the union of its visible children
         for i in 0..screen.nodes.len() {
-            if screen.nodes[i].button.is_none() {
+            if screen.nodes[i].button.is_none() && screen.nodes[i].slider.is_none() {
+                continue;
+            }
+            // a slider's thumb is dragged through the slider itself
+            if screen.nodes.iter().any(|n| n.slider.as_ref().is_some_and(|s| s.thumb == Some(i))) {
                 continue;
             }
             let visible = screen.visible(i);
@@ -574,7 +616,13 @@ fn layout(
             let z = panel_of(screen, i).0 * 1000 + 900;
             let e = *screen.hits[i].get_or_insert_with(|| {
                 let e = commands
-                    .spawn((Hit { screen: screen_e, node: i }, Button, Node::default(), BackgroundColor(Color::NONE)))
+                    .spawn((
+                        Hit { screen: screen_e, node: i },
+                        Button,
+                        Node::default(),
+                        BackgroundColor(Color::NONE),
+                        bevy::ui::RelativeCursorPosition::default(),
+                    ))
                     .id();
                 commands.entity(screen_e).add_child(e);
                 e
@@ -909,6 +957,28 @@ fn cover_crop(
             if img.rect != Some(rect) {
                 img.rect = Some(rect);
             }
+        }
+    }
+}
+
+fn drag_sliders(
+    q: Query<(&Interaction, &Hit, &bevy::ui::RelativeCursorPosition)>,
+    mut screens: Query<&mut NguiScreen>,
+    mut out: MessageWriter<NguiSlider>,
+) {
+    for (i, h, rel) in &q {
+        if *i != Interaction::Pressed {
+            continue;
+        }
+        let Ok(mut s) = screens.get_mut(h.screen) else { continue };
+        if s.nodes[h.node].slider.is_none() {
+            continue;
+        }
+        let Some(p) = rel.normalized else { continue };
+        let v = (p.x + 0.5).clamp(0.0, 1.0);
+        if (s.slider(h.node) - v).abs() > 0.001 {
+            s.set_slider(h.node, v);
+            out.write(NguiSlider { screen: h.screen, node: h.node, value: v });
         }
     }
 }

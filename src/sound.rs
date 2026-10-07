@@ -27,8 +27,16 @@ pub fn load_sounds(assets: &AssetServer, dir: &str, sounds: &HashMap<String, Str
 
 /// Play a sound once. `at = None` plays it "in your head" (your own weapon); `Some(pos)`
 /// plays it in the world so it gets quieter with distance and comes from that side.
+/// Sound effect volume from the settings (0..1), applied to every effect.
+static SFX_VOLUME: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0x3f800000); // 1.0
+
+pub fn set_sfx_volume(v: f32) {
+    SFX_VOLUME.store(v.clamp(0.0, 1.0).to_bits(), std::sync::atomic::Ordering::Relaxed);
+}
+
 pub fn play(commands: &mut Commands, sound: Option<&Handle<AudioSource>>, at: Option<Vec3>, volume: f32) {
     let Some(sound) = sound else { return };
+    let volume = volume * f32::from_bits(SFX_VOLUME.load(std::sync::atomic::Ordering::Relaxed));
     let settings = PlaybackSettings {
         mode: PlaybackMode::Despawn,
         volume: Volume::Linear(volume),
