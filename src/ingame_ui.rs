@@ -100,12 +100,21 @@ fn update_arena_box(
     }
     *last = key;
     commands.entity(e).insert(if dead { Visibility::Hidden } else { Visibility::Inherited });
-    for (name, text) in [
-        ("TimeSurvivalLabel", stats.score.to_string()),
-        ("WaveSurvivalLabel", format!("Wave {}", wave.number.max(1))),
+    // the score is grouped like the Results screen: "1 405" (OBSERVED in the 1280x720 shots)
+    let mut texts = [
+        crate::results::group(stats.score as i32),
+        format!("Wave {}", wave.number.max(1)),
         // before the first wave spawns the box already counts its zombies (OBSERVED)
-        ("ScoreSurvivalLabel", if wave.number == 0 { crate::bots::WAVE_SIZE.to_string() } else { wave.left.to_string() }),
-    ] {
+        if wave.number == 0 { crate::bots::WAVE_SIZE.to_string() } else { wave.left.to_string() },
+    ];
+    // PG3D_HUD_TEXT="score|wave|count" (automated screenshots): fixed texts, to compare with
+    // screenshots of the original
+    if let Ok(v) = std::env::var("PG3D_HUD_TEXT") {
+        for (t, o) in texts.iter_mut().zip(v.split('|')) {
+            *t = o.to_string();
+        }
+    }
+    for (name, text) in ["TimeSurvivalLabel", "WaveSurvivalLabel", "ScoreSurvivalLabel"].into_iter().zip(texts) {
         if let Some(i) = s.find(name) {
             s.set_text(i, text);
         }

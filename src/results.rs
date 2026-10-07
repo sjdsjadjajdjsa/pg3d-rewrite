@@ -215,7 +215,7 @@ fn end_match(
 }
 
 /// 18080 -> "18 080", as the original writes scores.
-fn group(n: i32) -> String {
+pub fn group(n: i32) -> String {
     let s = n.abs().to_string();
     let mut out = String::new();
     for (i, c) in s.chars().enumerate() {
