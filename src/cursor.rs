@@ -1,17 +1,20 @@
 //! The game's own mouse cursor: a small ring (GamepadCursor prefab, texture
-//! GamepadCursor.png, 40x40 UITexture) drawn instead of the system arrow whenever the
-//! cursor is free (menus, pause, results). Hidden while the mouse looks around in a match.
+//! GamepadCursor.png) instead of the system arrow whenever the cursor is free (menus,
+//! pause, results). It is a real system cursor, so it moves without any delay; the ring
+//! picture is scaled to the window height once and again when the window is resized.
 
 use bevy::{
+    asset::RenderAssetUsages,
     prelude::*,
-    window::{CursorGrabMode, CursorOptions, PrimaryWindow},
+    render::render_resource::{Extent3d, TextureDimension, TextureFormat},
+    window::{CursorIcon, CustomCursor, CustomCursorImage, PrimaryWindow},
 };
 
 pub struct CursorPlugin;
 
 impl Plugin for CursorPlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(Startup, spawn).add_systems(PostUpdate, follow);
+        app.add_systems(Startup, load).add_systems(Update, (apply, log_fps));
     }
 }
 
@@ -19,41 +22,90 @@ impl Plugin for CursorPlugin {
 /// screenshots and fills 240 of the texture's 256 pixels.
 const SIZE_720: f32 = 34.0 * 256.0 / 240.0;
 
-#[derive(Component)]
-struct GameCursor;
+#[derive(Resource)]
+struct RingSource(Handle<Image>);
 
-fn spawn(mut commands: Commands, assets: Res<AssetServer>) {
-    commands.spawn((
-        Name::new("game cursor"),
-        GameCursor,
-        ImageNode::new(assets.load("ui/cursor/textures/GamepadCursor_1a20.png")),
-        Node { position_type: PositionType::Absolute, ..default() },
-        GlobalZIndex(i32::MAX),
-        Pickable::IGNORE,
-        Visibility::Hidden,
-    ));
+fn load(mut commands: Commands, assets: Res<AssetServer>) {
+    commands.insert_resource(RingSource(assets.load("ui/cursor/textures/GamepadCursor_1a20.png")));
 }
 
-fn follow(
-    mut windows: Query<(&Window, &mut CursorOptions), With<PrimaryWindow>>,
-    mut cursor: Query<(&mut Node, &mut Visibility), With<GameCursor>>,
+/// Box-filter `src` (RGBA8) down to `n` x `n`.
+fn shrink(src: &Image, n: u32) -> Option<Image> {
+    let data = src.data.as_ref()?;
+    let (w, h) = (src.width(), src.height());
+    if data.len() < (w * h * 4) as usize || n == 0 {
+        return None;
+    }
+    let mut out = vec![0u8; (n * n * 4) as usize];
+    for y in 0..n {
+        for x in 0..n {
+            let (x0, x1) = (x * w / n, ((x + 1) * w / n).max(x * w / n + 1));
+            let (y0, y1) = (y * h / n, ((y + 1) * h / n).max(y * h / n + 1));
+            let mut acc = [0u32; 4];
+            let mut cnt = 0u32;
+            for sy in y0..y1.min(h) {
+                for sx in x0..x1.min(w) {
+                    let i = ((sy * w + sx) * 4) as usize;
+                    let a = data[i + 3] as u32;
+                    // premultiply so transparent texels don't darken the edge
+                    for c in 0..3 {
+                        acc[c] += data[i + c] as u32 * a;
+                    }
+                    acc[3] += a;
+                    cnt += 1;
+                }
+            }
+            let o = ((y * n + x) * 4) as usize;
+            if acc[3] > 0 {
+                for c in 0..3 {
+                    out[o + c] = (acc[c] / acc[3]) as u8;
+                }
+            }
+            out[o + 3] = (acc[3] / cnt.max(1)) as u8;
+        }
+    }
+    Some(Image::new(
+        Extent3d { width: n, height: n, depth_or_array_layers: 1 },
+        TextureDimension::D2,
+        out,
+        TextureFormat::Rgba8UnormSrgb,
+        RenderAssetUsages::all(),
+    ))
+}
+
+fn apply(
+    mut commands: Commands,
+    source: Option<Res<RingSource>>,
+    mut images: ResMut<Assets<Image>>,
+    windows: Query<(Entity, &Window), With<PrimaryWindow>>,
+    mut current: Local<u32>,
 ) {
-    let Ok((window, mut options)) = windows.single_mut() else { return };
-    let Ok((mut node, mut vis)) = cursor.single_mut() else { return };
-    let free = options.grab_mode == CursorGrabMode::None;
-    if free && options.visible {
-        options.visible = false;
+    let Some(source) = source else { return };
+    let Ok((e, window)) = windows.single() else { return };
+    let n = ((SIZE_720 * window.height() / 720.0).round() as u32).clamp(16, 128);
+    if *current == n {
+        return;
     }
-    let pos = window.cursor_position().filter(|_| free);
-    let want = if pos.is_some() { Visibility::Inherited } else { Visibility::Hidden };
-    if *vis != want {
-        *vis = want;
+    let Some(src) = images.get(&source.0) else { return };
+    let Some(img) = shrink(src, n) else { return };
+    *current = n;
+    let handle = images.add(img);
+    commands.entity(e).insert(CursorIcon::Custom(CustomCursor::Image(CustomCursorImage {
+        handle,
+        hotspot: (n as u16 / 2, n as u16 / 2),
+        ..default()
+    })));
+}
+
+/// PG3D_FPS=1: log frames per second every two seconds (finding slow screens).
+fn log_fps(time: Res<Time<Real>>, mut acc: Local<(f32, u32)>) {
+    if std::env::var("PG3D_FPS").is_err() {
+        return;
     }
-    if let Some(p) = pos {
-        let size = SIZE_720 * window.height() / 720.0;
-        node.left = px(p.x - size / 2.0);
-        node.top = px(p.y - size / 2.0);
-        node.width = px(size);
-        node.height = px(size);
+    acc.0 += time.delta_secs();
+    acc.1 += 1;
+    if acc.0 >= 2.0 {
+        info!("fps {:.0} (frame {:.1} ms)", acc.1 as f32 / acc.0, acc.0 * 1000.0 / acc.1 as f32);
+        *acc = (0.0, 0);
     }
 }
