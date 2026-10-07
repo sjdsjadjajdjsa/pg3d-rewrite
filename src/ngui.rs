@@ -401,6 +401,9 @@ pub fn spawn_screen(commands: &mut Commands, assets: &AssetServer, data: &DataDi
             screen,
             Node { position_type: PositionType::Absolute, width: percent(100.0), height: percent(100.0), ..default() },
             Pickable::IGNORE,
+            // Unity draws NGUI quads where the maths puts them (no snapping to whole screen
+            // pixels); Bevy would round every glyph on its own and shift some by a pixel
+            LayoutConfig { use_rounding: false },
         ))
         .id();
     info!("ngui screen {name}: {n} nodes");
@@ -621,10 +624,11 @@ fn layout(
             }
             let e = screen.entities[i].unwrap();
             if let Ok((mut node, mut vis, mut gz)) = nodes_q.get_mut(e) {
-                node.left = px(sr.min.x);
-                node.top = px(sr.min.y);
-                node.width = px(sr.width().max(0.0));
-                node.height = px(sr.height().max(0.0));
+                let dr = sprite_draw_rect(screen, &nd, sr);
+                node.left = px(dr.min.x);
+                node.top = px(dr.min.y);
+                node.width = px(dr.width().max(0.0));
+                node.height = px(dr.height().max(0.0));
                 *vis = if visible { Visibility::Inherited } else { Visibility::Hidden };
                 *gz = GlobalZIndex(z);
             }
@@ -826,6 +830,40 @@ fn abs_node(r: Rect) -> Node {
     }
 }
 
+/// Where a Simple or Filled sprite is actually drawn inside its widget rectangle (screen
+/// pixels): NGUI's UIBasicSprite.drawingDimensions insets the quad by the sprite's
+/// padding, and gives a sprite with an odd width / height one extra pixel of padding on
+/// the right / top, measured in sprite pixels stretched to the widget size. E.g. the
+/// Arena box's 19x29 zombie icon in an 18x27 widget is drawn ~17x26 and nudged left/down.
+fn sprite_draw_rect(screen: &NguiScreen, nd: &NodeDef, sr: Rect) -> Rect {
+    let Some(s) = &nd.sprite else { return sr };
+    if s.kind != 0 && s.kind != 3 {
+        return sr;
+    }
+    let Some(r) = s.atlas.as_ref().and_then(|a| screen.atlases.get(a)).and_then(|(_, a)| a.sprites.get(&s.name)) else {
+        return sr;
+    };
+    let pad = |j: usize| r.get(j).copied().unwrap_or(0.0);
+    let (mut l, mut rt, mut t, b) = (pad(8), pad(9), pad(10), pad(11));
+    let (w, h) = (r[2] + l + rt, r[3] + t + b);
+    if w <= 0.0 || h <= 0.0 {
+        return sr;
+    }
+    if (w as i32) & 1 != 0 {
+        rt += 1.0;
+    }
+    if (h as i32) & 1 != 0 {
+        t += 1.0;
+    }
+    let (px_, py_) = (sr.width() / w, sr.height() / h);
+    let (fx, fy) = (s.flip == 1 || s.flip == 3, s.flip == 2 || s.flip == 3);
+    if fx {
+        std::mem::swap(&mut l, &mut rt);
+    }
+    let (t, b) = if fy { (b, t) } else { (t, b) };
+    Rect::new(sr.min.x + l * px_, sr.min.y + t * py_, sr.max.x - rt * px_, sr.max.y - b * py_)
+}
+
 /// Bevy components for one widget (sprite / texture / label container).
 fn make_widget(screen: &NguiScreen, i: usize, alpha: f32, k: f32, sr: Rect) -> Option<(impl Bundle, Option<ImageNode>)> {
     let nd = &screen.nodes[i];
@@ -934,7 +972,8 @@ fn build_glyphs(commands: &mut Commands, screen: &mut NguiScreen, i: usize, e: E
         _ => pv.x,
     };
     let total_h = line_h * lines.len() as f32 * s;
-    let y0 = (1.0 - pv.y) * (box_h - total_h); // top / middle / bottom
+    // top / middle / bottom; NGUI rounds the label's text offset (UILabel.ApplyOffset)
+    let y0 = ((1.0 - pv.y) * (box_h - total_h)).round();
     let effect_offsets: Vec<Vec2> = {
         let d = Vec2::new(l.effect_dist[0], l.effect_dist[1]);
         match l.effect {
@@ -952,7 +991,7 @@ fn build_glyphs(commands: &mut Commands, screen: &mut NguiScreen, i: usize, e: E
     let effect_color = tint(srgba(l.effect_color), alpha);
     let mut kids = vec![];
     for (li, line) in lines.iter().enumerate() {
-        let lx = align * (box_w - widths[li] * s);
+        let lx = (align * (box_w - widths[li] * s)).round();
         for (_, col, g, gx) in line {
             if g[2] <= 0.0 || g[3] <= 0.0 {
                 continue;
