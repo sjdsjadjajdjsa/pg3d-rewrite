@@ -41,6 +41,7 @@ $PY scripts/export_pickups.py 2>/dev/null | grep -E '^pickups' | cut -c1-80
 echo "== weapons"
 $PY scripts/export_weapons.py 2>/dev/null | grep -E '^(weapons|model)'
 $PY scripts/export_weapon_icons.py 2>/dev/null | grep -E '^icons'
+$PY scripts/export_rays.py 2>/dev/null | grep -E '^rays'
 echo "== rockets"
 [ -f private/index/rockets.tsv ] || $PY scripts/find_behaviours.py RocketSettings > private/index/rockets.tsv
 $PY scripts/export_rockets.py 2>/dev/null | grep -E '^model'
