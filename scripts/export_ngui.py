@@ -327,7 +327,7 @@ class Ngui:
                 png = (self.masked_png(tex, alpha, "textures", out) if alpha is not None and alpha.type.name == "Texture2D"
                        else self.texture_png(tex, "textures", out))
             node["texture"] = {"png": png,
-                               "uv": [rc["x"], rc["y"], rc["width"], rc["height"]]}
+                               "uv": [rc["x"], rc["y"], rc["width"], rc["height"]], "flip": d.get("mFlip", 0)}
             # a custom material (e.g. the SDF icon shader of the PC key tips): its shader name
             # and number/colour settings
             mat = self.resolve(owner, d["mMat"]) if d.get("mMat", {}).get("m_PathID") else None
