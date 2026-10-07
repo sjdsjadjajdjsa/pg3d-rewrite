@@ -22,7 +22,7 @@ pub struct InGameUiPlugin;
 impl Plugin for InGameUiPlugin {
     fn build(&self, app: &mut App) {
         app.add_systems(Startup, spawn)
-            .add_systems(Update, (setup, place_corners, update, update_arena_box, wave_messages, reload_ring).chain());
+            .add_systems(Update, (setup, place_corners, update, update_arena_box, wave_messages, reload_ring, key_tips).chain());
     }
 }
 
@@ -41,6 +41,11 @@ struct HudNodes {
     health_label: Option<usize>,
     health_fill: Option<usize>,
     top_left: Option<usize>,
+    /// BottomRightAnchor (pinned to the corner like TopLeftAnchor) with the PC key tips
+    bottom_right: Option<usize>,
+    /// TipsPanel key hints: (Texture_Tip node, action)
+    tips: Vec<(usize, crate::controls::Action)>,
+    tips_for: Vec<String>,
     /// InGameNotifications labels: "Wave is over! Pick up the prize!", "New wave!", and
     /// Wave1_And_Counter (the 5-4-3-2-1 countdown between waves)
     wave_done: Option<usize>,
@@ -116,11 +121,12 @@ fn setup(mut commands: Commands, mut screens: Query<(Entity, &mut NguiScreen), A
         let Some(container) = s.find("InterfaceContainer") else { continue };
         let Some(interface) = s.find("InGameInterface") else { continue };
         let Some(camera) = s.nodes[interface].parent else { continue };
+        let joystick = s.find("JoystikPanel");
         // only the in-game interface, and in it only the weapon bar and the top-left corner
         for i in 0..s.nodes.len() {
             let p = s.nodes[i].parent;
             let name = s.nodes[i].name.as_str();
-            if (p == Some(camera) && i != interface)
+            if (p == Some(camera) && i != interface && Some(i) != joystick)
                 || (p == Some(interface) && i != container)
                 || (p == Some(container) && !["WeaponToggles", "TopLeftAnchor", "InGameNotifications", "CenterAnchor SCOPE"].contains(&name))
             {
@@ -147,6 +153,26 @@ fn setup(mut commands: Commands, mut screens: Query<(Entity, &mut NguiScreen), A
             }
             nodes.reload_bar = s.find_in(t, "ReloadBar");
             nodes.reload_fill = nodes.reload_bar.and_then(|b| s.find_in(b, "Loading"));
+        }
+        // bottom-right: only TipsPanel, the PC hints for reload / shoot / aim with their keys
+        if let Some(b) = s.find("BottomRightAnchor") {
+            nodes.bottom_right = Some(b);
+            let keep: Vec<usize> = std::iter::successors(Some(b), |&j| s.nodes[j].parent).collect();
+            for j in joystick.map(|j| s.subtree(j)).unwrap_or_default() {
+                let p = s.nodes[j].parent;
+                if p.is_some_and(|p| keep.contains(&p) && p != b) && !keep.contains(&j) {
+                    s.set_active(j, false);
+                }
+                if p == Some(b) && s.nodes[j].name != "TipsPanel" {
+                    s.set_active(j, false);
+                }
+            }
+            use crate::controls::Action;
+            for (name, action) in [("Reload Tip", Action::Reload), ("Attack Tip", Action::Fire), ("Aim Tip", Action::Aim)] {
+                if let Some(t) = s.find_in(b, name).and_then(|t| s.find_in(t, "Texture_Tip")) {
+                    nodes.tips.push((t, action));
+                }
+            }
         }
         if let Some(t) = s.find("TopLeftAnchor") {
             nodes.top_left = Some(t);
@@ -202,10 +228,14 @@ fn setup(mut commands: Commands, mut screens: Query<(Entity, &mut NguiScreen), A
 /// (their saved positions are meaningless); do the same.
 fn place_corners(window: Single<&Window, Changed<Window>>, mut screens: Query<(&mut NguiScreen, &HudNodes)>) {
     for (mut s, n) in &mut screens {
-        let Some(t) = n.top_left else { continue };
         let vh = 768.0;
         let vw = vh * window.width() / window.height().max(1.0);
-        s.set_pos(t, Vec2::new(-vw / 2.0, vh / 2.0));
+        if let Some(t) = n.top_left {
+            s.set_pos(t, Vec2::new(-vw / 2.0, vh / 2.0));
+        }
+        if let Some(t) = n.bottom_right {
+            s.set_pos(t, Vec2::new(vw / 2.0, -vh / 2.0));
+        }
     }
 }
 
@@ -372,4 +402,32 @@ fn reload_ring(
     if let (Some(i), Some(k)) = (n.reload_fill, k) {
         s.set_texture(i, steps[k].clone());
     }
+}
+
+/// The key pictures (kb_*.png, export_keys.py) of the current bindings on the PC key tips,
+/// at the picture's own size like GamepadTipView (64x64, 164x64 for wide keys).
+fn key_tips(
+    controls: Res<crate::controls::Controls>,
+    hud: Res<Hud>,
+    mut screens: Query<(&mut NguiScreen, &mut HudNodes)>,
+    assets: Res<AssetServer>,
+    images: Res<Assets<Image>>,
+    mut pending: Local<Vec<(usize, Handle<Image>)>>,
+) {
+    let Some(e) = hud.0 else { return };
+    let Ok((mut s, mut n)) = screens.get_mut(e) else { return };
+    let names: Vec<String> = n.tips.iter().map(|&(_, a)| controls.get(a).unity_key_name()).collect();
+    if names != n.tips_for {
+        for (&(node, _), name) in n.tips.iter().zip(&names) {
+            let h: Handle<Image> = assets.load(format!("ui/keys/kb_{name}.png"));
+            s.set_texture(node, h.clone());
+            pending.push((node, h));
+        }
+        n.tips_for = names;
+    }
+    pending.retain(|(node, h)| {
+        let Some(im) = images.get(h) else { return true };
+        s.set_size(*node, im.size_f32());
+        false
+    });
 }

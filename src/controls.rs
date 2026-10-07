@@ -151,6 +151,38 @@ impl Bind {
         }
     }
 
+    /// Unity's KeyCode name for this key, as in the game's key pictures kb_<name>.png.
+    pub fn unity_key_name(self) -> String {
+        let id = self.id().unwrap_or("None");
+        match self {
+            Bind::Mouse(_) => id.into(),
+            Bind::Key(_) => {
+                if let Some(r) = id.strip_prefix("Key") {
+                    return r.into();
+                }
+                if let Some(r) = id.strip_prefix("Digit") {
+                    return format!("Alpha{r}");
+                }
+                if let Some(r) = id.strip_prefix("Numpad") {
+                    return format!("Keypad{r}");
+                }
+                if let Some(r) = id.strip_prefix("Arrow") {
+                    return format!("{r}Arrow");
+                }
+                for side in ["Left", "Right"] {
+                    if let Some(r) = id.strip_suffix(side).filter(|r| !r.is_empty()) {
+                        return format!("{side}{r}");
+                    }
+                }
+                match id {
+                    "Backspace" => "BackSpace".into(),
+                    "Backquote" => "Tilde".into(),
+                    other => other.into(),
+                }
+            }
+        }
+    }
+
     /// Bindable key/button pressed this frame, if any.
     pub fn just_pressed(keys: &ButtonInput<KeyCode>, mouse: &ButtonInput<MouseButton>) -> Option<Bind> {
         keys.get_just_pressed()

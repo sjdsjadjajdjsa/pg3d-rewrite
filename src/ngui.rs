@@ -31,7 +31,7 @@ impl Plugin for NguiPlugin {
     fn build(&self, app: &mut App) {
         app.add_message::<NguiClick>()
             .add_message::<NguiSlider>()
-            .add_systems(Update, (gamma_blend_fix, layout, (hover, clicks, cover_crop, drag_sliders)).chain());
+            .add_systems(Update, (gamma_blend_fix, layout, (hover, clicks, cover_crop, texture_uv, drag_sliders)).chain());
     }
 }
 
@@ -125,6 +125,19 @@ fn white() -> [f32; 4] {
 #[derive(Deserialize, Clone, Default)]
 pub struct TextureDef {
     pub png: Option<String>,
+    /// UITexture.uvRect (x, y, width, height), 0..1 with y measured from the bottom
+    #[serde(default)]
+    pub uv: Option<[f32; 4]>,
+    /// a custom material, e.g. "Unlit/Transparent Colored SDF" for signed-distance icons
+    #[serde(default)]
+    pub material: Option<MaterialDef>,
+}
+
+#[derive(Deserialize, Clone, Default)]
+pub struct MaterialDef {
+    pub shader: Option<String>,
+    #[serde(default)]
+    pub floats: HashMap<String, f32>,
 }
 
 #[derive(Deserialize, Clone, Default)]
@@ -1155,8 +1168,26 @@ fn gamma_blend_fix(
         *lut = gamma_alpha_lut();
     }
     for s in &screens {
-        let handles = s.atlases.values().map(|a| &a.0).chain(s.fonts.values().map(|f| &f.0)).chain(s.textures.values());
-        for h in handles {
+        // textures drawn with the SDF shader: the picture's alpha is a distance field; the
+        // shader shows white where it is above _Outline (softened by _Smooth)
+        let sdf: HashMap<&str, (f32, f32)> = s
+            .nodes
+            .iter()
+            .filter_map(|n| {
+                let t = n.texture.as_ref()?;
+                let m = t.material.as_ref()?;
+                m.shader.as_deref()?.contains("SDF").then_some(())?;
+                let f = |k: &str, d: f32| m.floats.get(k).copied().unwrap_or(d);
+                Some((t.png.as_deref()?, (f("_Outline", 0.5), f("_Smooth", 0.02))))
+            })
+            .collect();
+        let handles = s
+            .atlases
+            .values()
+            .map(|a| (&a.0, None))
+            .chain(s.fonts.values().map(|f| (&f.0, None)))
+            .chain(s.textures.iter().map(|(png, h)| (h, sdf.get(png.as_str()).copied())));
+        for (h, sdf) in handles {
             if done.contains(&h.id()) {
                 continue;
             }
@@ -1167,6 +1198,15 @@ fn gamma_blend_fix(
                 continue;
             }
             let Some(data) = img.data.as_mut() else { continue };
+            if let Some((edge, smooth)) = sdf {
+                for px in data.chunks_exact_mut(4) {
+                    let d = px[3] as f32 / 255.0;
+                    let t = ((d - (edge - smooth)) / (2.0 * smooth).max(1e-4)).clamp(0.0, 1.0);
+                    let a = t * t * (3.0 - 2.0 * t);
+                    px[..3].fill(255);
+                    px[3] = (a * 255.0 + 0.5) as u8;
+                }
+            }
             for px in data.chunks_exact_mut(4) {
                 let a = px[3];
                 if a == 0 || a == 255 {
@@ -1193,4 +1233,24 @@ fn gamma_alpha_lut() -> Vec<u8> {
         }
     }
     t
+}
+
+/// UITextures that show only part of their picture (uvRect, e.g. one icon of an SDF atlas):
+/// once the picture has loaded, crop it to that part.
+fn texture_uv(screens: Query<&NguiScreen>, mut q: Query<&mut ImageNode>, images: Res<Assets<Image>>) {
+    for s in &screens {
+        for (i, nd) in s.nodes.iter().enumerate() {
+            let Some(uv) = nd.texture.as_ref().and_then(|t| t.uv) else { continue };
+            if uv == [0.0, 0.0, 1.0, 1.0] || s.texture_override.contains_key(&i) {
+                continue;
+            }
+            let Some(e) = s.entities.get(i).copied().flatten() else { continue };
+            let Ok(mut img) = q.get_mut(e) else { continue };
+            let Some(size) = images.get(&img.image).map(|im| im.size_f32()) else { continue };
+            let rect = Rect::new(uv[0] * size.x, (1.0 - uv[1] - uv[3]) * size.y, (uv[0] + uv[2]) * size.x, (1.0 - uv[1]) * size.y);
+            if img.rect != Some(rect) {
+                img.rect = Some(rect);
+            }
+        }
+    }
 }
