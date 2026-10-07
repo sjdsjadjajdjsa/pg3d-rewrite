@@ -201,6 +201,38 @@ fn setup(
         if let Some(i) = s.find_path("BankShopViewPrefab(Clone)/ObjectForCenter") {
             s.set_pos(i, Vec2::new(-72.7, 0.0));
         }
+        // Outside Weapon nothing is equipped yet: the game would put the equipped item's
+        // icon on each tab, else the tab's empty-slot icon ("... (1)", EmptyIcon,
+        // *_Empty). The prefab's sample icons (rifles, hats) go.
+        for (_, grid) in &SECTIONS[1..] {
+            for t in section_tabs(&s, grid) {
+                let kids: Vec<usize> = s.subtree(t).into_iter().filter(|&j| s.nodes[j].parent == Some(t)).collect();
+                let tab = s.nodes[t].name.clone();
+                for j in kids {
+                    let n = s.nodes[j].name.clone();
+                    if matches!(n.as_str(), "Texture" | "PrimaryIcon" | "icon_Graffiti") {
+                        // the Skins tab shows the character's face
+                        s.set_active(j, tab == "SkinsCategory");
+                    }
+                }
+            }
+        }
+        // the Craft row's first slot belongs to a tab the game leaves out; its tabs start
+        // at the left like the others (OBSERVED)
+        if let Some(i) = s.find("GridCategoriesCraft") {
+            s.set_pos(i, Vec2::new(-88.0, 0.0));
+        }
+        // the Skins tab's face is drawn the size of the other tabs' icons (OBSERVED)
+        if let Some(i) = s.find_path("SkinsCategory/PrimaryIcon") {
+            s.set_size(i, Vec2::new(64.0, 64.0));
+            s.set_pos(i, Vec2::new(0.0, 6.0));
+        }
+        // the Nest: no egg is hatching, so no "Egg is ready" / timer text over it
+        for name in ["EggIsReadyLabel", "TimerUI"] {
+            if let Some(i) = s.find_path(&format!("ArsenalNestButton/Holder/{name}")) {
+                s.set_active(i, false);
+            }
+        }
         // the left column's sections and every section's tabs can be clicked
         for (btn, grid) in SECTIONS {
             if let Some(i) = s.find(btn) {
