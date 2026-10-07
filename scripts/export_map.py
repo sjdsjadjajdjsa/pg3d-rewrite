@@ -203,6 +203,9 @@ class Exporter:
         self.textures = {}       # texture key -> gltf texture index
         self.colliders = []
         self.lights = []
+        # honour Cubic/Universal's UNLIT keyword (weapons, bots, characters). Map exports
+        # switch this off: their surfaces are lit by baked lightmaps instead.
+        self.unlit_keywords = True
         self.cameras = []
         self.sounds = {}         # filled by export_weapons.export_sounds for prefabs
         self.skip_names = set()  # GameObject names to leave out (with their children)
@@ -335,13 +338,21 @@ class Exporter:
                 if c is not None:
                     pbr["baseColorFactor"] = [clamp01(c.r), clamp01(c.g), clamp01(c.b), clamp01(c.a)]
                     break
+            floats = dict(as_pairs(props.m_Floats))
+            keywords = str(getattr(mat, "m_ShaderKeywords", "") or "").split()
+            keywords += [str(k) for k in (getattr(mat, "m_ValidKeywords", None) or [])]
+            if keywords:
+                out["extras"]["keywords"] = keywords
             s = shader_name.lower()
+            # Cubic/Universal (most game objects) switches lighting off per material with the
+            # UNLIT keyword (set by its misleadingly named _LightingEnable toggle)
+            unlit_material = self.unlit_keywords and ("UNLIT" in keywords or "particle" in mat.m_Name.lower())
             if "cutout" in s or "alphatest" in s or "cutoff" in s:
                 out["alphaMode"], out["alphaCutoff"] = "MASK", 0.5
                 out["doubleSided"] = True
             elif "transparent" in s or "alpha" in s or "additive" in s or "particle" in s or "blend" in s:
                 out["alphaMode"] = "BLEND"
-            if "unlit" in s or "particle" in s or "additive" in s:
+            if "unlit" in s or "particle" in s or "additive" in s or unlit_material:
                 out.setdefault("extensions", {})["KHR_materials_unlit"] = {}
                 self.vis.doc.setdefault("extensionsUsed", [])
                 if "KHR_materials_unlit" not in self.vis.doc["extensionsUsed"]:
@@ -861,6 +872,7 @@ def main():
     env, scene_path, nbundles = load_env(a.map)
     out = OUT_ROOT / (a.out or a.map)
     ex = Exporter(env, out)
+    ex.unlit_keywords = False
     ex.skip_names = set(a.skip)
     ex.run(scene_path)
     for spec in a.prefab:

@@ -19,6 +19,7 @@ for m in "${MAPS[@]}"; do
   echo "== map $m"
   $PY scripts/export_map.py "$m" 2>/dev/null | grep -E '^\{' | cut -c1-200 || echo "   map export FAILED"
   $PY scripts/export_navmesh.py "$m" 2>/dev/null | grep polygons || echo "   navmesh export FAILED"
+  $PY scripts/export_probes.py "$m" 2>/dev/null | grep -E '^probes' || echo "   light probe export FAILED"
 done
 echo "== menu (lobby UI, lobby scene, character)"
 $PY scripts/export_ngui.py level17 MainMenuNGUI lobby 2>/dev/null | grep -E '^(lobby|strings)'

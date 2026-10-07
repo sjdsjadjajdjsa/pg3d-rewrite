@@ -57,6 +57,12 @@ Game install (read-only, never modify, never copy into git):
     `scripts/find_behaviours.py` now also searches the built-in scenes (levelN) and resolves their scripts
     through globalgamemanagers.assets.
 
+12. `tools/venv/bin/python scripts/export_probes.py <map>` → `private/export/maps/<map>/probes.{json,bin}`:
+    the scene's baked light probes (LightmapSettings.m_LightProbes, L2 spherical harmonics) resampled
+    into a Bevy irradiance volume (ambient cubes) that lights zombies, weapons and pickups.
+    Exported model materials now honour the Cubic/Universal `UNLIT` keyword (the first-person arms are
+    unlit, the guns' Optimized/MultiShader is lit); map exports ignore it (lightmaps light the level).
+
 **Shortcut:** `scripts/export_all.sh [maps...]` runs all of the above (indexes only if missing).
 
 Other helpers: `scripts/dump_behaviour.py` (any MonoBehaviour's fields as JSON), `scripts/find_text.py`
