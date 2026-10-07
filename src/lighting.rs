@@ -33,7 +33,7 @@ impl Plugin for LightingPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<HasProbes>()
             .add_systems(Startup, (setup_lights, setup_camera_look).after(crate::camera::spawn_camera))
-            .add_systems(Update, (attach_lightmaps, set_lightmap_exposure));
+            .add_systems(Update, (attach_lightmaps, set_lightmap_exposure, gamma_blend_glass));
     }
 }
 
@@ -197,6 +197,64 @@ fn set_lightmap_exposure(
                 // anything seen at a grazing angle.
                 m.reflectance = 0.0;
             }
+        }
+    }
+}
+
+/// Unity (gamma colour space) mixes see-through surfaces with the scene in *sRGB* values;
+/// Bevy mixes in linear light, where a faint bright layer (rink glass, the space dome's
+/// green panes) shows up about twice as strongly. Once each blended material's texture
+/// has loaded, lower its alpha so the linear mix matches the gamma mix for its average
+/// colour, assuming it's lit to about 0.6 and seen against a darkish scene (sRGB 0.15).
+fn gamma_blend_glass(
+    mut materials: ResMut<Assets<StandardMaterial>>,
+    images: Res<Assets<Image>>,
+    mut done: Local<std::collections::HashSet<AssetId<StandardMaterial>>>,
+) {
+    const LIGHT: f32 = 0.6;
+    const BACK: f32 = 0.15;
+    let lin = |v: f32| v.powf(2.2);
+    let mut fixes = Vec::new();
+    for (id, m) in materials.iter() {
+        if m.alpha_mode != AlphaMode::Blend || done.contains(&id) {
+            continue;
+        }
+        let (mut col, mut alpha) = (1.0, 1.0);
+        if let Some(h) = &m.base_color_texture {
+            let Some(img) = images.get(h) else { continue };
+            let Some(data) = img.data.as_ref() else {
+                done.insert(id);
+                continue;
+            };
+            if img.texture_descriptor.format.block_copy_size(None) != Some(4) {
+                done.insert(id);
+                continue;
+            }
+            let n = (data.len() / 4).max(1) as f32;
+            let (mut l, mut a) = (0.0, 0.0);
+            for px in data.chunks_exact(4) {
+                let pa = px[3] as f32 / 255.0;
+                l += (0.21 * px[0] as f32 + 0.72 * px[1] as f32 + 0.07 * px[2] as f32) / 255.0 * pa;
+                a += pa;
+            }
+            col = if a > 0.0 { l / a } else { 0.0 };
+            alpha = a / n;
+        }
+        done.insert(id);
+        let tint = m.base_color.to_srgba();
+        let c = (col * (0.21 * tint.red + 0.72 * tint.green + 0.07 * tint.blue) * LIGHT).min(1.0);
+        let a = alpha * tint.alpha;
+        let d = lin(c) - lin(BACK);
+        if a <= 0.0 || a >= 1.0 || d.abs() < 0.02 {
+            continue;
+        }
+        let a2 = ((lin(a * c + (1.0 - a) * BACK) - lin(BACK)) / d).clamp(0.0, 1.0);
+        fixes.push((id, a2 / a));
+    }
+    for (id, k) in fixes {
+        if let Some(mut m) = materials.get_mut(id) {
+            let a = m.base_color.alpha();
+            m.base_color.set_alpha((a * k).min(1.0));
         }
     }
 }
