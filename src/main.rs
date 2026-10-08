@@ -23,6 +23,7 @@ mod ingame_ui;
 mod lighting;
 mod map;
 mod menu;
+mod mirrored_skins;
 mod ngui;
 mod navmesh;
 mod particles;
@@ -94,7 +95,7 @@ fn main() {
             .insert_resource(settings::Settings::load())
             .insert_resource(controls::Controls::load())
             .insert_resource(wallet::Wallet::load())
-            .add_plugins((menu::MenuPlugin, screenshot::ScreenshotPlugin, cursor::CursorPlugin, armory::ArmoryPlugin))
+            .add_plugins((menu::MenuPlugin, screenshot::ScreenshotPlugin, cursor::CursorPlugin, armory::ArmoryPlugin, mirrored_skins::MirroredSkinsPlugin))
             .run();
         return;
     };
@@ -164,7 +165,7 @@ fn main() {
             pause::PausePlugin,
             results::ResultsPlugin,
         ))
-        .add_plugins(team_match::TeamMatchPlugin)
+        .add_plugins((team_match::TeamMatchPlugin, mirrored_skins::MirroredSkinsPlugin))
         .add_plugins((hud::HudPlugin, ingame_ui::InGameUiPlugin, explosives::ExplosivesPlugin, cursor::CursorPlugin, beams::BeamsPlugin))
         .add_systems(Update, (menu::back_to_menu, menu::test_click))
         .add_systems(
