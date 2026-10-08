@@ -35,6 +35,19 @@ pub struct MapInfo {
     pub render: RenderSettings,
     #[serde(default)]
     pub lights: Vec<LightDef>,
+    /// a Skybox/Cubemap material (export_map.py export_cubemap)
+    #[serde(default)]
+    pub skybox: Option<SkyboxDef>,
+}
+
+/// The map's cubemap sky: six faces stacked in one PNG, and Unity's tint x 2 x exposure
+/// (gamma space).
+#[derive(Deserialize, Default, Clone)]
+pub struct SkyboxDef {
+    pub png: String,
+    pub tint: [f32; 3],
+    #[serde(default)]
+    pub rotation: f32,
 }
 
 fn one() -> f32 {

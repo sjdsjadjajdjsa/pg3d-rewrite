@@ -33,6 +33,7 @@ impl Plugin for LightingPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<HasProbes>()
             .add_systems(Startup, (setup_lights, setup_camera_look).after(crate::camera::spawn_camera))
+            .add_systems(Update, (cubemap_sky, hide_skybox_meshes))
             .add_systems(Update, (attach_lightmaps, set_lightmap_exposure, additive_materials, sky_materials, scroll_sky, gamma_blend_glass).chain());
     }
 }
@@ -356,7 +357,9 @@ fn scroll_sky(time: Res<Time>, sky: Option<Res<ScrollingSky>>, mut materials: Re
     let t = time.elapsed_secs_wrapped();
     for (h, s) in &sky.0 {
         if let Some(mut m) = materials.get_mut(h) {
-            let o = (*s * t).fract_gl();
+            // the MADFINGER shaders add frac(float2(_ScrollX, _ScrollY) * _Time): Unity's _Time
+            // is (t/20, t, 2t, 3t), so X scrolls 20 times slower than Y
+            let o = (*s * Vec2::new(t / 20.0, t)).fract_gl();
             m.uv_transform.translation = Vec2::new(o.x, -o.y);
         }
     }
@@ -375,6 +378,61 @@ fn additive_materials(
         if add && let Some(mut m) = materials.get_mut(&mat.0) {
             m.alpha_mode = AlphaMode::Add;
             m.unlit = true;
+        }
+    }
+}
+
+/// Maps whose sky is a Skybox/Cubemap material (Arena 2's night sky): Unity draws the
+/// cubemap behind everything, so it becomes the camera's Skybox once the image has loaded
+/// (the six stacked faces turned into a cube texture).
+fn cubemap_sky(
+    mut commands: Commands,
+    info: Res<MapInfo>,
+    map: Res<CurrentMap>,
+    assets: Res<AssetServer>,
+    mut images: ResMut<Assets<Image>>,
+    cameras: Query<Entity, With<crate::camera::PlayerCamera>>,
+    mut state: Local<Option<Handle<Image>>>,
+    mut done: Local<bool>,
+) {
+    if *done {
+        return;
+    }
+    let Some(def) = &info.skybox else {
+        *done = true;
+        return;
+    };
+    let h = state.get_or_insert_with(|| assets.load(format!("maps/{}/{}", map.0, def.png))).clone();
+    let Some(mut img) = images.get_mut(&h) else { return };
+    let Ok(cam) = cameras.single() else { return };
+    *done = true;
+    if img.texture_descriptor.size.depth_or_array_layers == 1 {
+        if let Err(e) = img.reinterpret_stacked_2d_as_array(6) {
+            warn!("skybox {}: {e:?}", def.png);
+            return;
+        }
+        img.texture_view_descriptor = Some(bevy::render::render_resource::TextureViewDescriptor {
+            dimension: Some(bevy::render::render_resource::TextureViewDimension::Cube),
+            ..default()
+        });
+    }
+    // Unity multiplies in gamma space: in linear light the factor is k^2.2
+    let k = (def.tint[0] * 0.21 + def.tint[1] * 0.72 + def.tint[2] * 0.07).max(0.0).powf(2.2);
+    commands.entity(cam).insert(bevy::light::Skybox {
+        image: Some(h),
+        brightness: k,
+        // Unity's _Rotation turns the sky about the up axis (mirrored by the X flip)
+        rotation: Quat::from_rotation_y(def.rotation.to_radians()),
+        ..default()
+    });
+    info!("cubemap sky {} x{k:.2}", def.png);
+}
+
+/// The mesh that carried the Skybox/Cubemap material isn't drawn: the camera's Skybox is.
+fn hide_skybox_meshes(mut commands: Commands, q: Query<(Entity, &GltfMaterialExtras), Added<GltfMaterialExtras>>) {
+    for (e, x) in &q {
+        if x.value.contains("\"Skybox/") {
+            commands.entity(e).insert(Visibility::Hidden);
         }
     }
 }
