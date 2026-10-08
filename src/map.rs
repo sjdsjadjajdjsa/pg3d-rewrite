@@ -139,7 +139,7 @@ impl crate::scene::ScenePlugin for MapPlugin {
             .init_resource::<MapInfo>()
             .add_systems(PreStartup, load_markers)
             .add_systems(Startup, (spawn_map, spawn_colliders))
-            .add_systems(Update, hide_collision_meshes);
+            .add_systems(Update, (hide_collision_meshes, hide_campaign_teleports));
     }
 }
 
@@ -268,3 +268,17 @@ fn spawn_shape(commands: &mut Commands, d: &ColliderDef, shape: Collider, rot: Q
     });
 }
 
+
+/// GotToNextLevel: the campaign's "go to the next level" teleporter (a spinning blue
+/// crystal) sits in many scenes because the same scenes serve the campaign. The original
+/// switches it off at the start of every match: Initializer.Start when multiplayer, and
+/// ZombieCreator.Start in survival / campaign, which switches it back on only once every
+/// campaign enemy of the level is dead. We have no campaign levels, so it stays off.
+fn hide_campaign_teleports(mut commands: Commands, added: Query<(Entity, &bevy::gltf::GltfExtras), Added<bevy::gltf::GltfExtras>>) {
+    for (e, x) in &added {
+        if x.value.contains("\"got_to_next_level\"") {
+            commands.entity(e).insert(Visibility::Hidden);
+            info!("campaign teleporter hidden");
+        }
+    }
+}
