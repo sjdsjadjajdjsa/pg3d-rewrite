@@ -54,6 +54,8 @@ pub fn exported_maps(data: &std::path::Path) -> Vec<String> {
 #[derive(Component)]
 struct MapPicker {
     sandbox: bool,
+    /// Team Fight (PG3D_MODE=teamfight) instead of the zombie campaign
+    team: bool,
 }
 
 #[derive(Component)]
@@ -173,7 +175,7 @@ fn build_menu(mut commands: Commands, data: Res<DataDir>, assets: Res<AssetServe
     }
     if lobby.is_none() {
         warn!("no exported lobby UI (run export_ngui.py level17 MainMenuNGUI lobby); using plain menu");
-        spawn_map_picker(&mut commands, &data, &assets, false, false);
+        spawn_map_picker(&mut commands, &data, &assets, false, false, false);
     }
     if start_armory {
         show(&mut commands, lobby, false);
@@ -319,8 +321,8 @@ pub fn test_click(
     }
 }
 
-/// Mode hub: the original fills its cards from server data. Offline we have two modes:
-/// Campaign (zombies) and Sandbox (walk around without enemies).
+/// Mode hub: the original fills its cards from server data. Offline we have three modes:
+/// Campaign (zombies), Sandbox (walk around without enemies) and Team Fight (team_match.rs).
 fn setup_modes(s: &mut crate::ngui::NguiScreen, assets: &AssetServer, data: &DataDir) {
     // card pictures: loading screens of two exported maps
     let maps = exported_maps(&data.0);
@@ -329,7 +331,7 @@ fn setup_modes(s: &mut crate::ngui::NguiScreen, assets: &AssetServer, data: &Dat
     let cells = [
         ("Column_01/GMH_GameMode_Cell_New_Big", Some(("Campaign", "Fight waves of zombies on any map"))),
         ("Column_02/GMH_GameMode_Cell_New", Some(("Sandbox", "Explore the maps - no enemies"))),
-        ("Column_02/GMH_GameMode_Cell_New_2", None),
+        ("Column_02/GMH_GameMode_Cell_New_2", Some(("Team Fight", "Your team against the zombies - most kills wins"))),
         ("Column_03", None),
         ("Column_04", None),
     ];
@@ -355,7 +357,7 @@ fn setup_modes(s: &mut crate::ngui::NguiScreen, assets: &AssetServer, data: &Dat
             match content {
                 None => s.set_active(i, false),
                 Some((title, desc)) => {
-                    let kids: Vec<usize> = (i + 1..s.nodes.len()).filter(|&j| s.path(j).starts_with(&path)).collect();
+                    let kids: Vec<usize> = (i + 1..s.nodes.len()).filter(|&j| s.path(j).starts_with(&format!("{path}/"))).collect();
                     for j in kids {
                         let n = s.nodes[j].name.clone();
                         if n == "tex_MapPreview" {
@@ -424,11 +426,15 @@ fn lobby_clicks(
             show(&mut commands, screens.lobby, true);
         } else if n.starts_with("BtnBattle") || n == "BtnLobby_Campaign" || n == "GMH_GameMode_Cell_New_Big" || n == "Button_Battle" {
             if pickers.is_empty() {
-                spawn_map_picker(&mut commands, &data, &assets, true, false);
+                spawn_map_picker(&mut commands, &data, &assets, true, false, false);
             }
         } else if n == "GMH_GameMode_Cell_New" {
             if pickers.is_empty() {
-                spawn_map_picker(&mut commands, &data, &assets, true, true);
+                spawn_map_picker(&mut commands, &data, &assets, true, true, false);
+            }
+        } else if n == "GMH_GameMode_Cell_New_2" {
+            if pickers.is_empty() {
+                spawn_map_picker(&mut commands, &data, &assets, true, false, true);
             }
         } else if Some(c.screen) == screens.settings {
             // handled in settings_ui.rs
@@ -463,11 +469,11 @@ fn fade_toast(mut commands: Commands, time: Res<Time>, mut q: Query<(Entity, &mu
     }
 }
 
-fn spawn_map_picker(commands: &mut Commands, data: &DataDir, assets: &AssetServer, overlay: bool, sandbox: bool) {
+fn spawn_map_picker(commands: &mut Commands, data: &DataDir, assets: &AssetServer, overlay: bool, sandbox: bool, team: bool) {
     let maps = exported_maps(&data.0);
     commands
         .spawn((
-            MapPicker { sandbox },
+            MapPicker { sandbox, team },
             GlobalZIndex(50_000),
             BackgroundColor(if overlay { Color::srgba(0.0, 0.0, 0.0, 0.8) } else { Color::NONE }),
             Node {
@@ -483,7 +489,13 @@ fn spawn_map_picker(commands: &mut Commands, data: &DataDir, assets: &AssetServe
         .with_children(|root| {
             root.spawn((Text::new("PIXEL GUN 3D"), TextFont { font_size: FontSize::Px(56.0), ..default() }));
             root.spawn((
-                Text::new(if sandbox { "Sandbox - pick a map" } else { "Campaign - pick a map" }),
+                Text::new(if team {
+                    "Team Fight - pick a map"
+                } else if sandbox {
+                    "Sandbox - pick a map"
+                } else {
+                    "Campaign - pick a map"
+                }),
                 TextFont { font_size: FontSize::Px(22.0), ..default() },
                 TextColor(Color::srgb(0.7, 0.75, 0.85)),
             ));
@@ -577,9 +589,10 @@ fn button_clicks(
         }
     }
     let sandbox = pickers.iter().next().is_some_and(|(_, p)| p.sandbox);
+    let team = pickers.iter().next().is_some_and(|(_, p)| p.team);
     for (i, m) in &maps {
         if *i == Interaction::Pressed {
-            relaunch_with(Some(&m.0), sandbox);
+            relaunch_mode(Some(&m.0), sandbox, team.then_some("teamfight"));
             exit.write(AppExit::Success);
         }
     }
@@ -590,13 +603,23 @@ fn button_clicks(
 
 /// Start a new copy of this program (with a map, or without one = menu).
 pub fn relaunch(map: Option<&str>) {
-    relaunch_with(map, false);
+    relaunch_mode(map, false, None);
 }
 
-/// `sandbox`: start the map without enemies.
+/// `sandbox`: start the map without enemies. Keeps the current game mode (PG3D_MODE), so
+/// "play again" stays in Team Fight.
 pub fn relaunch_with(map: Option<&str>, sandbox: bool) {
+    relaunch_mode(map, sandbox, std::env::var("PG3D_MODE").ok().as_deref());
+}
+
+/// `mode`: PG3D_MODE of the new copy (None: the zombie campaign).
+pub fn relaunch_mode(map: Option<&str>, sandbox: bool, mode: Option<&str>) {
     let Ok(exe) = std::env::current_exe() else { return };
     let mut cmd = std::process::Command::new(exe);
+    match mode {
+        Some(m) => cmd.env("PG3D_MODE", m),
+        None => cmd.env_remove("PG3D_MODE"),
+    };
     if sandbox {
         cmd.env("PG3D_NOBOTS", "1");
     } else {
