@@ -42,9 +42,17 @@ def main():
         "prices": eco["WeaponPrices"],
         "economy": {k: {f: v.get(f) for f in ("L", "L3", "G", "PC", "BC", "UC")} for k, v in weco.items()},
         "shop": {k: {f: v.get(f) for f in ("SR", "A", "SM", "DC", "L")} for k, v in wb.items()},
+        # headshot damage multiplier per weapon number (WeaponsCore "H", else Weapons "H");
+        # weapons without one use BalanceOthers HeadShotCoef
+        "head": {k: v["H"] for k, v in {**{k: v for k, v in wb.items() if "H" in v},
+                                       **{k: v for k, v in docs["BalanceWeaponsCore"]["WeaponsCore"].items() if "H" in v}}.items()},
+        "head_default": next((e["XP"] for e in docs["BalanceOthers"]["SpecialEvents"] if e.get("Event") == "HeadShotCoef"), 1.0),
+        # match rewards per mode by place (XP, coins C, gems G) and the level table
+        "rewards": docs["BalanceRewards"]["Rewards"],
+        "levels": docs["BalanceLeveling"]["LevellingV3"],
     }
     OUT.write_text(json.dumps(out))
-    print(f"balance: {len(out['economy'])} weapon prices, {len(out['shop'])} shop stats -> {OUT}")
+    print(f"balance: {len(out['economy'])} weapon prices, {len(out['shop'])} shop stats, {len(out['head'])} headshot coefs (default {out['head_default']}) -> {OUT}")
 
 
 if __name__ == "__main__":

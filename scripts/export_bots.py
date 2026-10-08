@@ -51,6 +51,7 @@ def export_stats(rows, gen):
             b = {k: v for k, v in d.items() if isinstance(v, (int, float, str)) and k not in ("m_Enabled", "m_Name")}
             b["class"] = cls
             b.update(nav_agent(o))
+            b.update(hit_boxes(o))
             if "bulletPrefab" in d:
                 b.update(bullet_info(o, d["bulletPrefab"]))
             bots[go] = b
@@ -77,6 +78,46 @@ def bullet_info(mb_obj, ptr):
     except Exception as e:
         print(f"  bullet: {e!r}"[:200], file=sys.stderr)
         return {}
+
+
+def hit_boxes(mb_obj):
+    """The prefab's colliders, relative to its root: the body BoxCollider and the head
+    SphereCollider (ShootingBot.headCollider; hits on it are headshots)."""
+    import numpy as np
+    out = {}
+    try:
+        root = mb_obj.read(check_read=False).m_GameObject.read()
+
+        def comps(g):
+            for c in g.m_Component:
+                yield getattr(c, "component", c).deref()
+
+        def walk(g, M, top):
+            t = next(c.read() for c in comps(g) if c.type.name == "Transform")
+            if not top:
+                p, q, sc = t.m_LocalPosition, t.m_LocalRotation, t.m_LocalScale
+                M = M @ em.trs_matrix((p.x, p.y, p.z), (q.x, q.y, q.z, q.w), (sc.x, sc.y, sc.z))
+            for c in comps(g):
+                if c.type.name not in ("BoxCollider", "SphereCollider") or g.m_Layer != 0:
+                    continue
+                d = c.read_typetree()
+                if d.get("m_IsTrigger"):
+                    continue
+                cen = d["m_Center"]
+                w = (M @ np.array([cen["x"], cen["y"], cen["z"], 1.0]))[:3]
+                k = float(np.linalg.norm(M[:3, 0]))
+                if c.type.name == "SphereCollider" and "head" not in out:
+                    out["head"] = [round(float(x), 3) for x in w] + [round(d["m_Radius"] * k, 3)]
+                elif c.type.name == "BoxCollider" and "body" not in out:
+                    sz = d["m_Size"]
+                    out["body"] = [round(float(x), 3) for x in w] + [round(sz[a] * float(np.linalg.norm(M[:3, i])), 3) for i, a in enumerate("xyz")]
+            for ch in t.m_Children:
+                walk(ch.deref().read().m_GameObject.read(), M, False)
+
+        walk(root, np.eye(4), True)
+    except Exception as e:
+        print(f"  hit boxes: {e!r}"[:200], file=sys.stderr)
+    return out
 
 
 def nav_agent(mb_obj):
