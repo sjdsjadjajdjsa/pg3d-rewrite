@@ -215,6 +215,7 @@ class Exporter:
         self.markers = []        # spawn zones etc. (empty GameObjects with telling names)
         self.lightmaps = []      # lightmap index -> png path (or None)
         self.lightmap_scale = 1.0
+        self.extra_lightmaps = {}  # MeshLightmapDataController textures -> png path
         self.render = {}
         self.skybox = None       # Skybox/Cubemap material drawn on a mesh (see export_cubemap)
         self.stats = collections.Counter()
@@ -569,6 +570,63 @@ class Exporter:
             "fog_density": getattr(rs, "m_FogDensity", None),
         }
 
+    def behaviour(self, comps, class_name):
+        """The MonoBehaviour of script `class_name` among a GameObject's components, or None."""
+        for ptr in comps.get("MonoBehaviour", []):
+            try:
+                mb = deref(ptr)
+                sc = deref(mb.m_Script)
+                if sc is not None and sc.m_ClassName == class_name:
+                    return mb
+            except Exception:
+                pass
+        return None
+
+    def controller_lightmap(self, comps):
+        """Season lobby decor brings its own baked lightmap: MeshLightmapDataController sets
+        the renderer's lightmap texture and scale/offset at run time."""
+        mb = self.behaviour(comps, "MeshLightmapDataController")
+        if mb is None:
+            return None
+        tex = deref(getattr(mb, "lightmap", None))
+        so = getattr(mb, "m_lightmapScaleOffset", None)
+        if tex is None or so is None:
+            return None
+        key = ptr_key(mb.lightmap)
+        if key not in self.extra_lightmaps:
+            self.extra_lightmaps[key] = self.write_lightmap(tex, f"textures/lightmap_x{len(self.extra_lightmaps)}.png")
+        name = self.extra_lightmaps[key]
+        if name is None:
+            return None
+        self.stats["controller_lightmaps"] += 1
+        return {"lightmap": name, "lightmap_rect": [so.z, 1 - so.y - so.w, so.z + so.x, 1 - so.w]}
+
+    def write_lightmap(self, tex, name):
+        """One lightmap texture as an sRGB PNG, encoded like export_lightmaps (linear / scale)."""
+        from PIL import Image
+        rgb = texture_float_rgb(tex)
+        if rgb is None:
+            return None
+        v = np.clip(np.power(np.clip(rgb, 0, None), 2.2) / self.lightmap_scale, 0, 1)
+        srgb = np.where(v <= 0.0031308, v * 12.92, 1.055 * np.power(v, 1 / 2.4) - 0.055)
+        (self.out / "textures").mkdir(parents=True, exist_ok=True)
+        Image.fromarray((srgb * 255 + 0.5).astype(np.uint8), "RGB").save(self.out / name)
+        return name
+
+    def season_fog(self, comps):
+        """LobbySeasonFogController: the season lobby's own ambient colour and fog."""
+        mb = self.behaviour(comps, "LobbySeasonFogController")
+        if mb is None:
+            return
+        try:
+            a, f = mb._ambientColor, mb._fog
+            self.render.update(ambient_mode=3, ambient_sky=[a.r, a.g, a.b], ambient_intensity=1.0,
+                               fog=bool(f.Active), fog_color=[f.Color.r, f.Color.g, f.Color.b],
+                               fog_mode=int(f.Mode), fog_start=float(f.Start), fog_end=float(f.End))
+            self.stats["season_fog"] += 1
+        except Exception as e:
+            print(f"  season fog: {e!r}"[:160], file=sys.stderr)
+
     def lightmap_extras(self, mr, md, static=False):
         """glTF node extras telling the game which lightmap + UV rect this renderer uses.
 
@@ -612,6 +670,7 @@ class Exporter:
                 comps.setdefault(r.type.name, []).append(ptr)
             except Exception:
                 pass
+        self.season_fog(comps)
         mesh_idx = self.visual(comps)
         static_batched, extras, skinned = False, None, None
         if isinstance(mesh_idx, tuple):
@@ -752,7 +811,7 @@ class Exporter:
             first, count, static = sbi.firstSubMesh, sbi.subMeshCount, True
         mats = list(mr.m_Materials)
         mat_keys = tuple(ptr_key(m) for m in mats)
-        extras = self.lightmap_extras(mr, md, static)
+        extras = self.lightmap_extras(mr, md, static) or self.controller_lightmap(comps)
         is_skinned = (type(mr).__name__ == "SkinnedMeshRenderer" and md["joints"] is not None
                       and len(getattr(mr, "m_Bones", []) or []) > 0)
         key = (id(md), first, count, mat_keys, extras is not None, is_skinned)
