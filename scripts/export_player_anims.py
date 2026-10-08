@@ -160,6 +160,89 @@ def export_body():
     print(f"player body: {json.dumps(dict(ex.stats))}", file=sys.stderr)
 
 
+CONDITION = {1: "if", 2: "if_not", 3: "greater", 4: "less", 6: "equals", 7: "not_equal"}
+PARAM_TYPE = {1: "float", 3: "int", 4: "bool", 9: "trigger"}
+
+
+def export_controller(base, clip_names):
+    """The AnimatorController's compiled state machines (ControllerConstant) as plain JSON:
+    parameters, layers, states with their blend trees and transitions, by name."""
+    tos = {}
+    for e in base["m_TOS"]:
+        k, v = (e[0], e[1]) if isinstance(e, (list, tuple)) else (e["first"], e["second"])
+        tos[int(k)] = v
+    name = lambda h: tos.get(int(h)) if int(h) else None  # noqa: E731
+    c = base["m_Controller"]
+    values = c["m_Values"]["data"]["m_ValueArray"]
+    params = [{"name": name(v["m_ID"]), "type": PARAM_TYPE.get(v["m_Type"], v["m_Type"])} for v in values]
+    layers = [
+        {
+            "name": name(L["data"]["m_Binding"]),
+            "state_machine": L["data"]["m_StateMachineIndex"],
+            "additive": L["data"]["(int&)m_LayerBlendingMode"] == 1,
+            "weight": L["data"]["m_DefaultWeight"],
+        }
+        for L in c["m_LayerArray"]
+    ]
+
+    def transition(t, states):
+        t = t["data"]
+        dest = t["m_DestinationState"]
+        return {
+            # 30000+: exit to the machine's default state
+            "to": states[dest] if dest < len(states) else None,
+            "duration": t["m_TransitionDuration"],
+            "offset": t["m_TransitionOffset"],
+            "exit_time": t["m_ExitTime"],
+            "has_exit_time": bool(t["m_HasExitTime"]),
+            "can_self": bool(t.get("m_CanTransitionToSelf", True)),
+            "conditions": [
+                {"param": name(x["data"]["m_EventID"]), "mode": CONDITION.get(x["data"]["m_ConditionMode"]), "threshold": x["data"]["m_EventThreshold"]}
+                for x in t["m_ConditionConstantArray"]
+            ],
+        }
+
+    def node(n):
+        n = n["data"]
+        if not n["m_ChildIndices"]:
+            return {"clip": clip_names[n["m_ClipID"]] if n["m_ClipID"] < len(clip_names) else None, "duration": n["m_Duration"]}
+        kind = {0: "1d", 1: "simple_directional", 2: "freeform_directional", 3: "freeform_cartesian", 4: "direct"}[n["m_BlendType"]]
+        out = {"blend": kind, "x": name(n["m_BlendEventID"]), "y": name(n["m_BlendEventYID"]), "children": n["m_ChildIndices"]}
+        if n["m_BlendType"] == 0:
+            out["thresholds"] = n["m_Blend1dData"]["data"]["m_ChildThresholdArray"]
+        else:
+            out["positions"] = [[p["x"], p["y"]] for p in n["m_Blend2dData"]["data"]["m_ChildPositionArray"]]
+        return out
+
+    machines = []
+    for sm in c["m_StateMachineArray"]:
+        sm = sm["data"]
+        st = sm["m_StateConstantArray"]
+        names = [name(s["data"]["m_NameID"]) for s in st]
+        states = []
+        for s in st:
+            s = s["data"]
+            trees = s["m_BlendTreeConstantArray"]
+            states.append(
+                {
+                    "name": name(s["m_NameID"]),
+                    "speed": s["m_Speed"],
+                    "speed_param": name(s["m_SpeedParamID"]),
+                    "loop": bool(s["m_Loop"]),
+                    "tree": [node(n) for n in trees[0]["data"]["m_NodeArray"]] if trees else [],
+                    "transitions": [transition(t, names) for t in s["m_TransitionConstantArray"]],
+                }
+            )
+        machines.append(
+            {
+                "default": names[sm["m_DefaultState"]],
+                "any_state": [transition(t, names) for t in sm["m_AnyStateTransitionConstantArray"]],
+                "states": states,
+            }
+        )
+    return {"parameters": params, "layers": layers, "state_machines": machines}
+
+
 def main():
     export_body()
     g = json.loads((CHAR / "body.gltf").read_text())
@@ -173,13 +256,23 @@ def main():
         return "/".join(reversed(p)) if i == root else None
 
     env = UnityPy.load(f"{GAME}/resources.assets")
-    ctrl = next(o.read() for o in env.objects if o.type.name == "AnimatorController" and o.peek_name() == "RoyalePlayerAnimController")
+    # the Player prefab's body Animator plays FPSPlayerAnimController: an override of
+    # RoyalePlayerAnimController (Run -> run_forward_faster, Jump_landing_2 -> Landing_v02, ...)
+    over = next(o for o in env.objects if o.type.name == "AnimatorOverrideController" and o.peek_name() == "FPSPlayerAnimController")
+    ov = over.read_typetree()
+    objs = {o.path_id: o for o in env.objects}
+    base_obj = objs[ov["m_Controller"]["m_PathID"]]
+    swap = {c["m_OriginalClip"]["m_PathID"]: c["m_OverrideClip"]["m_PathID"] for c in ov["m_Clips"] if c["m_OverrideClip"]["m_PathID"]}
+    base = base_obj.read_typetree()
+    clip_ids = [swap.get(c["m_PathID"], c["m_PathID"]) for c in base["m_AnimationClips"]]
+    clip_names = [objs[i].peek_name() for i in clip_ids]
     clips, seen = [], set()
-    for p in ctrl.m_AnimationClips:
-        cl = p.deref().read()
+    for pid in clip_ids:
+        cl = objs[pid].read()
         if cl.m_Name not in seen:
             seen.add(cl.m_Name)
             clips.append(cl)
+    controller = export_controller(base, clip_names)
     wanted = {b.path for cl in clips for b in cl.m_ClipBindingConstant.genericBindings}
     # the Animator sits on some node of the model: pick the root whose paths match most hashes
     best = (0, None, {})
@@ -196,6 +289,7 @@ def main():
     print(f"  root node {g['nodes'][root]['name']!r}: {hits} of {len(wanted)} animated paths found", file=sys.stderr)
     out = {cl.m_Name: export_clip(cl, h) for cl in clips}
     out["_root"] = g["nodes"][root]["name"]
+    out["_controller"] = controller
     (CHAR / "anims.json").write_text(json.dumps(out))
     print(f"player anims: {len(clips)} clips ({', '.join(sorted(c.m_Name for c in clips))[:300]}) -> {CHAR}/anims.json")
 
