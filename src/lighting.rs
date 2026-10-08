@@ -385,6 +385,7 @@ fn additive_materials(
 /// Maps whose sky is a Skybox/Cubemap material (Arena 2's night sky): Unity draws the
 /// cubemap behind everything, so it becomes the camera's Skybox once the image has loaded
 /// (the six stacked faces turned into a cube texture).
+#[allow(clippy::too_many_arguments)]
 fn cubemap_sky(
     mut commands: Commands,
     info: Res<MapInfo>,
@@ -423,7 +424,6 @@ fn cubemap_sky(
         brightness: k,
         // Unity's _Rotation turns the sky about the up axis (mirrored by the X flip)
         rotation: Quat::from_rotation_y(def.rotation.to_radians()),
-        ..default()
     });
     info!("cubemap sky {} x{k:.2}", def.png);
 }
