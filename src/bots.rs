@@ -305,7 +305,7 @@ fn spawner(
     nav: Res<crate::navmesh::NavMesh>,
     spatial: SpatialQuery,
 ) {
-    if types.0.is_empty() || std::env::var("PG3D_NOBOTS").is_ok() {
+    if types.0.is_empty() || std::env::var("PG3D_NOBOTS").is_ok() || crate::team_match::team_mode() {
         return;
     }
     let dt = time.delta_secs();

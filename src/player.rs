@@ -105,7 +105,7 @@ fn face_start(mut camera: Single<&mut Transform, With<crate::camera::PlayerCamer
     camera.rotation = Quat::from_rotation_y(yaw.to_radians());
 }
 
-fn spawn_player(mut commands: Commands, markers: Res<MapMarkers>) {
+pub fn spawn_player(mut commands: Commands, markers: Res<MapMarkers>) {
     let spawn = start_point(&markers).map(|p| p + Vec3::Y * 1.0).unwrap_or(Vec3::new(0.0, 5.0, 0.0));
     // PG3D_SPAWN="x,y,z" (testing) puts the player somewhere else
     let spawn = std::env::var("PG3D_SPAWN")

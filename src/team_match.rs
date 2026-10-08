@@ -54,8 +54,12 @@ pub enum Phase {
 #[derive(Resource, Default)]
 pub struct TeamMatch {
     pub time_left: f32,
-    /// times the player was killed: the rival team's score
+    /// the rival team's score (with bots: their kills, else the times you were killed)
     pub deaths: i32,
+    /// your team's score (with bots: the team's kills, else yours)
+    pub blue: i32,
+    /// everyone's line of the table (tdm_bots.rs; empty without bots)
+    rows: Vec<crate::tdm_bots::ScoreRow>,
     was_dead: bool,
     pub phase: Phase,
     /// XP and coins of this match
@@ -267,7 +271,7 @@ fn fill_table(s: &mut NguiScreen, stats: &PlayerStats, m: &TeamMatch) {
     let rival = s.string("Key_1772");
     // other modes' tables have parts with the same names: look inside the team table
     let Some(team) = s.find("FonTableTeam") else { return };
-    for (table, name, total) in [("TableBlue", your, stats.kills), ("TableRed", rival, m.deaths)] {
+    for (table, name, total) in [("TableBlue", your, m.blue), ("TableRed", rival, m.deaths)] {
         let Some(t) = s.find_in(team, table) else { continue };
         if let Some(i) = s.find_in(t, "TeamLabel") {
             s.set_text(i, name);
@@ -287,20 +291,33 @@ fn fill_table(s: &mut NguiScreen, stats: &PlayerStats, m: &TeamMatch) {
             }
         }
     }
-    let rows: [(usize, Option<Row>); 2] = [
-        (0, Some(("Player", stats.score, stats.kills, true))),
-        (6, (m.deaths > 0).then_some(("Zombies", m.deaths * 100, m.deaths, false))),
-    ];
+    // slots 0-5: your team, 6-11: the rival team, each by kills (Place = rank)
+    let mut slots: Vec<(usize, Row, usize)> = vec![];
+    if m.rows.is_empty() {
+        slots.push((0, ("Player", stats.score, stats.kills, true), 1));
+        if m.deaths > 0 {
+            slots.push((6, ("Zombies", m.deaths * 100, m.deaths, false), 1));
+        }
+    } else {
+        for (team, first) in [(crate::tdm_bots::Team::Blue, 0), (crate::tdm_bots::Team::Red, 6)] {
+            let mut list: Vec<&crate::tdm_bots::ScoreRow> = m.rows.iter().filter(|r| r.team == team).collect();
+            list.sort_by(|a, b| b.kills.cmp(&a.kills).then(a.deaths.cmp(&b.deaths)));
+            for (n, r) in list.into_iter().take(6).enumerate() {
+                let score = if r.you { stats.score.max(r.kills * 100) } else { r.kills * 100 };
+                slots.push((first + n, (r.name.as_str(), score, r.kills, r.you), n + 1));
+            }
+        }
+    }
     for k in 0..12 {
         let Some(b) = s.find_in(team, &format!("TeamFight_PlayerButton{k}")) else { continue };
-        let row = rows.iter().find(|(n, _)| *n == k).and_then(|(_, r)| *r);
+        let row = slots.iter().find(|(n, _, _)| *n == k).map(|(_, r, p)| (*r, *p));
         s.set_active(b, row.is_some());
-        let Some((nick, score, kills, mine)) = row else { continue };
+        let Some(((nick, score, kills, mine), place)) = row else { continue };
         for (label, v) in [
             ("Nick_Label", nick.to_string()),
             ("Score_Label", crate::results::group(score)),
             ("CountKill_Label", kills.to_string()),
-            ("Place_Label", "1".to_string()),
+            ("Place_Label", place.to_string()),
         ] {
             if let Some(i) = s.find_in(b, label) {
                 s.set_text(i, v);
@@ -327,12 +344,21 @@ fn setup(mut screens: Query<&mut NguiScreen, Added<NguiScreen>>) {
 }
 
 /// The match clock; count the player's deaths for the rival team.
-fn clock(time: Res<Time>, stats: Res<PlayerStats>, mut m: ResMut<TeamMatch>) {
+fn clock(time: Res<Time>, stats: Res<PlayerStats>, mut m: ResMut<TeamMatch>, scores: Option<Res<crate::tdm_bots::TdmScores>>) {
     let dead = stats.health <= 0.0;
     if dead && !m.was_dead {
         m.deaths += 1;
     }
     m.was_dead = dead;
+    m.blue = stats.kills;
+    // with bots the teams' own kill counts (tdm_bots.rs)
+    if let Some(sc) = scores.filter(|sc| sc.rows.len() > 1)
+        && m.phase == Phase::Playing
+    {
+        m.blue = sc.blue;
+        m.deaths = sc.red;
+        m.rows = sc.rows.clone();
+    }
     if m.phase == Phase::Playing {
         m.time_left = (m.time_left - time.delta_secs()).max(0.0);
     }
@@ -360,7 +386,8 @@ fn score_box(
     let Some(e) = sb.0 else { return };
     let Ok(mut s) = screens.get_mut(e) else { return };
     let show = m.phase == Phase::Playing && !hidden.0;
-    let (mut mine, mut rival) = (stats.kills, m.deaths);
+    let _ = &stats;
+    let (mut mine, mut rival) = (m.blue, m.deaths);
     // PG3D_TEAM_SCORE="17|34" (automated screenshots): fixed scores, to compare with the clips
     if let Some((a, b)) = std::env::var("PG3D_TEAM_SCORE").ok().and_then(|v| {
         let (a, b) = v.split_once('|')?;
@@ -539,7 +566,7 @@ fn ending(
 ) {
     let snd = |c: &mut Commands, key: &str| crate::sound::play(c, sounds.as_ref().and_then(|g| g.get(key, 0)), None, 1.0);
     let Some(e) = screen.0 else { return };
-    let outcome = match stats.kills.cmp(&m.deaths) {
+    let outcome = match m.blue.cmp(&m.deaths) {
         std::cmp::Ordering::Greater => Outcome::Victory,
         std::cmp::Ordering::Less => Outcome::Defeat,
         std::cmp::Ordering::Equal => Outcome::Draw,
@@ -550,7 +577,7 @@ fn ending(
             if m.time_left > 0.0 {
                 return;
             }
-            info!("team fight over: {outcome:?} {} : {}", stats.kills, m.deaths);
+            info!("team fight over: {outcome:?} {} : {}", m.blue, m.deaths);
             m.phase = Phase::Banner(0.0);
             // NetworkStartTableNGUIController win / loose / deadheat sounds
             snd(&mut commands, match outcome {

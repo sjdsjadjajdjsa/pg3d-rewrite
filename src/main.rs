@@ -34,6 +34,7 @@ mod projectiles;
 mod progress;
 mod results;
 mod team_match;
+mod tdm_bots;
 mod scene;
 mod screenshot;
 mod settings;
@@ -168,7 +169,7 @@ fn game_scene(app: &mut scene::SceneBuilder) {
     ))
     .add_plugins((camera::CameraPlugin, screenshot::ScreenshotPlugin, sound::SoundPlugin, weapons::WeaponsPlugin, bots::BotsPlugin))
     .add_plugins((projectiles::ProjectilesPlugin, pickups::PickupsPlugin, ngui::NguiPlugin, pause::PausePlugin, results::ResultsPlugin))
-    .add_plugins((team_match::TeamMatchPlugin, mirrored_skins::MirroredSkinsPlugin))
+    .add_plugins((team_match::TeamMatchPlugin, tdm_bots::TdmBotsPlugin, mirrored_skins::MirroredSkinsPlugin))
     .add_plugins((hud::HudPlugin, ingame_ui::InGameUiPlugin, explosives::ExplosivesPlugin, cursor::CursorPlugin, beams::BeamsPlugin))
     .add_systems(scene::Update, (menu::back_to_menu, menu::test_click, hide_hud));
 }

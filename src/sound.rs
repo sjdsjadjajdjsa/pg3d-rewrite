@@ -37,6 +37,12 @@ pub fn set_sfx_volume(v: f32) {
 }
 
 pub fn play(commands: &mut Commands, sound: Option<&Handle<AudioSource>>, at: Option<Vec3>, volume: f32) {
+    play_scaled(commands, sound, at, volume, 0.25);
+}
+
+/// `play` with the distance scale of a world sound (distances are multiplied by it before
+/// the 1/distance fall-off: 1.0 fades like Unity's default logarithmic roll-off).
+pub fn play_scaled(commands: &mut Commands, sound: Option<&Handle<AudioSource>>, at: Option<Vec3>, volume: f32, scale: f32) {
     let Some(sound) = sound else { return };
     debug!("sound {:?}", sound.path());
     let volume = volume * f32::from_bits(SFX_VOLUME.load(std::sync::atomic::Ordering::Relaxed));
@@ -45,7 +51,7 @@ pub fn play(commands: &mut Commands, sound: Option<&Handle<AudioSource>>, at: Op
         volume: Volume::Linear(volume),
         spatial: at.is_some(),
         // distances are divided by 4 before the 1/distance fall-off: audible across a map
-        spatial_scale: at.map(|_| SpatialScale::new(0.25)),
+        spatial_scale: at.map(|_| SpatialScale::new(scale)),
         ..PlaybackSettings::DESPAWN
     };
     let mut e = commands.spawn((AudioPlayer(sound.clone()), settings));
@@ -113,6 +119,7 @@ pub fn player_sounds(
     loadout: Option<Res<crate::weapons::Loadout>>,
     mut st: Local<(bool, f32, Option<usize>, f32, usize, bool)>,
     mut air: Local<f32>,
+    mut hurt_cd: Local<f32>,
 ) {
     let Some(sounds) = sounds else { return };
     let Ok(p) = player.single() else { return };
@@ -142,12 +149,18 @@ pub fn player_sounds(
         *step_timer = 0.0;
     }
     if let Some(stats) = stats {
+        *hurt_cd -= time.delta_secs();
         if *started && stats.health < *last_health - 0.01 {
             if stats.health <= 0.0 {
                 s("player/deadPlayerSound", 0, 1.0);
-                // Player_move_c.killedByMonster: the enemies here are all monsters
-                s("player/killedByMonster", 0, 1.0);
-            } else {
+                // Player_move_c.killedByMonster: only when monsters killed you (not in
+                // Team Fight, where the enemies are players)
+                if !crate::team_match::team_mode() {
+                    s("player/killedByMonster", 0, 1.0);
+                }
+            } else if *hurt_cd <= 0.0 {
+                // one hurt sound per burst, not one per machine-gun bullet
+                *hurt_cd = 0.3;
                 s("player/damagePlayerSound", 0, 0.9);
             }
         }
