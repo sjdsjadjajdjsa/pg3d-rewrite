@@ -426,6 +426,22 @@ class Exporter:
                 out["alphaMode"] = "BLEND"
             if floats.get("_CullMode") == 0.0:
                 out["doubleSided"] = True
+            # the sky (SKY_SYSTEM: dome, clouds, far mountains). MADFINGER "Scroll 2 Layers"
+            # shaders draw texture x colour x _MMultiplier/_AMultiplier, unlit, the texture
+            # scrolling by _ScrollX/_ScrollY per second; "NO_FOG" and Skybox ones ignore fog.
+            # Unlit Cubic/Universal SKY_ materials (mountains) are unlit but fogged.
+            sky = None
+            if "madfinger/environment/scroll" in s:
+                sky = {"mult": float(floats.get("_MMultiplier", floats.get("_AMultiplier", 1.0))),
+                       "scroll": [float(floats.get("_ScrollX", 0.0)), float(floats.get("_ScrollY", 0.0))],
+                       "fog": not ("no_fog" in s or "skybox" in s)}
+            elif mat.m_Name.upper().startswith("SKY") and "UNLIT" in keywords:
+                sky = {"mult": 1.0, "scroll": [0.0, 0.0], "fog": "FOG_ENABLE" in keywords}
+            if sky is not None:
+                out["extras"]["sky"] = sky
+                unlit_material = True
+                if "ALPHATEST_ENABLE" in keywords:
+                    out["alphaMode"], out["alphaCutoff"] = "MASK", float(floats.get("_CutOut", 0.5))
             if "unlit" in s or "particle" in s or "additive" in s or unlit_material:
                 out.setdefault("extensions", {})["KHR_materials_unlit"] = {}
                 self.vis.doc.setdefault("extensionsUsed", [])
