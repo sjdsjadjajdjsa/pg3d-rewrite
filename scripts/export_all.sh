@@ -30,6 +30,7 @@ $PY scripts/export_ngui.py resources.assets AllModesView modes --graft=ModeSelec
 $PY scripts/export_mode_icons.py | grep -E '^mode icons'
 $PY scripts/export_scene_info.py | grep -E '^scenes'
 $PY scripts/export_game_sounds.py | grep -E '^sounds'
+$PY scripts/export_player_bot.py | grep -E '^player bot'
 $PY scripts/export_ngui.py resources.assets NetworkStartTableNGUI table 2>/dev/null | grep -E '^table'
 $PY scripts/export_ngui.py resources.assets InGameGUIPart_TeamFight teampart 2>/dev/null | grep -E '^teampart'
 $PY scripts/export_keys.py 2>/dev/null | grep -E "^keys"
