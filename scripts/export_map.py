@@ -849,6 +849,27 @@ def decode_bc6h(raw, w, h):
         return np.frombuffer(dst.read_bytes(), dtype=np.float32).reshape(h, w, 3).copy()
 
 
+def stream_bytes(tex):
+    """The texture's bytes from its .resS stream. UnityPy sometimes returns empty image_data
+    for streamed textures (e.g. hill's BC6H lightmap); read the stream from the bundle."""
+    sd = tex.m_StreamData
+    if not sd or not sd.size:
+        return b""
+    parent = getattr(tex.assets_file, "parent", None)
+    name = sd.path.split("/")[-1]
+    r = getattr(parent, "files", {}).get(name)
+    if r is None:
+        # built-in levels stream from files next to the game's .assets
+        f = GAME_DATA / name
+        if not f.exists():
+            return b""
+        with open(f, "rb") as fh:
+            fh.seek(sd.offset)
+            return fh.read(sd.size)
+    r.Position = sd.offset
+    return bytes(r.read_bytes(sd.size))
+
+
 def texture_float_rgb(tex):
     """Texture2D -> float32 HxWx3 array, top row first. Handles half/float HDR formats
     exactly and falls back to UnityPy's 8-bit decoder for everything else."""
@@ -856,6 +877,8 @@ def texture_float_rgb(tex):
     w, h = tex.m_Width, tex.m_Height
     try:
         raw = tex.image_data
+        if not raw:
+            raw = stream_bytes(tex)
         if fmt == 17:   # RGBAHalf
             a = np.frombuffer(raw, dtype=np.float16, count=w * h * 4).reshape(h, w, 4)[:, :, :3]
         elif fmt == 20:  # RGBAFloat
