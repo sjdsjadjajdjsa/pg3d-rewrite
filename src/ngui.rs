@@ -146,6 +146,12 @@ pub struct TextureDef {
     /// UIBasicSprite.mFlip: 1 horizontally, 2 vertically, 3 both
     #[serde(default)]
     pub flip: i32,
+    /// UIBasicSprite type: 0 simple, 1 sliced, 2 tiled, 3 filled
+    #[serde(default, rename = "type")]
+    pub kind: i32,
+    /// slicing border in texture pixels (left, bottom, right, top)
+    #[serde(default)]
+    pub border: Option<[f32; 4]>,
 }
 
 #[derive(Deserialize, Clone, Default)]
@@ -285,6 +291,10 @@ impl NguiScreen {
         self.dirty = true;
     }
     /// Show `image` in texture widget `i`, cropped to fill it (like CSS object-fit: cover).
+    /// The picture a UITexture node was exported with.
+    pub fn texture_handle(&self, i: usize) -> Option<Handle<Image>> {
+        self.textures.get(self.nodes[i].texture.as_ref()?.png.as_ref()?).cloned()
+    }
     pub fn set_texture(&mut self, i: usize, image: Handle<Image>) {
         self.texture_override.insert(i, image);
         self.dirty = true;
@@ -1072,7 +1082,21 @@ fn make_widget(screen: &NguiScreen, i: usize, alpha: f32, k: f32, sr: Rect) -> O
     if let Some(t) = &nd.texture {
         let h = screen.textures.get(t.png.as_ref()?)?;
         let mut im = ImageNode::new(h.clone()).with_color(color);
-        im.image_mode = NodeImageMode::Stretch;
+        im.image_mode = match (t.kind, t.border) {
+            // sliced UITexture (e.g. the Event Center button's 16x64 picture: fixed 8 px
+            // dark edges, the middle stretched)
+            (1, Some([l, b, rr, tp])) if l + b + rr + tp > 0.0 => NodeImageMode::Sliced(TextureSlicer {
+                border: BorderRect { min_inset: Vec2::new(l, tp), max_inset: Vec2::new(rr, b) },
+                center_scale_mode: SliceScaleMode::Stretch,
+                sides_scale_mode: SliceScaleMode::Stretch,
+                max_corner_scale: k,
+            }),
+            // tiled: the picture repeats at its own pixel size times the widget's scale
+            (2, _) => {
+                NodeImageMode::Tiled { tile_x: true, tile_y: true, stretch_value: sr.width() / w.w.max(1.0) }
+            }
+            _ => NodeImageMode::Stretch,
+        };
         im.flip_x = t.flip == 1 || t.flip == 3;
         im.flip_y = t.flip == 2 || t.flip == 3;
         return Some((base, Some(im)));

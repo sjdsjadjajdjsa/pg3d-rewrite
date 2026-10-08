@@ -24,7 +24,7 @@ impl Plugin for MenuPlugin {
             .add_systems(PreStartup, lobby_scene)
             .add_systems(Startup, build_menu)
             .add_systems(Update, (character_idle, test_click))
-            .add_systems(Update, (button_colors, button_clicks, lobby_clicks, fade_toast, setup_lobby, lobby_wallet, lobby_avatar));
+            .add_systems(Update, (button_colors, button_clicks, lobby_clicks, fade_toast, setup_lobby, lobby_wallet, lobby_avatar, event_button_gradient));
     }
 }
 
@@ -304,6 +304,34 @@ fn setup_lobby(
         for i in bars {
             s.set_fill(i, fill);
         }
+    }
+}
+
+/// Event Center button: Unity mixes the purple "gradi" overlay with the cyan button in
+/// gamma space, Bevy in linear light, where it comes out far weaker (1280x720 lobby shot:
+/// green 174 vs 123 halfway along). For a dark channel the gamma mix equals a linear mix
+/// with alpha 1-(1-a)^2.2, so the gradient's alpha is remapped that way (colour alpha folded
+/// in), and the red lowered (0.54 -> 0.30) so the purple doesn't turn lavender.
+fn event_button_gradient(mut screens: Query<&mut crate::ngui::NguiScreen>, mut images: ResMut<Assets<Image>>, mut done: Local<bool>) {
+    if *done {
+        return;
+    }
+    for mut s in &mut screens {
+        let Some(i) = s.find_path("EventCenterButton/Holder/ToEventButton/Bg_normal/gradi") else { continue };
+        let Some(h) = s.texture_handle(i) else { continue };
+        let Some(src) = images.get(&h) else { return };
+        *done = true;
+        let a0 = s.nodes[i].widget.as_ref().map_or(1.0, |w| w.color[3]);
+        let mut img = src.clone();
+        if let Some(data) = img.data.as_mut() {
+            for px in data.chunks_exact_mut(4) {
+                let a = px[3] as f32 / 255.0 * a0;
+                px[3] = ((1.0 - (1.0 - a).powf(2.2)) * 255.0).round() as u8;
+            }
+        }
+        s.set_texture(i, images.add(img));
+        s.set_color(i, [0.30, 0.0, 1.0, 1.0]);
+        return;
     }
 }
 
