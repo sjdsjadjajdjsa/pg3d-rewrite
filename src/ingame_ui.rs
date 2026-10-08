@@ -21,13 +21,17 @@ pub struct InGameUiPlugin;
 
 impl Plugin for InGameUiPlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(Startup, spawn)
+        app.init_resource::<HudHidden>().add_systems(Startup, spawn)
             .add_systems(Update, (setup, place_corners, update, update_arena_box, wave_messages, reload_ring, key_tips, invincibility, wallet_bar).chain());
     }
 }
 
 #[derive(Resource)]
 struct Hud(Option<Entity>);
+
+/// Set while a full-screen panel (the Team Fight table) stands in for the HUD.
+#[derive(Resource, Default)]
+pub struct HudHidden(pub bool);
 
 #[derive(Resource)]
 struct ArenaBox(Option<Entity>);
@@ -90,6 +94,7 @@ fn update_arena_box(
     stats: Res<PlayerStats>,
     wave: Res<crate::bots::Wave>,
     over: Res<crate::results::MatchOver>,
+    hidden: Res<HudHidden>,
     arena: Res<ArenaBox>,
     mut screens: Query<&mut NguiScreen>,
     mut commands: Commands,
@@ -97,7 +102,8 @@ fn update_arena_box(
 ) {
     let Some(e) = arena.0 else { return };
     let Ok(mut s) = screens.get_mut(e) else { return };
-    let dead = stats.health <= 0.0 || over.0;
+    // Team Fight has no wave box
+    let dead = stats.health <= 0.0 || over.0 || hidden.0 || crate::team_match::team_mode();
     let key = format!("{} {} {} {dead}", stats.score, wave.number, wave.left);
     if *last == key {
         return;
@@ -287,6 +293,7 @@ fn update(
     loadout: Res<Loadout>,
     stats: Res<PlayerStats>,
     over: Res<crate::results::MatchOver>,
+    hidden: Res<HudHidden>,
     hud: Res<Hud>,
     mut screens: Query<(&mut NguiScreen, &mut HudNodes)>,
     mut commands: Commands,
@@ -308,7 +315,7 @@ fn update(
         }
         n.icons_for = names;
     }
-    let dead = stats.health <= 0.0 || over.0;
+    let dead = stats.health <= 0.0 || over.0 || hidden.0;
     // the bar slides to the new value instead of jumping (OBSERVED: ~120-150 %/s in clips
     // d_rec4 and d_rec8)
     let target = (stats.health / PLAYER_MAX_HEALTH).clamp(0.0, 1.0);

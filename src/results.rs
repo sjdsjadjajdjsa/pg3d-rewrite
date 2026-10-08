@@ -61,8 +61,9 @@ fn test_die(time: Res<Time>, mut stats: ResMut<PlayerStats>, mut done: Local<boo
     }
 }
 
+/// Arena / Campaign: dying ends the match (Team Fight respawns instead).
 fn campaign() -> bool {
-    std::env::var("PG3D_NOBOTS").is_err()
+    std::env::var("PG3D_NOBOTS").is_err() && !crate::team_match::team_mode()
 }
 
 fn spawn_screen(mut commands: Commands, assets: Res<AssetServer>, data: Res<DataDir>) {
