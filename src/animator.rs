@@ -461,6 +461,26 @@ impl Animator {
         base
     }
 
+    /// Testing: the pose of one clip alone at `t` seconds (rest pose for bones it doesn't key).
+    pub fn clip_pose(&self, c: &Controller, name: &str, t: f32) -> HashMap<Entity, (Quat, Vec3)> {
+        let mut base: HashMap<Entity, (Quat, Vec3)> = self.rest.iter().map(|(e, r)| (*e, *r)).collect();
+        if let Some(clip) = c.clips.get(name) {
+            let t = if clip.length > 0.0 { t.rem_euclid(clip.length) } else { 0.0 };
+            for (k, tr) in clip.tracks.iter().enumerate() {
+                let Some(&e) = self.bones.get(&tr.path) else { continue };
+                let (r, p) = clip.sample(k, t);
+                let b = base.entry(e).or_insert((Quat::IDENTITY, Vec3::ZERO));
+                if let Some(r) = r {
+                    b.0 = r;
+                }
+                if let Some(p) = p {
+                    b.1 = p;
+                }
+            }
+        }
+        base
+    }
+
     /// Write the pose to the bones' transforms.
     pub fn apply(&self, c: &Controller, tf: &mut Query<&mut Transform, Without<crate::tdm_bots::PlayerBot>>) {
         for (e, (r, p)) in self.pose(c) {

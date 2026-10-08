@@ -57,8 +57,6 @@ const RESPAWN: f32 = 3.0;
 const GRAVITY: f32 = 9.81;
 /// Bots run at the player's speed.
 const RUN_SPEED: f32 = crate::player::WALK_SPEED;
-/// Height of the bots' first-person weapon rig's eye (at the chest; GUESS, looks right).
-const BOT_EYE: f32 = 1.3;
 /// Turn rate while roaming, rad/s (aiming uses the bot's own rotationSpeed).
 const ROAM_TURN: f32 = 4.0;
 /// Horizontal acceleration, m/s² (full speed in about a quarter second).
@@ -476,9 +474,10 @@ fn hook_up(
                 commands.entity(*d).insert(Visibility::Hidden);
             }
         }
-        // the weapon prefab is a first-person rig whose origin is gunPosition (y -1.7) below
-        // the eye; put that "eye" at the chest so its arms come out at the shoulders
-        commands.entity(w).insert((ChildOf(e), Transform::from_translation(Vec3::new(0.0, BOT_EYE - 1.7, 0.12))));
+        // the weapon prefab's arms start at (±0.25, 1.375, 0) from its origin: exactly the
+        // body's shoulder bones (rp_L/R_arm_bone) from the feet, so the prefab sits at the
+        // player's origin as it is
+        commands.entity(w).insert((ChildOf(e), Transform::IDENTITY));
         commands.entity(e).insert(Hooked);
     }
 }
@@ -534,12 +533,28 @@ fn animate_bodies(
             anim.trigger("Jump");
         }
         a.was_grounded = b.grounded;
+        // PG3D_BOT_HIT=1 (testing): flinch twice a second
+        if std::env::var("PG3D_BOT_HIT").is_ok() && (time.elapsed_secs() % 0.5) < dt {
+            b.hurt = 0.27;
+        }
         if b.hurt > a.prev_hurt {
             let k = (b.rand() * 3.0) as u32;
             anim.trigger(["TakeDamage", "TakeDamage2", "TakeDamage3"][k.min(2) as usize]);
         }
         a.prev_hurt = b.hurt;
         if std::env::var("PG3D_NOBODYANIM").is_ok() {
+            continue;
+        }
+        // PG3D_BOT_CLIP=name[,seconds] (testing): every bot holds one clip
+        if let Ok(v) = std::env::var("PG3D_BOT_CLIP") {
+            let (name, at) = v.split_once(',').map_or((v.as_str(), None), |(n, t)| (n, t.parse::<f32>().ok()));
+            let t = at.unwrap_or(time.elapsed_secs());
+            for (e, (r, p)) in anim.clip_pose(&ctrl, name, t) {
+                if let Ok(mut x) = tf.get_mut(e) {
+                    x.rotation = r;
+                    x.translation = p;
+                }
+            }
             continue;
         }
         anim.update(&ctrl, dt);
@@ -574,11 +589,21 @@ fn trace_visibility(
     bots: Query<(Entity, &PlayerBot)>,
     children: Query<&Children>,
     meshes: Query<(&Name, &GlobalTransform, &ViewVisibility, &InheritedVisibility, Option<&Aabb>), With<Mesh3d>>,
+    names: Query<&Name>,
+    globals: Query<&GlobalTransform>,
 ) {
     if std::env::var("PG3D_TRACE_VIS").is_err() || (time.elapsed_secs() % 3.0) >= time.delta_secs() {
         return;
     }
-    for (e, b) in bots.iter().take(3) {
+    for (e, b) in bots.iter().take(1) {
+        let base = globals.get(e).map(|g| g.translation()).unwrap_or_default();
+        for d in children.iter_descendants(e) {
+            if let (Ok(n), Ok(g)) = (names.get(d), globals.get(d))
+                && matches!(n.as_str(), "rp_arms_root_bone" | "WeaponPoint" | "rp_head_bone" | "rp_L_arm_bone" | "rp_R_arm_bone" | "rp_spine_03" | "rp_pelvis_bone")
+            {
+                info!("bone {n}: {:.3} (from feet)", g.translation() - base);
+            }
+        }
         for d in children.iter_descendants(e) {
             if let Ok((n, g, vv, iv, aabb)) = meshes.get(d) {
                 info!("vis {:?} alive={} {n}: pos {:.2} scale {:.3} inherited={} drawn={} aabb={:?}", b.team, b.alive(), g.translation(), g.scale(), iv.get(), vv.get(), aabb.map(|a| a.half_extents));
@@ -916,8 +941,10 @@ fn movement(
     let Some(setup) = setup else { return };
     let mv = &setup.tuning.movement;
     let dt = time.delta_secs();
+    // PG3D_BOT_FREEZE=1 (testing): bots stand where they spawned
+    let frozen = std::env::var("PG3D_BOT_FREEZE").is_ok();
     for (e, mut t, mut b, children) in &mut bots {
-        if !b.alive() {
+        if !b.alive() || frozen {
             continue;
         }
         let Some((ce, col, off)) = children.iter().find_map(|c| colliders.get(c).ok().map(|(x, ct)| (c, x, ct.translation))) else {
@@ -1318,11 +1345,12 @@ fn death_view(
     }
 }
 
+#[allow(clippy::type_complexity)]
 /// PG3D_BOT_VIEW=k[,angle] (automated screenshots): the camera follows bot k from 3.5 m,
 /// seen from `angle` degrees off its front (0 = facing you).
 fn bot_view(
     bots: Query<(&Transform, &PlayerBot)>,
-    mut cam: Query<&mut Transform, (With<crate::camera::PlayerCamera>, Without<PlayerBot>)>,
+    mut cam: Query<(&mut Transform, &mut GlobalTransform), (With<crate::camera::PlayerCamera>, Without<PlayerBot>)>,
     spatial: SpatialQuery,
 ) {
     let Ok(v) = std::env::var("PG3D_BOT_VIEW") else { return };
@@ -1330,7 +1358,7 @@ fn bot_view(
     let k: usize = it.next().and_then(|x| x.parse().ok()).unwrap_or(0);
     let ang: f32 = it.next().and_then(|x| x.parse().ok()).unwrap_or(0.0);
     let Some((t, b)) = bots.iter().filter(|(_, b)| b.alive()).nth(k) else { return };
-    let Ok(mut c) = cam.single_mut() else { return };
+    let Ok((mut c, mut g)) = cam.single_mut() else { return };
     let dir = Quat::from_rotation_y(b.yaw + ang.to_radians()) * Vec3::Z;
     let focus = t.translation + Vec3::Y * 1.0;
     let want = dir * 3.5 + Vec3::Y * 0.6;
@@ -1338,4 +1366,6 @@ fn bot_view(
     let d = Dir3::new(want).ok().and_then(|d| spatial.cast_ray(focus, d, want.length(), true, &SpatialQueryFilter::from_mask(Layer::World))).map_or(want.length(), |h| (h.distance - 0.3).max(0.8));
     c.translation = focus + want.normalize() * d;
     c.look_at(focus, Vec3::Y);
+    // this runs after transform propagation (the scene's PostUpdate): set the global too
+    *g = GlobalTransform::from(*c);
 }
