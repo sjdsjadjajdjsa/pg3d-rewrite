@@ -59,7 +59,8 @@ pub fn spawn_camera(mut commands: Commands, settings: Res<crate::settings::Setti
         .unwrap_or_default();
     commands.spawn((
         Camera3d::default(),
-        Projection::Perspective(PerspectiveProjection { fov: settings.fov.to_radians(), ..default() }),
+        // far enough for the sky domes (up to ~2.1 km away; Bevy's default far plane is 1 km)
+        Projection::Perspective(PerspectiveProjection { fov: settings.fov.to_radians(), far: 5000.0, ..default() }),
         PlayerCamera { fly_speed: 10.0, sensitivity: settings.mouse_sensitivity() },
         start,
     ));

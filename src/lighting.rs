@@ -33,7 +33,7 @@ impl Plugin for LightingPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<HasProbes>()
             .add_systems(Startup, (setup_lights, setup_camera_look).after(crate::camera::spawn_camera))
-            .add_systems(Update, (attach_lightmaps, set_lightmap_exposure, additive_materials, gamma_blend_glass).chain());
+            .add_systems(Update, (attach_lightmaps, set_lightmap_exposure, additive_materials, sky_materials, scroll_sky, gamma_blend_glass).chain());
     }
 }
 
@@ -255,6 +255,75 @@ fn gamma_blend_glass(
         if let Some(mut m) = materials.get_mut(id) {
             let a = m.base_color.alpha();
             m.base_color.set_alpha((a * k).min(1.0));
+        }
+    }
+}
+
+/// A sky material (extras.sky from export_map.py): the map's SKY_SYSTEM dome, clouds and
+/// far mountains.
+#[derive(Deserialize)]
+struct SkyExtras {
+    sky: SkyDef,
+}
+
+#[derive(Deserialize)]
+struct SkyDef {
+    /// _MMultiplier / _AMultiplier: brightness, applied to the sRGB colour
+    mult: f32,
+    /// texture offset per second (_ScrollX, _ScrollY)
+    scroll: [f32; 2],
+    fog: bool,
+}
+
+/// Sky materials that scroll, with their speed.
+#[derive(Resource, Default)]
+struct ScrollingSky(Vec<(Handle<StandardMaterial>, Vec2)>);
+
+/// The original's sky shaders (MADFINGER "Scroll 2 Layers ...") draw texture x colour x
+/// multiplier in gamma space, unlit, and most ignore the fog.
+fn sky_materials(
+    mut commands: Commands,
+    q: Query<(&GltfMaterialExtras, &MeshMaterial3d<StandardMaterial>), Added<GltfMaterialExtras>>,
+    mut materials: ResMut<Assets<StandardMaterial>>,
+    mut scrolling: Local<Vec<(Handle<StandardMaterial>, Vec2)>>,
+    mut done: Local<std::collections::HashSet<AssetId<StandardMaterial>>>,
+) {
+    let mut added = false;
+    for (extras, mat) in &q {
+        let Ok(x) = serde_json::from_str::<SkyExtras>(&extras.value) else { continue };
+        if !done.insert(mat.0.id()) {
+            continue;
+        }
+        let Some(mut m) = materials.get_mut(&mat.0) else { continue };
+        m.unlit = true;
+        m.fog_enabled = x.sky.fog;
+        // the sky shaders draw both sides (Cull Off): the domes are seen from inside
+        m.cull_mode = None;
+        m.double_sided = true;
+        // the exporter stores Unity's colour values as they are (sRGB); in linear light the
+        // multiplied colour is (c x mult)^2.2
+        let c = m.base_color.to_linear();
+        let k = |v: f32| (v * x.sky.mult).max(0.0).powf(2.2);
+        m.base_color = Color::LinearRgba(LinearRgba::new(k(c.red), k(c.green), k(c.blue), c.alpha));
+        debug!("sky material: x{} fog={} scroll={:?}", x.sky.mult, x.sky.fog, x.sky.scroll);
+        let s = Vec2::from(x.sky.scroll);
+        if s != Vec2::ZERO {
+            scrolling.push((mat.0.clone(), s));
+            added = true;
+        }
+    }
+    if added {
+        commands.insert_resource(ScrollingSky(scrolling.clone()));
+    }
+}
+
+fn scroll_sky(time: Res<Time>, sky: Option<Res<ScrollingSky>>, mut materials: ResMut<Assets<StandardMaterial>>) {
+    let Some(sky) = sky else { return };
+    let t = time.elapsed_secs_wrapped();
+    for (h, s) in &sky.0 {
+        if let Some(mut m) = materials.get_mut(h) {
+            let o = (*s * t).fract_gl();
+            m.uv_transform.translation = Vec2::new(o.x, -o.y);
         }
     }
 }
