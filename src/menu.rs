@@ -24,7 +24,7 @@ impl Plugin for MenuPlugin {
             .add_systems(PreStartup, lobby_scene)
             .add_systems(Startup, build_menu)
             .add_systems(Update, (character_idle, test_click))
-            .add_systems(Update, (button_colors, button_clicks, lobby_clicks, fade_toast, setup_lobby, lobby_wallet));
+            .add_systems(Update, (button_colors, button_clicks, lobby_clicks, fade_toast, setup_lobby, lobby_wallet, lobby_avatar));
     }
 }
 
@@ -225,6 +225,9 @@ fn setup_lobby(
             "panel_Boosters/Layout/FirstPurchaseGiftLobbyButton",
             "RightAnchor/ConfrontationEvent_LobbyButton",
             "LeftAnchor/LobbyTopBtnsLayout/OfferwallButton2",
+            // offer banners (Soldier's Choice etc.) come from the server; offline the list
+            // is an empty frame
+            "LeftAnchor/UniversalMiniBannerListUI",
         ];
         // left column buttons react through ButtonHandler/OnClickAction instead of an
         // NGUI UIButton, so they have no click area of their own
@@ -244,10 +247,19 @@ fn setup_lobby(
                 s.set_active(i, false);
             }
         }
+        // the saved level and XP (progress.rs), as "80 / 500 XP" like the original
+        let progress = crate::progress::Progress::load();
+        let needed = crate::progress::Progress::needed(&data.0, progress.level);
+        let level = progress.level.to_string();
+        let exp = match needed {
+            Some(n) => format!("{} / {n} [14ff05]XP", progress.xp),
+            None => format!("{} [14ff05]XP", progress.xp),
+        };
+        let fill = needed.map_or(1.0, |n| (progress.xp as f32 / n.max(1) as f32).clamp(0.0, 1.0));
         let texts = [
             ("Profile/btn_Progress/Default/Label_PlayerName", "Player"),
-            ("Label_Lvl", "1"),
-            ("Label_ExpAmount", "0 / 100 [14ff05]XP"),
+            ("Label_Lvl", level.as_str()),
+            ("Label_ExpAmount", exp.as_str()),
         ];
         for (suffix, text) in texts {
             let hits: Vec<usize> = (0..s.nodes.len()).filter(|&i| s.path(i).ends_with(suffix)).collect();
@@ -285,14 +297,58 @@ fn setup_lobby(
                 s.set_fill(i, 0.0);
             }
         }
-        // XP bar: 0 of 100 at level 1 (the yellow "addition" part animates newly won XP)
+        // XP bar (the yellow "addition" part animates newly won XP: same as the fill here)
         let bars: Vec<usize> = (0..s.nodes.len())
             .filter(|&i| ["progbar_fill", "progbar_addition"].contains(&s.nodes[i].name.as_str()) && s.path(i).contains("PlayerExp_UI"))
             .collect();
         for i in bars {
-            s.set_fill(i, 0.0);
+            s.set_fill(i, fill);
         }
     }
+}
+
+/// The profile picture (PlayerExp_UI/.../tex_Avatar): the original shows the skin's face.
+/// Cut the 8x8 face (x 8-16, y 8-16 of the 64x32 skin) out of the character's texture.
+fn lobby_avatar(
+    mut screens: Query<&mut crate::ngui::NguiScreen>,
+    assets: Res<AssetServer>,
+    data: Res<DataDir>,
+    mut images: ResMut<Assets<Image>>,
+    mut skin: Local<Option<Handle<Image>>>,
+    mut done: Local<bool>,
+) {
+    if *done {
+        return;
+    }
+    let path = "characters/default/textures/0000_player.png";
+    if !data.0.join(path).exists() {
+        *done = true;
+        return;
+    }
+    let h = skin.get_or_insert_with(|| assets.load(path)).clone();
+    let Some(img) = images.get(&h) else { return };
+    let Some(target) = screens.iter_mut().find_map(|s| s.find_path("holder_ProfileWithAvatar/tex_Avatar").map(|i| (s, i))) else {
+        return;
+    };
+    *done = true;
+    let (w, bytes) = (img.width() as usize, img.data.clone().unwrap_or_default());
+    if bytes.len() < w * 16 * 4 {
+        return;
+    }
+    let mut face = Vec::with_capacity(8 * 8 * 4);
+    for y in 8..16 {
+        face.extend_from_slice(&bytes[(y * w + 8) * 4..(y * w + 16) * 4]);
+    }
+    let mut out = Image::new(
+        bevy::render::render_resource::Extent3d { width: 8, height: 8, depth_or_array_layers: 1 },
+        bevy::render::render_resource::TextureDimension::D2,
+        face,
+        img.texture_descriptor.format,
+        bevy::asset::RenderAssetUsages::RENDER_WORLD,
+    );
+    out.sampler = bevy::image::ImageSampler::nearest();
+    let (mut s, i) = target;
+    s.set_texture(i, images.add(out));
 }
 
 /// PG3D_MENU_CLICK=BtnBattle_A,GMH_GameMode_Cell_New_Big (automated tests): press these
