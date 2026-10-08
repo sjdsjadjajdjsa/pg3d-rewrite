@@ -164,6 +164,10 @@ pub fn player_sounds(
                 _ => "player/ChangeWeaponClip",
             };
             s(key, 0, 0.8);
+            // the weapon's own draw sound (WeaponSounds "loading", with its Loading clip)
+            if let Some(w) = l.current() {
+                play(&mut commands, w.sounds.get("loading"), None, 0.8);
+            }
         }
         *last_weapon = Some(l.current);
     }
