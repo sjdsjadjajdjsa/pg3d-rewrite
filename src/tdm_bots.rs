@@ -182,6 +182,8 @@ struct BodyAnim {
     prev_yaw: f32,
     prev_hurt: f32,
     was_grounded: bool,
+    /// where the bot looks up (+) or down (-), radians, eased towards PlayerBot::pitch
+    pitch: f32,
 }
 
 /// What a bot is aiming at.
@@ -199,6 +201,8 @@ pub struct PlayerBot {
     velocity: Vec3,
     grounded: bool,
     yaw: f32,
+    /// aim elevation towards the target (radians, up is positive)
+    pitch: f32,
     turn_speed: f32,
     target: Option<Target>,
     los_timer: f32,
@@ -355,6 +359,7 @@ fn spawn_bots(
                 velocity: Vec3::ZERO,
                 grounded: false,
                 yaw: 0.0,
+                pitch: 0.0,
                 turn_speed: 0.0,
                 target: None,
                 los_timer: 0.0,
@@ -559,6 +564,13 @@ fn animate_bodies(
         }
         anim.update(&ctrl, dt);
         anim.apply(&ctrl, &mut tf);
+        // the look: PlayerAnimationWrapper turns the head towards the aim (clamped to
+        // maxHeadRotationUp 45 / maxHeadRotationDown 25 degrees) and keeps the weapon point
+        // on the top spine bone; the arms+gun pitch with the aim. A part of the pitch also
+        // bends the spine so the chest follows the arms.
+        let goal = if b.target.is_some() { b.pitch.clamp(-1.2, 1.2) } else { 0.0 };
+        a.pitch += (goal - a.pitch).clamp(-HEAD_TURN_SPEED * dt, HEAD_TURN_SPEED * dt);
+        aim_pose(&anim, a.pitch, b.weapon, &mut tf);
         if std::env::var("PG3D_TRACE_POSE").is_ok() && (time.elapsed_secs() % 2.0) < dt {
             let pose = anim.pose(&ctrl);
             for (path, e) in &anim.bones {
@@ -599,7 +611,7 @@ fn trace_visibility(
         let base = globals.get(e).map(|g| g.translation()).unwrap_or_default();
         for d in children.iter_descendants(e) {
             if let (Ok(n), Ok(g)) = (names.get(d), globals.get(d))
-                && matches!(n.as_str(), "rp_arms_root_bone" | "WeaponPoint" | "rp_head_bone" | "rp_L_arm_bone" | "rp_R_arm_bone" | "rp_spine_03" | "rp_pelvis_bone")
+                && (matches!(n.as_str(), "rp_arms_root_bone" | "WeaponPoint" | "rp_head_bone" | "rp_L_arm_bone" | "rp_R_arm_bone" | "rp_spine_03" | "rp_pelvis_bone") || n.as_str().starts_with("FPS_PLAYER_Arm"))
             {
                 info!("bone {n}: {:.3} (from feet)", g.translation() - base);
             }
@@ -607,6 +619,59 @@ fn trace_visibility(
         for d in children.iter_descendants(e) {
             if let Ok((n, g, vv, iv, aabb)) = meshes.get(d) {
                 info!("vis {:?} alive={} {n}: pos {:.2} scale {:.3} inherited={} drawn={} aabb={:?}", b.team, b.alive(), g.translation(), g.scale(), iv.get(), vv.get(), aabb.map(|a| a.half_extents));
+            }
+        }
+    }
+}
+
+/// How fast the head / arms follow the aim's elevation (radians per second; GUESS — the
+/// original eases its head angle with Mathf.MoveTowardsAngle).
+const HEAD_TURN_SPEED: f32 = 3.0;
+/// Share of the aim's elevation the spine bends by (the rest is head / arms; GUESS).
+const SPINE_PITCH_SHARE: f32 = 0.35;
+const SPINE: [&str; 3] = ["rp_spine_01", "rp_spine_02", "rp_spine_03"];
+/// Shoulder height of the weapon prefab's arms (and the body's rp_L/R_arm_bone).
+const SHOULDER: Vec3 = Vec3::new(0.0, 1.375, 0.0);
+
+/// Bend the spine and head for the aim elevation `pitch`, after the Animator has posed the
+/// body, and place the weapon (arms) on the top spine bone, pitched with the aim. Works in
+/// the body's model space (the bot root's local space, forward +Z, right -X).
+fn aim_pose(anim: &crate::animator::Animator, pitch: f32, weapon: Option<Entity>, tf: &mut Query<&mut Transform, Without<PlayerBot>>) {
+    const CHAIN: [&str; 7] = ["royale_player_root_bone", "rp_pelvis_bone", "rp_spine_00", "rp_spine_01", "rp_spine_02", "rp_spine_03", "rp_head_bone"];
+    let mut path = String::new();
+    let mut ents = Vec::with_capacity(CHAIN.len());
+    for n in CHAIN {
+        if !path.is_empty() {
+            path.push('/');
+        }
+        path.push_str(n);
+        let Some(e) = anim.bones.get(&path) else { return };
+        ents.push(*e);
+    }
+    let lean = pitch * SPINE_PITCH_SHARE / SPINE.len() as f32;
+    let head = (pitch - pitch * SPINE_PITCH_SHARE).clamp(-25f32.to_radians(), 45f32.to_radians());
+    let mut now = bevy::math::Affine3A::IDENTITY;
+    let mut rest = bevy::math::Affine3A::IDENTITY;
+    for (i, e) in ents.iter().enumerate() {
+        let Ok(mut t) = tf.get_mut(*e) else { return };
+        let bend = if SPINE.contains(&CHAIN[i]) { lean } else if CHAIN[i] == "rp_head_bone" { head } else { 0.0 };
+        if bend != 0.0 {
+            let (_, parent, _) = now.to_scale_rotation_translation();
+            t.rotation = (parent.inverse() * Quat::from_rotation_x(-bend) * parent * t.rotation).normalize();
+        }
+        now *= t.compute_affine();
+        if let Some((r, p)) = anim.rest.get(e) {
+            rest *= bevy::math::Affine3A::from_scale_rotation_translation(t.scale, *r, *p);
+        }
+        if CHAIN[i] == "rp_spine_03" {
+            // weaponPointNotMine follows the top spine bone
+            let offset = now.translation - rest.translation;
+            if let Some(w) = weapon
+                && let Ok(mut wt) = tf.get_mut(w)
+            {
+                let r = Quat::from_rotation_x(-pitch);
+                wt.rotation = r;
+                wt.translation = Vec3::from(offset) + SHOULDER - r * SHOULDER;
             }
         }
     }
@@ -722,6 +787,7 @@ fn brain(
                 // turn towards the target, fire when lined up
                 let to = tp - pos;
                 let want = to.x.atan2(to.z);
+                b.pitch = to.y.atan2(Vec2::new(to.x, to.z).length().max(0.5));
                 let diff = (want - b.yaw + std::f32::consts::PI).rem_euclid(std::f32::consts::TAU) - std::f32::consts::PI;
                 b.yaw += diff.clamp(-b.turn_speed * dt, b.turn_speed * dt);
                 b.next_shot -= dt;
