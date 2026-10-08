@@ -166,6 +166,7 @@ struct LightmapExtras {
 /// again for a while after: Bevy only picks up a lightmap whose GPU image is ready when
 /// the component is added or changed, so meshes that got one too early were drawn without
 /// it for good (black or untextured surfaces, lit by the sun instead).
+#[allow(clippy::too_many_arguments)]
 fn attach_lightmaps(
     mut commands: Commands,
     assets: Res<AssetServer>,
