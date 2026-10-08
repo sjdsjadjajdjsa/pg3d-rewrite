@@ -83,7 +83,18 @@ pub struct LightDef {
     pub kind: u32,
     pub color: [f32; 3],
     pub intensity: f32,
+    /// the way the light shines (glTF axes)
     pub direction: Vec3,
+    #[serde(default)]
+    pub position: Vec3,
+    #[serde(default)]
+    pub range: f32,
+    /// spot cone, full angle in degrees
+    #[serde(default)]
+    pub spot_angle: Option<f32>,
+    /// Unity LightmapBakeType: 1 mixed, 2 baked (lightmaps/probes only), 4 realtime
+    #[serde(default)]
+    pub baked: u32,
 }
 
 /// One collider from the original level (Unity BoxCollider, SphereCollider, ...).

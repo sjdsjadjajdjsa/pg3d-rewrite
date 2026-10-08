@@ -137,30 +137,72 @@ fn setup_lights(
         },
         affects_lightmapped_meshes: false,
     });
-    // PG3D_NOSUN=1 (testing): no sun, to see the baked lighting alone
+    // PG3D_NOSUN=1 (testing): no lights, to see the baked lighting alone
     if std::env::var("PG3D_NOSUN").is_ok() {
         return;
     }
-    // Sun: the map's directional light, or a default one.
-    let sun = info.lights.iter().find(|l| l.kind == 1);
-    let (color, intensity, dir) = sun
-        .map(|l| (gamma(l.color), l.intensity, l.direction))
-        .unwrap_or((Color::WHITE, 0.8, Vec3::new(-0.4, -1.0, -0.3)));
-    commands.spawn((
-        Name::new(sun.map(|l| l.name.clone()).unwrap_or_else(|| "sun".into())),
-        DirectionalLight {
-            color,
-            // Bevy's diffuse term divides by pi, Unity's legacy one does not.
-            illuminance: intensity * std::f32::consts::PI,
-            shadow_maps_enabled: true,
-            // lightmapped surfaces already contain this light
-            affects_lightmapped_mesh_diffuse: false,
-            ..default()
-        },
-        Transform::default().looking_to(dir.normalize_or(Vec3::NEG_Y), Vec3::Y),
+    // The scene's own lights, as Unity uses them at run time: baked-only lights (2) exist
+    // just in the lightmaps and probes; mixed ones (1) light moving things only (static
+    // surfaces have them baked); realtime ones (4) light everything. A map without lights
+    // gets none: Unity lights its moving things with the probes / ambient alone.
+    let mut shadows = true;
+    for l in info.lights.iter().filter(|l| l.baked != 2) {
+        let color = gamma(l.color);
+        let on_lightmaps = l.baked == 4;
+        let tf = Transform::from_translation(l.position).looking_to(l.direction.normalize_or(Vec3::NEG_Y), Vec3::Y);
         // also light the first-person weapon (drawn on render layer 1)
-        RenderLayers::from_layers(&[0, 1]),
-    ));
+        let layers = RenderLayers::from_layers(&[0, 1]);
+        match l.kind {
+            1 => {
+                commands.spawn((
+                    Name::new(l.name.clone()),
+                    DirectionalLight {
+                        color,
+                        // Bevy's diffuse term divides by pi, Unity's legacy one does not.
+                        illuminance: l.intensity * std::f32::consts::PI,
+                        shadow_maps_enabled: std::mem::take(&mut shadows),
+                        affects_lightmapped_mesh_diffuse: on_lightmaps,
+                        ..default()
+                    },
+                    tf,
+                    layers,
+                ));
+            }
+            0 | 2 => {
+                let range = l.range.max(0.1);
+                // Unity's legacy falloff is 1 / (1 + 25 d^2 / range^2), cut at the range;
+                // Bevy's is physical 1/d^2. Match them at a fifth of the range (half
+                // strength), times pi for Bevy's diffuse.
+                let d = range / 5.0;
+                let lumens = 4.0 * std::f32::consts::PI * d * d * std::f32::consts::PI * 0.5 * l.intensity;
+                if l.kind == 0 {
+                    let outer = (l.spot_angle.unwrap_or(60.0) * 0.5).to_radians();
+                    commands.spawn((
+                        Name::new(l.name.clone()),
+                        SpotLight {
+                            color,
+                            intensity: lumens,
+                            range,
+                            outer_angle: outer,
+                            inner_angle: outer * 0.75,
+                            affects_lightmapped_mesh_diffuse: on_lightmaps,
+                            ..default()
+                        },
+                        tf,
+                        layers,
+                    ));
+                } else {
+                    commands.spawn((
+                        Name::new(l.name.clone()),
+                        PointLight { color, intensity: lumens, range, affects_lightmapped_mesh_diffuse: on_lightmaps, ..default() },
+                        tf,
+                        layers,
+                    ));
+                }
+            }
+            _ => {}
+        }
+    }
 }
 
 #[derive(Deserialize)]
