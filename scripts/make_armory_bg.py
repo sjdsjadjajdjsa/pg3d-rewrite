@@ -22,5 +22,14 @@ c = inner * (1 - t) + outer * t
 b = np.clip((py - 560) / 150, 0, 1)[..., None]
 c = c * (1 - b) + navy * b
 OUT.parent.mkdir(parents=True, exist_ok=True)
-Image.fromarray(c.astype(np.uint8)).save(OUT)
+# Better: the background fitted to the screenshots (private/notes/armory_bg/
+# fit_from_screenshots.py: our render with a black / white / current background tells how
+# much background shows through each pixel; the median of 28 Armory screenshots minus our
+# render, divided by that, corrects the background where the UI matches; smoothed and
+# applied twice). Used when present.
+FITTED = OUT.parents[3] / "notes/armory_bg/armory_bg_fitted.png"
+if FITTED.exists():
+    Image.open(FITTED).save(OUT)
+else:
+    Image.fromarray(c.astype(np.uint8)).save(OUT)
 print(f"armory background -> {OUT}")
