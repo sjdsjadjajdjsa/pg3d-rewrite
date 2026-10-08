@@ -57,6 +57,9 @@ fn one() -> f32 {
 /// Unity RenderSettings of the scene (ambient light, fog). Colours are gamma-space.
 #[derive(Deserialize, Default, Clone)]
 pub struct RenderSettings {
+    /// 0 skybox, 1 gradient, 3 flat colour
+    #[serde(default)]
+    pub ambient_mode: Option<i32>,
     pub ambient_sky: Option<[f32; 3]>,
     #[serde(default)]
     pub ambient_intensity: Option<f32>,

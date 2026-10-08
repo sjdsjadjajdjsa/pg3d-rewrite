@@ -124,7 +124,15 @@ fn setup_lights(
     // when the map has light probes, nothing at all: Unity bakes the ambient into them.
     commands.insert_resource(GlobalAmbientLight {
         color: gamma(r.ambient_sky.unwrap_or([0.4; 3])),
-        brightness: if probes { 0.0 } else { r.ambient_intensity.unwrap_or(1.0) },
+        // Unity's intensity multiplier only scales skybox ambient (mode 0); the Flat (3) and
+        // Gradient (1) colours are used as they are
+        brightness: if probes {
+            0.0
+        } else if r.ambient_mode.unwrap_or(0) == 0 {
+            r.ambient_intensity.unwrap_or(1.0)
+        } else {
+            1.0
+        },
         affects_lightmapped_meshes: false,
     });
     // PG3D_NOSUN=1 (testing): no sun, to see the baked lighting alone
