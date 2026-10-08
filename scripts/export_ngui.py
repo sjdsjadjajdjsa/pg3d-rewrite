@@ -233,6 +233,17 @@ class Ngui:
             nodes.append(node)
             for c in go.m_Component:
                 r = getattr(c, "component", c).deref()
+                if r.type.name in ("BoxCollider", "BoxCollider2D"):
+                    # NGUI hit area (UICamera raycasts colliders, not widgets): centre and
+                    # size in the node's local units
+                    try:
+                        b = r.read()
+                        if getattr(b, "m_Enabled", True):
+                            cen = getattr(b, "m_Center", None) or getattr(b, "m_Offset", None)
+                            node["collider"] = [cen.x, cen.y, b.m_Size.x, b.m_Size.y]
+                    except Exception as e:
+                        print(f"  {go.m_Name} collider: {e!r}"[:160], file=sys.stderr)
+                    continue
                 if r.type.name != "MonoBehaviour":
                     continue
                 k = self.cls(r)
