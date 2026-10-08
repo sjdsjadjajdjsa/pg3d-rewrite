@@ -695,6 +695,9 @@ class Exporter:
         if particle:
             self.vis.doc["nodes"][idx].setdefault("extras", {}).update(particle_texture=particle,
                                                                         particle=particle_settings(comps))
+        flash = self.flash_fire(comps)
+        if flash:
+            self.vis.doc["nodes"][idx].setdefault("extras", {}).update(flash_fire=flash)
         if not self.in_explosive:
             self.collect_colliders(go.m_Name, comps, world)
         explosive = self.explosive_prefab(comps)
@@ -735,6 +738,23 @@ class Exporter:
         if children:
             self.vis.doc["nodes"][idx]["children"] = children
         return idx
+
+    def flash_fire(self, comps):
+        """FlashFire (weapons): StartGunFlash switches gunFlashObj on for timeFireAction
+        seconds after each shot (Update switches it off when the time runs out), so its
+        looping particle systems play while the gun keeps firing."""
+        for ptr in comps.get("MonoBehaviour", []):
+            try:
+                mb = deref(ptr)
+                sc = deref(mb.m_Script)
+                if sc is None or sc.m_ClassName != "FlashFire":
+                    continue
+                tt = ptr.deref().read_typetree()
+                g = deref(mb.gunFlashObj) if getattr(mb, "gunFlashObj", None) is not None else None
+                return {"time": float(tt.get("timeFireAction", 0.15)), "object": g.m_Name if g is not None else None}
+            except Exception as e:
+                print(f"  flash fire: {e!r}"[:160], file=sys.stderr)
+        return None
 
     def explosive_prefab(self, comps):
         """(prefab root Transform, settings) of an ExplosionObjectRespawnController, or None."""
@@ -1042,8 +1062,89 @@ def _gradient_color(mm, t=0.0):
     return {ch: c.get(ch, 1.0) for ch in "rgba"}
 
 
+N_SAMPLES = 9
+
+
+def _eval_curve(keys, t):
+    """Unity AnimationCurve (Hermite keyframes) at t."""
+    if not keys:
+        return 1.0
+    if t <= keys[0]["time"]:
+        return keys[0]["value"]
+    for a, b in zip(keys, keys[1:]):
+        if t <= b["time"]:
+            dt = max(b["time"] - a["time"], 1e-6)
+            u = (t - a["time"]) / dt
+            m0, m1 = a.get("outSlope", 0) * dt, b.get("inSlope", 0) * dt
+            if abs(m0) == float("inf") or abs(m1) == float("inf"):
+                return a["value"]  # stepped
+            u2, u3 = u * u, u * u * u
+            return (2 * u3 - 3 * u2 + 1) * a["value"] + (u3 - 2 * u2 + u) * m0 + (-2 * u3 + 3 * u2) * b["value"] + (u3 - u2) * m1
+    return keys[-1]["value"]
+
+
+def _curve_range(x, default):
+    """Unity MinMaxCurve -> [[min, max] at N_SAMPLES evenly spaced points of 0..1] (a
+    constant gives equal points). Random-between-two-constants / curves keep both ends."""
+    if not isinstance(x, dict):
+        return [[default, default]] * N_SAMPLES
+    state = x.get("minMaxState", 0)
+    hi, lo = x.get("scalar", default), x.get("minScalar", default)
+    out = []
+    for k in range(N_SAMPLES):
+        t = k / (N_SAMPLES - 1)
+        if state == 0:
+            v = (hi, hi)
+        elif state == 1:
+            c = hi * _eval_curve(x.get("maxCurve", {}).get("m_Curve", []), t)
+            v = (c, c)
+        elif state == 2:
+            v = (hi * _eval_curve(x.get("minCurve", {}).get("m_Curve", []), t), hi * _eval_curve(x.get("maxCurve", {}).get("m_Curve", []), t))
+        else:
+            v = (lo, hi)
+        out.append([round(min(v), 5), round(max(v), 5)])
+    return out
+
+
+def _start_range(x, default):
+    """MinMaxCurve read at the start (startLifetime, startSize ...): [min, max]."""
+    r = _curve_range(x, default)
+    return r[0]
+
+
+def _shader_blend(r):
+    """How a particle renderer's material blends: "add", "mul" or "alpha" (by shader name)."""
+    try:
+        mat = deref(list(r.m_Materials)[0])
+        name = shader_display_name(deref(mat.m_Shader)).lower()
+    except Exception:
+        return "add", ""
+    try:
+        floats = {(k if isinstance(k, str) else getattr(k, "name", str(k))): v for k, v in mat.m_SavedProperties.m_Floats}
+    except Exception:
+        floats = {}
+    # Cubic/Universal: _SrcBlend/_DstBlend are Unity BlendModes (1 One, 5 SrcAlpha,
+    # 10 OneMinusSrcAlpha, 2 DstColor, 0 Zero)
+    src, dst = floats.get("_SrcBlend"), floats.get("_DstBlend")
+    if dst == 1.0:
+        return "add", f"{name} {src}/{dst}"
+    if src == 2.0 or (src == 0.0 and dst == 3.0):
+        return "mul", f"{name} {src}/{dst}"
+    if dst == 10.0:
+        return "alpha", f"{name} {src}/{dst}"
+    if "multiply" in name:
+        return "mul", name
+    if "additive" in name or "add" in name.split("/")[-1] or "glow" in name:
+        return "add", name
+    return "alpha", name
+
+
 def particle_settings(comps):
-    """The few ParticleSystem settings we use to fake a burst (muzzle flash, smoke)."""
+    """A ParticleSystem's settings for the game's small particle runtime (particles.rs):
+    emission (bursts and rate over the duration), start values as [min, max] ranges, the
+    emitter shape, the over-lifetime modules sampled at N_SAMPLES points (size, colour,
+    velocity, texture-sheet frame), and how the renderer draws (billboard / stretched,
+    additive / alpha)."""
     ps = comps.get("ParticleSystem")
     if not ps:
         return {}
@@ -1051,15 +1152,19 @@ def particle_settings(comps):
         d = ps[0].deref().read_typetree()
     except Exception:
         return {}
+    if os.environ.get("PG3D_DUMP_PS"):
+        try:
+            name = ps[0].deref().read().m_GameObject.read().m_Name
+        except Exception:
+            name = "?"
+        with open(os.environ["PG3D_DUMP_PS"], "a") as f:
+            f.write(json.dumps({"name": name, "ps": d}, default=str) + "\n")
     init, uv = d.get("InitialModule", {}), d.get("UVModule", {})
-    c = _gradient_color(init.get("startColor", {}))
+    start_col = init.get("startColor", {})
+    c = _gradient_color(start_col)
     col = d.get("ColorModule", {})
-    if col.get("enabled"):
-        # colour over lifetime: tint by its colour early in the life (its alpha mostly
-        # fades the particle out, which our bursts already do)
-        k = _gradient_color(col.get("gradient", {}), 0.3)
-        c = {ch: c[ch] * (k[ch] if ch != "a" else 1.0) for ch in "rgba"}
-    return {
+    out = {
+        # the old single values (kept for older readers)
         "life": _minmax(init.get("startLifetime"), 0.2),
         "size": _minmax(init.get("startSize"), 0.5),
         "color": [c["r"], c["g"], c["b"], c["a"]],
@@ -1067,7 +1172,74 @@ def particle_settings(comps):
         "row": uv.get("rowIndex", 0),
         "single_row": uv.get("animationType", 0) == 1,
         "max": init.get("maxNumParticles", 0),
+        "v": 2,
+        "duration": d.get("lengthInSec", 1.0),
+        "play_on_awake": bool(d.get("playOnAwake", 1)),
+        "looping": bool(d.get("looping", 0)),
+        "world": d.get("moveWithTransform", 0) == 1,
+        "sim_speed": d.get("simulationSpeed", 1.0),
+        "life_range": _start_range(init.get("startLifetime"), 0.2),
+        "speed_range": _start_range(init.get("startSpeed"), 0.0),
+        "size_range": _start_range(init.get("startSize"), 0.5),
+        "rotation_range": _start_range(init.get("startRotation"), 0.0),
+        "gravity": _minmax(init.get("gravityModifier"), 0.0),
+        # start colour: the two ends of a random-between (equal for one colour)
+        "color_range": [
+            [c2[ch] for ch in "rgba"]
+            for c2 in (
+                (_gradient_color({"minMaxState": 0, "maxColor": start_col.get("minColor", {})}), _gradient_color({"minMaxState": 0, "maxColor": start_col.get("maxColor", {})}))
+                if start_col.get("minMaxState") == 2
+                else (c, c)
+            )
+        ],
     }
+    em = d.get("EmissionModule", {})
+    if em.get("enabled", 1):
+        out["rate"] = _minmax(em.get("rateOverTime"), 0.0)
+        bursts = []
+        for b in em.get("m_Bursts", []):
+            if "countCurve" in b:
+                lo, hi = _start_range(b["countCurve"], 0)
+            else:
+                lo, hi = b.get("minCount", 0), b.get("maxCount", 0)
+            bursts.append({"time": b.get("time", 0.0), "min": lo, "max": hi, "cycles": b.get("cycleCount", 1), "interval": b.get("repeatInterval", 0.01)})
+        out["bursts"] = bursts
+    else:
+        out["rate"], out["bursts"] = 0.0, []
+    sh = d.get("ShapeModule", {})
+    if sh.get("enabled"):
+        rad = sh.get("radius", 1.0)
+        rad = rad.get("value", 1.0) if isinstance(rad, dict) else rad
+        out["shape"] = {"type": sh.get("type", 0), "angle": sh.get("angle", 25.0), "radius": rad, "length": sh.get("length", 5.0),
+                        "random_dir": sh.get("randomDirectionAmount", sh.get("randomDirection", 0)) or 0}
+    size = d.get("SizeModule", {})
+    if size.get("enabled"):
+        out["size_curve"] = [r[1] for r in _curve_range(size.get("curve"), 1.0)]
+    rot = d.get("RotationModule", {})
+    if rot.get("enabled"):
+        out["spin_range"] = _start_range(rot.get("curve"), 0.0)
+    if col.get("enabled"):
+        out["color_curve"] = [[round(v, 4) for v in (lambda g: [g["r"], g["g"], g["b"], g["a"]])(_gradient_color(col.get("gradient", {}), k / (N_SAMPLES - 1)))] for k in range(N_SAMPLES)]
+    vel = d.get("VelocityModule", {})
+    if vel.get("enabled"):
+        out["velocity"] = {"x": _start_range(vel.get("x"), 0.0), "y": _start_range(vel.get("y"), 0.0), "z": _start_range(vel.get("z"), 0.0),
+                           "world": vel.get("inWorldSpace", 0) == 1}
+    if uv.get("enabled"):
+        out["frames"] = [r[1] for r in _curve_range(uv.get("frameOverTime"), 0.0)]
+        out["start_frame"] = _start_range(uv.get("startFrame"), 0.0)
+        out["uv_cycles"] = uv.get("cycles", 1.0)
+    lights = d.get("LightsModule", {})
+    if lights.get("enabled"):
+        out["lights"] = {"ratio": lights.get("ratio", 0.0), "range": lights.get("rangeCurve", {}).get("scalar", 1.0),
+                         "intensity": lights.get("intensityCurve", {}).get("scalar", 1.0), "use_color": bool(lights.get("color", 1))}
+    if "ParticleSystemRenderer" in comps:
+        r = deref(comps["ParticleSystemRenderer"][0])
+        if r is not None:
+            blend, shader = _shader_blend(r)
+            out["render"] = {"mode": int(getattr(r, "m_RenderMode", 0)), "length_scale": float(getattr(r, "m_LengthScale", 2.0)),
+                             "velocity_scale": float(getattr(r, "m_VelocityScale", 0.0)), "blend": blend, "shader": shader,
+                             "max_size": float(getattr(r, "m_MaxParticleSize", 0.5))}
+    return out
 
 
 def obj_key(o):
