@@ -3,9 +3,9 @@
 
     tools/venv/bin/python scripts/export_character.py
 
-The lobby (level17) shows the player as "MainMenu_Pers_MainMenu": an Animation component
-(clip "Idle") that the game fills at run time with the prefab Character_model_V2 from
-resources.assets. We export that prefab with the lobby's animation clips.
+The lobby (level17) shows the player as "MainMenu_Pers_MainMenu", filled at run time with
+the prefab Character_model_V2 from resources.assets. We export that prefab with its own
+animation clips (Idle first).
 Writes private/export/characters/default/character.gltf (+ info.json, textures/).
 """
 import json
@@ -36,14 +36,13 @@ def main():
                 break
     if prefab is None:
         sys.exit("Character_model_V2 not found")
-    lobby = next(f for k, f in env.files.items() if k.endswith("/level17"))
-    anim = None
-    for o in lobby.objects.values():
-        if o.type.name == "Animation":
-            a = o.read()
-            go = em.deref(a.m_GameObject)
-            if go is not None and go.m_Name == "MainMenu_Pers_MainMenu":
-                anim = a
+    # the prefab's own Animation (Idle, gliders, shop poses). The lobby object's Idle
+    # ("MainMenu_Pers_MainMenu") was made for an older rig: it keys Foot_right at scale
+    # -1.588, which on this prefab (Foot_right at scale 1) blows the right leg up and
+    # mirrors it.
+    go = em.deref(prefab.m_GameObject)
+    anim = next((em.deref(getattr(c, "component", c)) for c in go.m_Component
+                 if getattr(c, "component", c).deref().type.name == "Animation"), None)
     ex = em.Exporter(env, OUT)
     ex.vis.name = "character"
     ex.skip_names = {"graffiti_killstreak_wall"}  # killstreak effect, shown only in matches
