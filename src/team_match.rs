@@ -65,6 +65,10 @@ pub struct TeamMatch {
 #[derive(Resource)]
 struct TableScreen(Option<Entity>);
 
+/// The team scores and match clock at the top (InGameGUIPart_TeamFight, <data>/ui/teampart).
+#[derive(Resource)]
+struct ScoreBox(Option<Entity>);
+
 #[derive(Component)]
 struct CountdownLabel;
 
@@ -95,7 +99,7 @@ impl Plugin for TeamMatchPlugin {
             ..default()
         })
         .add_systems(Startup, spawn_screen)
-        .add_systems(Update, (setup, clock, countdown, table_key, ending, clicks).chain());
+        .add_systems(Update, (setup, clock, score_box, countdown, table_key, ending, clicks).chain());
     }
 }
 
@@ -105,6 +109,11 @@ fn spawn_screen(mut commands: Commands, assets: Res<AssetServer>, data: Res<Data
         commands.entity(e).insert(Visibility::Hidden);
     }
     commands.insert_resource(TableScreen(e));
+    let b = crate::ngui::spawn_screen(&mut commands, &assets, &data, "teampart");
+    if b.is_none() {
+        warn!("no exported Team Fight HUD (run export_ngui.py resources.assets InGameGUIPart_TeamFight teampart)");
+    }
+    commands.insert_resource(ScoreBox(b));
 }
 
 /// A direct child of `parent` by name (find_in searches the whole subtree).
@@ -325,6 +334,65 @@ fn clock(time: Res<Time>, stats: Res<PlayerStats>, mut m: ResMut<TeamMatch>) {
     m.was_dead = dead;
     if m.phase == Phase::Playing {
         m.time_left = (m.time_left - time.delta_secs()).max(0.0);
+    }
+}
+
+/// "m:ss" like TimeTeambattleLabel.
+fn clock_text(secs: f32) -> String {
+    let t = secs.ceil() as i32;
+    format!("{}:{:02}", t / 60, t % 60)
+}
+
+/// Fill the box at the top: your team's kills on the left (the blue side, framed as yours),
+/// the rival's on the right, the clock between them; the side that leads gets the crown and a
+/// yellow score.
+/// The prefab's labels are named the other way round (ScoreTeamRedLabel sits on the left).
+fn score_box(
+    m: Res<TeamMatch>,
+    stats: Res<PlayerStats>,
+    hidden: Res<crate::ingame_ui::HudHidden>,
+    sb: Res<ScoreBox>,
+    mut screens: Query<&mut NguiScreen>,
+    mut commands: Commands,
+    mut last: Local<String>,
+) {
+    let Some(e) = sb.0 else { return };
+    let Ok(mut s) = screens.get_mut(e) else { return };
+    let show = m.phase == Phase::Playing && !hidden.0;
+    let (mut mine, mut rival) = (stats.kills, m.deaths);
+    // PG3D_TEAM_SCORE="17|34" (automated screenshots): fixed scores, to compare with the clips
+    if let Some((a, b)) = std::env::var("PG3D_TEAM_SCORE").ok().and_then(|v| {
+        let (a, b) = v.split_once('|')?;
+        Some((a.parse().ok()?, b.parse().ok()?))
+    }) {
+        (mine, rival) = (a, b);
+    }
+    let time = clock_text(m.time_left);
+    let key = format!("{show} {mine} {rival} {time}");
+    if *last == key {
+        return;
+    }
+    *last = key;
+    commands.entity(e).insert(if show { Visibility::Inherited } else { Visibility::Hidden });
+    for (name, text) in [
+        ("ScoreTeamRedLabel", mine.to_string()),
+        ("ScoreTeamBlueLabel", rival.to_string()),
+        ("TimeTeambattleLabel", time),
+    ] {
+        if let Some(i) = s.find(name) {
+            s.set_text(i, text);
+        }
+    }
+    // the leading side's score turns yellow (OBSERVED: about #F7D605 in the clips)
+    for (name, lead) in [("ScoreTeamRedLabel", mine > rival), ("ScoreTeamBlueLabel", rival > mine)] {
+        if let Some(i) = s.find(name) {
+            s.set_color(i, if lead { [0.97, 0.84, 0.02, 1.0] } else { [1.0; 4] });
+        }
+    }
+    for (name, on) in [("WiningBlue", mine > rival), ("WiningRed", rival > mine)] {
+        if let Some(i) = s.find(name) {
+            s.set_active(i, on);
+        }
     }
 }
 
