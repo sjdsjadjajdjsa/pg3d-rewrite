@@ -698,6 +698,11 @@ class Exporter:
         flash = self.flash_fire(comps)
         if flash:
             self.vis.doc["nodes"][idx].setdefault("extras", {}).update(flash_fire=flash)
+        teleport = self.behaviour(comps, "GotToNextLevel")
+        if teleport is not None:
+            # the campaign's next-level teleporter; the game switches it off in matches
+            self.vis.doc["nodes"][idx].setdefault("extras", {})["got_to_next_level"] = {
+                "next_scene": getattr(teleport, "nextSceneName", "") or ""}
         if not self.in_explosive:
             self.collect_colliders(go.m_Name, comps, world)
         explosive = self.explosive_prefab(comps)
