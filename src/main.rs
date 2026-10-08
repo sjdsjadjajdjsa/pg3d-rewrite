@@ -24,6 +24,7 @@ mod lighting;
 mod map;
 mod menu;
 mod mirrored_skins;
+mod mode_select;
 mod ngui;
 mod navmesh;
 mod particles;
@@ -167,10 +168,24 @@ fn main() {
         ))
         .add_plugins((team_match::TeamMatchPlugin, mirrored_skins::MirroredSkinsPlugin))
         .add_plugins((hud::HudPlugin, ingame_ui::InGameUiPlugin, explosives::ExplosivesPlugin, cursor::CursorPlugin, beams::BeamsPlugin))
-        .add_systems(Update, (menu::back_to_menu, menu::test_click))
+        .add_systems(Update, (menu::back_to_menu, menu::test_click, hide_hud))
         .add_systems(
             PreUpdate,
             ignore_real_input.after(bevy::input::InputSystems).run_if(|| automated()),
         )
         .run();
+}
+
+/// PG3D_NOHUD=1 (map pictures for the mode picker): no HUD and no gun in view.
+fn hide_hud(
+    mut commands: Commands,
+    roots: Query<Entity, (With<Node>, Without<ChildOf>)>,
+    guns: Query<Entity, With<weapons::ViewModel>>,
+) {
+    if std::env::var("PG3D_NOHUD").is_err() {
+        return;
+    }
+    for e in roots.iter().chain(guns.iter()) {
+        commands.entity(e).insert(Visibility::Hidden);
+    }
 }

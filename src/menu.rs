@@ -24,7 +24,8 @@ impl Plugin for MenuPlugin {
             .add_systems(PreStartup, lobby_scene)
             .add_systems(Startup, build_menu)
             .add_systems(Update, (character_idle, test_click))
-            .add_systems(Update, (button_colors, button_clicks, lobby_clicks, fade_toast, setup_lobby, lobby_wallet, lobby_avatar, event_button_gradient));
+            .init_resource::<crate::mode_select::ModeSelect>()
+            .add_systems(Update, (button_colors, button_clicks, lobby_clicks, fade_toast, setup_lobby, lobby_wallet, lobby_avatar, event_button_gradient, crate::mode_select::scroll));
     }
 }
 
@@ -45,7 +46,7 @@ pub fn exported_maps(data: &std::path::Path) -> Vec<String> {
         .filter_map(|e| e.ok())
         .filter(|e| e.path().join("map.gltf").exists())
         .filter_map(|e| e.file_name().into_string().ok())
-        .filter(|m| m != "lobby")
+        .filter(|m| !m.starts_with("lobby"))
         .collect();
     maps.sort();
     maps
@@ -416,12 +417,16 @@ pub fn test_click(
 fn setup_modes(s: &mut crate::ngui::NguiScreen, assets: &AssetServer, data: &DataDir) {
     // card pictures: loading screens of two exported maps
     let maps = exported_maps(&data.0);
-    let pics: Vec<String> = maps.iter().filter(|m| data.0.join(format!("previews/{m}.png")).exists()).cloned().collect();
-    let pic = |n: usize| pics.get(n % pics.len().max(1)).map(|m| assets.load(format!("previews/{m}.png")));
+    let _ = maps;
+    // each card its own picture (the game's loading art of a fitting map) and mode icon
+    let pic = |m: &str| {
+        let path = format!("previews/{m}.png");
+        data.0.join(&path).exists().then(|| assets.load(path))
+    };
     let cells = [
-        ("Column_01/GMH_GameMode_Cell_New_Big", Some(("Campaign", "Fight waves of zombies on any map"))),
-        ("Column_02/GMH_GameMode_Cell_New", Some(("Sandbox", "Explore the maps - no enemies"))),
-        ("Column_02/GMH_GameMode_Cell_New_2", Some(("Team Fight", "Your team against the zombies - most kills wins"))),
+        ("Column_01/GMH_GameMode_Cell_New_Big", Some(("Campaign", "Fight waves of zombies on any map", "cementery", "z_mode_wws"))),
+        ("Column_02/GMH_GameMode_Cell_New", Some(("Sandbox", "Explore the maps - no enemies", "sky_islands", "z_mode_frp"))),
+        ("Column_02/GMH_GameMode_Cell_New_2", Some(("Team Fight", "Your team against the zombies - most kills wins", "stadium_deathmatch", "z_mode_teamf"))),
         ("Column_03", None),
         ("Column_04", None),
     ];
@@ -446,7 +451,7 @@ fn setup_modes(s: &mut crate::ngui::NguiScreen, assets: &AssetServer, data: &Dat
             }
             match content {
                 None => s.set_active(i, false),
-                Some((title, desc)) => {
+                Some((title, desc, map_pic, icon)) => {
                     let kids: Vec<usize> = (i + 1..s.nodes.len()).filter(|&j| s.path(j).starts_with(&format!("{path}/"))).collect();
                     for j in kids {
                         let n = s.nodes[j].name.clone();
@@ -457,9 +462,11 @@ fn setup_modes(s: &mut crate::ngui::NguiScreen, assets: &AssetServer, data: &Dat
                                 let size = Vec2::new(p.clip[2], p.clip[3]);
                                 s.set_size(j, size);
                             }
-                            if let Some(h) = pic(i) {
+                            if let Some(h) = pic(map_pic) {
                                 s.set_texture(j, h);
                             }
+                        } else if n == "tex_MapIcon" {
+                            s.set_texture(j, assets.load(format!("ui/modes/modeart/{icon}.png")));
                         } else if n.starts_with("Label_Title") {
                             s.set_text(j, *title);
                         } else if n == "Label_Description" {
@@ -472,7 +479,7 @@ fn setup_modes(s: &mut crate::ngui::NguiScreen, assets: &AssetServer, data: &Dat
             }
         }
         // party / private match / shop need servers
-        if ["Button_Party", "Button_Private", "ShopButton", "GMHRecommendations_panel", "TemplateEventInfoHolder", "ButtonHintHolder", "GMHModeReward"]
+        if ["Button_Party", "Button_Private", "ShopButton", "GMHRecommendations_panel", "TemplateEventInfoHolder", "ButtonHintHolder", "GMHModeReward", "PanelModeInfoHint", "CompetitionComponent", "PP_holder"]
             .contains(&name.as_str())
         {
             s.set_active(i, false);
@@ -488,11 +495,50 @@ fn lobby_clicks(
     assets: Res<AssetServer>,
     screens: Res<Screens>,
     pickers: Query<(), With<MapPicker>>,
-    ngui: Query<&crate::ngui::NguiScreen>,
+    mut ngui: Query<&mut crate::ngui::NguiScreen>,
+    mut sel: ResMut<crate::mode_select::ModeSelect>,
     mut exit: MessageWriter<AppExit>,
 ) {
+    let maps = exported_maps(&data.0);
     for c in clicks.read() {
         let n = c.name.as_str();
+        // the mode / map picker (mode_select.rs)
+        let on_modes = Some(c.screen) == screens.modes;
+        if on_modes && let Ok(mut s) = ngui.get_mut(c.screen) {
+            let open_at = match n {
+                "GMH_GameMode_Cell_New_Big" => Some(1),
+                "GMH_GameMode_Cell_New" => Some(2),
+                "GMH_GameMode_Cell_New_2" => Some(0),
+                "Button_Battle" if !sel.open => Some(0),
+                _ => None,
+            };
+            if let Some(m) = open_at {
+                crate::mode_select::show(&mut s, &mut sel, &assets, &data, &maps, true, m);
+                continue;
+            }
+            if n == "btn_back" && sel.open {
+                let m = sel.mode;
+                crate::mode_select::show(&mut s, &mut sel, &assets, &data, &maps, false, m);
+                continue;
+            }
+            if n == "Button_Battle" && sel.open {
+                let mode = &crate::mode_select::MODES[sel.mode];
+                let map = sel.map.clone().or_else(|| {
+                    // Random Map
+                    let t = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.subsec_nanos() as usize);
+                    let ok: Vec<&String> = maps.iter().filter(|m| crate::mode_select::preview(&data, m).is_some()).collect();
+                    (!ok.is_empty()).then(|| ok[t % ok.len()].clone())
+                });
+                if let Some(map) = map {
+                    relaunch_mode(Some(&map), mode.sandbox, mode.env);
+                    exit.write(AppExit::Success);
+                }
+                continue;
+            }
+            if crate::mode_select::click(&mut s, &mut sel, c.node) {
+                continue;
+            }
+        }
         if n == "BtnExit" {
             exit.write(AppExit::Success);
         } else if n == "BtnArmory" && screens.armory.is_some() {
@@ -507,6 +553,11 @@ fn lobby_clicks(
             show(&mut commands, screens.lobby, false);
             show(&mut commands, screens.modes, true);
         } else if n == "btn_back" {
+            if let Some(m) = screens.modes
+                && let Ok(mut s) = ngui.get_mut(m)
+            {
+                crate::mode_select::show(&mut s, &mut sel, &assets, &data, &maps, false, 0);
+            }
             show(&mut commands, screens.modes, false);
             show(&mut commands, screens.lobby, true);
         } else if n == "BtnSettings" && screens.settings.is_some() {
