@@ -57,6 +57,11 @@ pub struct NodeDef {
     pub label: Option<LabelDef>,
     pub texture: Option<TextureDef>,
     pub panel: Option<PanelDef>,
+    /// BoxCollider of the node (centre x, y, size x, y in its local units): NGUI's click
+    /// area, which is often bigger than the widget (the XP Booster's 54x54 diamond has a
+    /// 174x54 collider covering the whole bar)
+    #[serde(default)]
+    pub collider: Option<[f32; 4]>,
     pub button: Option<ButtonDef>,
     pub root: Option<RootDef>,
     pub slider: Option<SliderDef>,
@@ -827,7 +832,14 @@ fn layout(
                 continue;
             }
             let visible = screen.visible(i);
-            let mut area: Option<Rect> = placed[i].rect;
+            let mut area: Option<Rect> = match screen.nodes[i].collider {
+                Some([cx, cy, sx, sy]) if sx > 0.0 && sy > 0.0 => {
+                    let p = &placed[i];
+                    let c = p.pos + Vec2::new(cx, cy) * p.scale;
+                    Some(Rect::from_center_size(c, Vec2::new(sx, sy) * p.scale.abs()))
+                }
+                _ => placed[i].rect,
+            };
             if area.is_none() {
                 for j in i + 1..screen.nodes.len() {
                     if !is_descendant(screen, j, i) {
