@@ -18,7 +18,7 @@ pub struct MenuPlugin;
 impl Plugin for MenuPlugin {
     fn build(&self, app: &mut App) {
         app.insert_resource(ClearColor(Color::srgb(0.08, 0.1, 0.14)))
-            .insert_resource(crate::map::CurrentMap("lobby".into()))
+            .insert_resource(crate::map::CurrentMap(std::env::var("PG3D_LOBBY").unwrap_or_else(|_| "lobby".into())))
             .init_resource::<crate::map::MapInfo>()
             .add_plugins((crate::ngui::NguiPlugin, crate::lighting::LightingPlugin, crate::settings_ui::SettingsUiPlugin))
             .add_systems(PreStartup, lobby_scene)
@@ -95,7 +95,9 @@ fn lobby_scene(
     assets: Res<AssetServer>,
     mut graphs: ResMut<Assets<AnimationGraph>>,
 ) {
-    let dir = data.0.join("maps/lobby");
+    // PG3D_LOBBY=lobby_<season> (testing): another exported season lobby
+    let lobby = std::env::var("PG3D_LOBBY").unwrap_or_else(|_| "lobby".into());
+    let dir = data.0.join(format!("maps/{lobby}"));
     let info_text = std::fs::read_to_string(dir.join("info.json")).unwrap_or_default();
     let cams: LobbyInfo = serde_json::from_str(&info_text).unwrap_or_default();
     if let Ok(map_info) = serde_json::from_str::<crate::map::MapInfo>(&info_text) {
@@ -110,7 +112,7 @@ fn lobby_scene(
     if !dir.join("map.gltf").exists() {
         return;
     }
-    commands.spawn(WorldAssetRoot(assets.load(GltfAssetLabel::Scene(0).from_asset("maps/lobby/map.gltf"))));
+    commands.spawn(WorldAssetRoot(assets.load(GltfAssetLabel::Scene(0).from_asset(format!("maps/{lobby}/map.gltf")))));
     let char_path = "characters/default/character.gltf";
     if data.0.join(char_path).exists() {
         let (graph, idle) = AnimationGraph::from_clip(assets.load(GltfAssetLabel::Animation(0).from_asset(char_path)));
@@ -123,7 +125,7 @@ fn lobby_scene(
     }
     if dir.join("sounds/music.wav").exists() {
         commands.spawn((
-            AudioPlayer::new(assets.load("maps/lobby/sounds/music.wav")),
+            AudioPlayer::new(assets.load(format!("maps/{lobby}/sounds/music.wav"))),
             PlaybackSettings::LOOP.with_volume(bevy::audio::Volume::Linear(settings.music_volume())),
             crate::settings_ui::Music,
         ));
