@@ -58,8 +58,8 @@ pub struct ModeSelect {
     tabs: Vec<(usize, usize)>,
     /// map cells: (cell node, map; None = Random Map)
     cells: Vec<(usize, Option<String>)>,
-    grid: Option<usize>,
-    grid_x: f32,
+    /// map cells' x before scrolling
+    cell_x: Vec<f32>,
     scroll: f32,
     max_scroll: f32,
 }
@@ -68,6 +68,9 @@ pub struct ModeSelect {
 /// screenshot, mode_teamfight_maps.png).
 const CELL: Vec2 = Vec2::new(246.0, 186.0);
 const ROWS: usize = 2;
+/// Cells move this far left of the prefab's grid (virtual units).
+const TAB_W: f32 = 180.0;
+const LEFT_SHIFT: f32 = -165.0;
 
 /// The map's picture: the game's own loading art (export_previews.py). Maps without one
 /// aren't offered.
@@ -76,22 +79,23 @@ pub fn preview(data: &DataDir, map: &str) -> Option<String> {
     data.0.join(&p).exists().then_some(p)
 }
 
-/// Names as the game shows them where we know them.
+/// The map's name as the game's map picker shows it: SceneInfo.keyTranslateShortName
+/// (export_scene_info.py -> maps/scenes.json), else the file name tidied up.
 pub fn pretty(map: &str) -> String {
-    let known = [
-        ("arena2", "Arena 2"),
-        ("duelarenaspace", "Space Duel Arena"),
-        ("new_start_map3", "Training Camp"),
-        ("castle_campaign5", "Castle"),
-        ("arena_castle", "Castle Arena"),
-        ("arena_hockey", "Ice Rink"),
-        ("arena_mine", "Mine"),
-        ("arena_space", "Space Arena"),
-        ("arena_swamp", "Swamp"),
-        ("arena_underwater", "Underwater"),
-    ];
-    if let Some((_, n)) = known.iter().find(|(k, _)| *k == map) {
-        return n.to_string();
+    #[derive(serde::Deserialize)]
+    struct Scene {
+        short: String,
+    }
+    static NAMES: std::sync::OnceLock<std::collections::HashMap<String, Scene>> = std::sync::OnceLock::new();
+    let names = NAMES.get_or_init(|| {
+        let dir = std::env::var("PG3D_DATA").unwrap_or_else(|_| crate::DEFAULT_DATA.to_string());
+        std::fs::read_to_string(std::path::Path::new(&dir).join("maps/scenes.json"))
+            .ok()
+            .and_then(|t| serde_json::from_str(&t).ok())
+            .unwrap_or_default()
+    });
+    if let Some(s) = names.get(map).filter(|s| !s.short.is_empty()) {
+        return s.short.clone();
     }
     map.split('_')
         .filter(|w| !w.is_empty())
@@ -111,8 +115,12 @@ fn build(s: &mut NguiScreen, st: &mut ModeSelect, assets: &AssetServer, data: &D
     if let Some(tab) = s.find_path("ModeSelector_default(Clone)/Layout/ModeTab") {
         for k in 0..MODES.len() {
             let t = if k == 0 { tab } else { s.clone_subtree(tab) };
-            s.set_pos(t, Vec2::new(k as f32 * 150.0, 0.0));
+            s.set_pos(t, Vec2::new(k as f32 * TAB_W, 0.0));
             if let Some(h) = s.find_in(t, "Holder") {
+                // wider than the prefab's 150 so names fit on one line, as in the
+                // original's 16:9 layout (OBSERVED: ~180 virtual units per tab)
+                s.set_size(h, Vec2::new(TAB_W, 82.0));
+                s.set_pos(h, Vec2::new(TAB_W / 2.0, 0.0));
                 s.make_button(h);
                 st.tabs.push((h, k));
             }
@@ -122,7 +130,6 @@ fn build(s: &mut NguiScreen, st: &mut ModeSelect, assets: &AssetServer, data: &D
                 let n = s.nodes[i].name.clone();
                 if n == "Name" || n.starts_with("Name_selected") {
                     s.set_text(i, MODES[k].name);
-                    s.set_size(i, Vec2::new(140.0, 36.0));
                 }
             }
             // Container/Icon (XPLockedUI has an "Icon" too)
@@ -141,16 +148,17 @@ fn build(s: &mut NguiScreen, st: &mut ModeSelect, assets: &AssetServer, data: &D
     }
     // map cells: Random Map, then every exported map with a loading picture
     let Some(cell) = s.find_path("MapSelector_grid(Clone)/Container/Scroll View/Grid/MapCellSmall") else { return };
-    st.grid = s.nodes[cell].parent;
-    // the original's grid starts at the left edge of the screen (OBSERVED in
-    // mode_teamfight_maps.png); the prefab's -503 is for its narrower phone layout
-    st.grid_x = -650.0;
+
     let mut list: Vec<Option<String>> = vec![None];
     list.extend(maps.iter().filter(|m| preview(data, m).is_some()).cloned().map(Some));
     for (k, m) in list.iter().enumerate() {
         let c = if k == 0 { cell } else { s.clone_subtree(cell) };
         let (col, row) = (k / ROWS, k % ROWS);
-        s.set_pos(c, Vec2::new(col as f32 * CELL.x, -(row as f32) * CELL.y));
+        // the original's grid starts near the left edge of a 16:9 screen (OBSERVED in
+        // mode_teamfight_maps.png); the prefab's Grid (x -503) is laid out for 4:3
+        let x = LEFT_SHIFT + col as f32 * CELL.x;
+        s.set_pos(c, Vec2::new(x, -(row as f32) * CELL.y));
+        st.cell_x.push(x);
         s.make_button(c);
         for hide in ["TimerUI", "ItemHolder", "TegSpecific", "disable-if-locked", "GMHLabelNotification", "XPLockedUI"] {
             if let Some(i) = s.find_in(c, hide) {
@@ -174,11 +182,7 @@ fn build(s: &mut NguiScreen, st: &mut ModeSelect, assets: &AssetServer, data: &D
         st.cells.push((c, m.clone()));
     }
     let cols = list.len().div_ceil(ROWS) as f32;
-    st.max_scroll = (cols * CELL.x - 1300.0).max(0.0);
-    if let Some(g) = st.grid {
-        let y = s.nodes[g].pos[1];
-        s.set_pos(g, Vec2::new(st.grid_x, y));
-    }
+    st.max_scroll = (cols * CELL.x - 1340.0).max(0.0);
 }
 
 /// Show the picker for `mode` (or the hub again with `open == false`).
@@ -268,12 +272,13 @@ pub fn scroll(
         return;
     }
     st.scroll = (st.scroll - d * 120.0).clamp(0.0, st.max_scroll);
-    let Some(g) = st.grid else { return };
-    let x = st.grid_x - st.scroll;
     for mut s in &mut screens {
         if s.nodes.first().is_some_and(|n| n.name == "AllModesView") {
-            let y = s.nodes[g].pos[1];
-            s.set_pos(g, Vec2::new(x, y));
+            for (&(c, _), &x) in st.cells.iter().zip(&st.cell_x) {
+                let y = s.nodes[c].pos[1];
+                let y = s.pos_override.get(&c).map_or(y, |p| p.y);
+                s.set_pos(c, Vec2::new(x - st.scroll, y));
+            }
         }
     }
 }
