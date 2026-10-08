@@ -28,6 +28,7 @@ $PY scripts/export_map.py level17 --out lobby --skip MainMenuNGUI FriendsWindowG
 $PY scripts/export_character.py 2>/dev/null | grep '^character' | cut -c1-120
 $PY scripts/export_ngui.py resources.assets AllModesView modes --graft=ModeSelectorHolder=ModeSelector_default --graft=MapSelectorHolder=MapSelector_grid --graft=ModeInfoHolder=ModeInfo_default 2>/dev/null | grep -E '^modes'
 $PY scripts/export_mode_icons.py | grep -E '^mode icons'
+$PY scripts/export_scene_info.py | grep -E '^scenes'
 $PY scripts/export_ngui.py resources.assets NetworkStartTableNGUI table 2>/dev/null | grep -E '^table'
 $PY scripts/export_ngui.py resources.assets InGameGUIPart_TeamFight teampart 2>/dev/null | grep -E '^teampart'
 $PY scripts/export_keys.py 2>/dev/null | grep -E "^keys"
