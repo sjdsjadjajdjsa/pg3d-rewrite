@@ -33,7 +33,7 @@ impl Plugin for NguiPlugin {
         app.add_plugins(UiMaterialPlugin::<GlyphMaterial>::default());
         app.add_message::<NguiClick>()
             .add_message::<NguiSlider>()
-            .add_systems(Update, (gamma_blend_fix, layout, (hover, clicks, cover_crop, texture_uv, drag_sliders)).chain());
+            .add_systems(Update, (gamma_blend_fix, layout, (test_press, hover, press_feedback, clicks, cover_crop, texture_uv, drag_sliders)).chain());
     }
 }
 
@@ -62,6 +62,8 @@ pub struct NodeDef {
     /// 174x54 collider covering the whole bar)
     #[serde(default)]
     pub collider: Option<[f32; 4]>,
+    #[serde(default)]
+    pub press: Option<PressDef>,
     pub button: Option<ButtonDef>,
     pub root: Option<RootDef>,
     pub slider: Option<SliderDef>,
@@ -185,6 +187,32 @@ pub struct ButtonDef {
     /// a full-screen "tap anywhere to close" backdrop: clickable, but not lit up on hover
     #[serde(default)]
     pub backdrop: bool,
+    /// UIButtonColor: the widget it tints and the hover / pressed colours
+    #[serde(default)]
+    pub tween: Option<usize>,
+    #[serde(default)]
+    pub hover_color: Option<[f32; 4]>,
+    #[serde(default)]
+    pub pressed_color: Option<[f32; 4]>,
+}
+
+/// Pixel Gun's ButtonPressEffect: while held, parts move down a few pixels and the
+/// "pressed" pictures replace the normal ones.
+#[derive(Deserialize, Clone, Default)]
+pub struct PressDef {
+    #[serde(default, rename = "move")]
+    pub movers: Vec<MoverDef>,
+    #[serde(default)]
+    pub on_press: Vec<usize>,
+    #[serde(default)]
+    pub on_release: Vec<usize>,
+}
+
+#[derive(Deserialize, Clone, Default)]
+pub struct MoverDef {
+    pub target: usize,
+    pub up: [f32; 2],
+    pub down: [f32; 2],
 }
 
 #[derive(Deserialize, Clone, Default)]
@@ -1335,7 +1363,11 @@ fn hover(
         if !i.is_changed() && !changed_mode {
             continue;
         }
-        let backdrop = screens.get(h.screen).ok().and_then(|s| s.nodes[h.node].button.as_ref()).is_some_and(|b| b.backdrop);
+        let nd = screens.get(h.screen).ok().map(|s| &s.nodes[h.node]);
+        // buttons with the original's own feedback (ButtonPressEffect / UIButtonColor tint)
+        // get no extra highlight box
+        let own = nd.is_some_and(|n| n.press.is_some() || n.button.as_ref().is_some_and(|b| b.pressed_color.is_some()));
+        let backdrop = own || nd.and_then(|n| n.button.as_ref()).is_some_and(|b| b.backdrop);
         let want = match (*i, aim) {
             (_, true) => Color::NONE,
             _ if backdrop => Color::NONE,
@@ -1345,6 +1377,71 @@ fn hover(
         };
         if bg.0 != want {
             bg.0 = want;
+        }
+    }
+}
+
+/// The original's press feedback: ButtonPressEffect moves the button's contents down and
+/// swaps in the "pressed" pictures while held; UIButtonColor tints its target widget with
+/// the hover / pressed colour (and back to its own colour).
+/// PG3D_PRESS=BtnArmory,BtnSettings (automated screenshots): show these buttons held down.
+fn test_press(mut q: Query<(&mut Interaction, &Hit)>, screens: Query<&NguiScreen>, time: Res<Time>) {
+    let Ok(list) = std::env::var("PG3D_PRESS") else { return };
+    if time.elapsed_secs() < 3.0 {
+        return;
+    }
+    for (mut i, h) in &mut q {
+        let Ok(s) = screens.get(h.screen) else { continue };
+        if list.split(',').any(|n| n == s.nodes[h.node].name) && *i != Interaction::Pressed {
+            *i = Interaction::Pressed;
+        }
+    }
+}
+
+fn press_feedback(
+    q: Query<(&Interaction, &Hit), Changed<Interaction>>,
+    mut screens: Query<&mut NguiScreen>,
+    cursors: Query<&bevy::window::CursorOptions>,
+    mut base: Local<std::collections::HashMap<(Entity, usize), [f32; 4]>>,
+) {
+    let aim = aiming(&cursors);
+    for (i, h) in &q {
+        let Ok(mut s) = screens.get_mut(h.screen) else { continue };
+        let pressed = *i == Interaction::Pressed && !aim;
+        let hovered = *i == Interaction::Hovered && !aim;
+        if let Some(p) = s.nodes[h.node].press.clone() {
+            for m in &p.movers {
+                if m.target < s.nodes.len() {
+                    let v = if pressed { m.down } else { m.up };
+                    s.set_pos(m.target, Vec2::from(v));
+                }
+            }
+            for &n in &p.on_press {
+                if n < s.nodes.len() {
+                    s.set_active(n, pressed);
+                }
+            }
+            for &n in &p.on_release {
+                if n < s.nodes.len() {
+                    s.set_active(n, !pressed);
+                }
+            }
+        }
+        if let Some(b) = s.nodes[h.node].button.clone() {
+            let target = b.tween.unwrap_or(h.node);
+            if target < s.nodes.len()
+                && let Some(own) = s.nodes[target].widget.as_ref().map(|w| w.color)
+            {
+                let rest = *base.entry((h.screen, target)).or_insert(own);
+                let c = match (pressed, hovered) {
+                    (true, _) => b.pressed_color.unwrap_or(rest),
+                    (_, true) => b.hover_color.unwrap_or(rest),
+                    _ => rest,
+                };
+                if b.pressed_color.is_some() {
+                    s.set_color(target, c);
+                }
+            }
         }
     }
 }

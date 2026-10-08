@@ -221,6 +221,10 @@ fn setup_lobby(
             // tournaments and the special-offer button need the online services
             "BotBtnsLayout_Online/BtnCompetition",
             "SettingsBtnsLayout/BtnSpecial",
+            // developer-build buttons (automatic test run, console, event hub)
+            "SettingsBtnsLayout/BtnDevAutoTest",
+            "SettingsBtnsLayout/BtnDevConsole(off)",
+            "SettingsBtnsLayout/BtnDevEventHub(off)",
             "BtnBattle_A/Normal/NotifRewardForModes",
             "panel_Boosters/Layout/FirstPurchaseGiftLobbyButton",
             "RightAnchor/ConfrontationEvent_LobbyButton",
@@ -484,6 +488,7 @@ fn lobby_clicks(
     assets: Res<AssetServer>,
     screens: Res<Screens>,
     pickers: Query<(), With<MapPicker>>,
+    ngui: Query<&crate::ngui::NguiScreen>,
     mut exit: MessageWriter<AppExit>,
 ) {
     for c in clicks.read() {
@@ -527,7 +532,14 @@ fn lobby_clicks(
         } else {
             commands.spawn((
                 Toast(2.5),
-                Text::new(format!("{n}: needs the game's online services - not available offline")),
+                // the game's own message for this (Key_0115)
+                Text::new(
+                    ngui.get(c.screen)
+                        .map(|s| s.string("Key_0115").replace('\n', ""))
+                        .ok()
+                        .filter(|t| !t.is_empty() && t != "Key_0115")
+                        .unwrap_or_else(|| "Server is not available, please check your internet connection".into()),
+                ),
                 TextFont { font_size: FontSize::Px(20.0), ..default() },
                 TextColor(Color::WHITE),
                 BackgroundColor(Color::srgba(0.0, 0.0, 0.0, 0.7)),
