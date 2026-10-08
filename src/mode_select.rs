@@ -72,9 +72,17 @@ const ROWS: usize = 2;
 const TAB_W: f32 = 180.0;
 const LEFT_SHIFT: f32 = -165.0;
 
+/// Maps kept in the game files but not offered in the picker (nor by Random Map): the
+/// second Deadly Arena (arena2; arena stays) and the Training ground. Still playable with
+/// `cargo run -- <map>`.
+pub const HIDDEN: [&str; 2] = ["arena2", "new_start_map3"];
+
 /// The map's picture: the game's own loading art (export_previews.py). Maps without one
 /// aren't offered.
 pub fn preview(data: &DataDir, map: &str) -> Option<String> {
+    if HIDDEN.contains(&map) {
+        return None;
+    }
     let p = format!("previews/{map}.png");
     data.0.join(&p).exists().then_some(p)
 }
