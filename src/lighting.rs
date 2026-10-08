@@ -157,6 +157,10 @@ struct LightmapExtras {
 /// The exporter tags glTF nodes with `{"lightmap": "...png", "lightmap_rect": [...]}`.
 /// Bevy puts node extras on the node entity; its mesh primitives are the entity itself
 /// or its children.
+///
+/// The Lightmap component goes on only once its image has loaded: meshes that get one
+/// earlier are sometimes drawn with a placeholder lightmap for good (black or untextured
+/// surfaces, about half of the runs).
 fn attach_lightmaps(
     mut commands: Commands,
     assets: Res<AssetServer>,
@@ -164,6 +168,7 @@ fn attach_lightmaps(
     added: Query<(Entity, &GltfExtras), Added<GltfExtras>>,
     children: Query<&Children>,
     meshes: Query<(), With<Mesh3d>>,
+    mut pending: Local<Vec<(Entity, Lightmap)>>,
 ) {
     for (entity, extras) in &added {
         let Ok(x) = serde_json::from_str::<LightmapExtras>(&extras.value) else { continue };
@@ -176,10 +181,19 @@ fn attach_lightmaps(
         let targets = std::iter::once(entity).chain(children.get(entity).into_iter().flat_map(|c| c.iter()));
         for t in targets {
             if meshes.contains(t) {
-                commands.entity(t).insert(lightmap.clone());
+                pending.push((t, lightmap.clone()));
             }
         }
     }
+    pending.retain(|(t, lm)| {
+        if !assets.is_loaded_with_dependencies(&lm.image) {
+            return !matches!(assets.get_load_state(&lm.image), Some(bevy::asset::LoadState::Failed(_)));
+        }
+        if let Ok(mut e) = commands.get_entity(*t) {
+            e.insert(lm.clone());
+        }
+        false
+    });
 }
 
 /// Lightmap PNGs are stored scaled down by `lightmap_scale`; every material scales back.
