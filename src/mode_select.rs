@@ -26,7 +26,38 @@ pub struct Mode {
 
 /// The Arena mini-game's maps (the original's Arena mode never offers them elsewhere).
 fn arena_map(m: &str) -> bool {
-    m == "arena" || m.starts_with("arena_")
+    m == "arena" || m == "arena2" || m.starts_with("arena_")
+}
+
+/// The game's own map lists per mode: SceneInfoController's built-in config
+/// (export_scene_modes.py -> maps/modes.json, {"TeamFight": [scene, ...], ...}).
+fn mode_lists() -> &'static std::collections::HashMap<String, Vec<String>> {
+    static MODES: std::sync::OnceLock<std::collections::HashMap<String, Vec<String>>> = std::sync::OnceLock::new();
+    MODES.get_or_init(|| {
+        let dir = std::env::var("PG3D_DATA").unwrap_or_else(|_| crate::DEFAULT_DATA.to_string());
+        std::fs::read_to_string(std::path::Path::new(&dir).join("maps/modes.json"))
+            .ok()
+            .and_then(|t| serde_json::from_str(&t).ok())
+            .unwrap_or_default()
+    })
+}
+
+/// Team Fight maps: those the game's config lists for TeamFight. Maps no mode lists any more
+/// (dropped from the rotation, e.g. Matrix) count when their scene has the two teams' spawn
+/// zones (MultyPlayerCreateZoneCommand1/2). Arena, Duel, Deathmatch-only and campaign maps
+/// stay out.
+fn team_fight_map(m: &str) -> bool {
+    let lists = mode_lists();
+    let listed = |mode: &str| lists.get(mode).is_some_and(|l| l.iter().any(|x| x.eq_ignore_ascii_case(m)));
+    if listed("TeamFight") {
+        return true;
+    }
+    if arena_map(m) || lists.values().flatten().any(|x| x.eq_ignore_ascii_case(m)) {
+        return false;
+    }
+    let dir = std::env::var("PG3D_DATA").unwrap_or_else(|_| crate::DEFAULT_DATA.to_string());
+    std::fs::read_to_string(std::path::Path::new(&dir).join(format!("maps/{m}/info.json")))
+        .is_ok_and(|t| t.contains("MultyPlayerCreateZoneCommand1") && t.contains("MultyPlayerCreateZoneCommand2"))
 }
 
 pub const MODES: [Mode; 3] = [
@@ -36,7 +67,7 @@ pub const MODES: [Mode; 3] = [
         icon: "z_mode_teamf",
         env: Some("teamfight"),
         sandbox: false,
-        maps: |m| !arena_map(m),
+        maps: team_fight_map,
     },
     // the original's "Arena" mini-game (Key_0456): waves of monsters, its own score box
     Mode {
