@@ -63,14 +63,44 @@ struct PreviewChar {
 #[derive(Component)]
 struct HeldWeapon {
     cleaned: bool,
-    /// "Shoot" sound and the time between shots (weapon info.json)
+    /// "Shoot" and "Reload" sounds (weapon info.json)
     sound: Option<Handle<AudioSource>>,
-    interval: f32,
-    /// the Armory pose (export_profiles.py), its tracks resolved to entities once loaded
-    profile: Option<Profile>,
-    tracks: Vec<(Entity, usize)>,
+    reload_sound: Option<Handle<AudioSource>>,
+    /// rounds in a clip (0: melee, never reloads)
+    clip_size: i32,
+    /// "Profile" (the Armory pose, export_profiles.py) and the first-person clips Idle,
+    /// Shoot, Shoot1.., Reload (export_weapon_clips.py); tracks resolved once loaded
+    clips: std::collections::HashMap<String, Profile>,
+    bound: std::collections::HashMap<String, Vec<(Entity, usize)>>,
+    /// time in the looping profile pose
     age: f32,
+    phase: Phase,
+    /// pretend ammo and how many reloads so far (ShopShootingController)
+    ammo: i32,
+    reloads: i32,
+    /// next barrel for Shoot1/Shoot2 weapons
+    barrel: u32,
 }
+
+/// ShopShootingController's states, simplified.
+#[derive(Clone, Copy, PartialEq, Debug)]
+enum Phase {
+    /// looping the profile pose
+    Profile,
+    /// cross-fading from the profile pose to Idle (startIdleCrossFadeTimeout)
+    ToIdle(f32),
+    /// playing this Shoot clip, seconds in
+    Shot(&'static str, f32),
+    /// playing Reload, seconds in
+    Reload(f32),
+    /// Idle, cross-fading back to the profile pose (endIdleCrossFadeTimeout)
+    ToProfile(f32),
+}
+
+/// ShopShootingController.startIdleCrossFadeTimeout / endIdleCrossFadeTimeout (serialized
+/// values of the Armory's instance)
+const START_FADE: f32 = 0.05;
+const END_FADE: f32 = 0.3;
 
 #[derive(Deserialize, Clone)]
 struct Profile {
@@ -90,28 +120,20 @@ struct Track {
     scale: Vec<[f32; 3]>,
 }
 
-/// The Armory's Shoot button: the character raises the weapon to the side and fires a
-/// short burst (OBSERVED in clip h_rec2: gun level, pointing left, muzzle flashes).
+/// The Armory's Shoot button (ShopShootButtonController): fires while held down.
 #[derive(Resource, Default)]
 pub struct PreviewShoot {
-    /// seconds left of the burst
-    pub time: f32,
-    next_shot: f32,
-    /// 0 = holding low, 1 = aiming
-    aim: f32,
+    pub held: bool,
 }
 
 impl PreviewShoot {
     pub fn start(&mut self) {
-        self.time = 1.6;
-        self.next_shot = 0.25;
+        self.held = true;
     }
 }
 
 #[derive(Deserialize, Default)]
 struct WeaponInfo {
-    #[serde(default)]
-    animations: std::collections::HashMap<String, f32>,
     #[serde(default)]
     sounds: std::collections::HashMap<String, String>,
 }
@@ -248,19 +270,29 @@ fn attach_weapon(
         .and_then(|t| serde_json::from_str(&t).ok())
         .unwrap_or_default();
     let sound = info.sounds.get("shoot").map(|rel| assets.load(format!("weapons/{name}/{rel}")));
-    let interval = info.animations.get("Shoot").copied().filter(|v| *v > 0.05).unwrap_or(0.3).max(0.12);
+    let reload_sound = info.sounds.get("reload").map(|rel| assets.load(format!("weapons/{name}/{rel}")));
+    let read = |f: &str| std::fs::read_to_string(data.0.join(format!("weapons/{name}/{f}"))).ok();
+    let mut clips: std::collections::HashMap<String, Profile> =
+        read("clips.json").and_then(|t| serde_json::from_str(&t).ok()).unwrap_or_default();
+    if let Some(p) = read("profile.json").and_then(|t| serde_json::from_str(&t).ok()) {
+        clips.insert("Profile".into(), p);
+    }
+    let clip_size = weapon_clip_size(&data.0, &name);
     let w = commands
         .spawn((
             Name::new(format!("preview {name}")),
             HeldWeapon {
                 cleaned: false,
                 sound,
-                interval,
-                profile: std::fs::read_to_string(data.0.join(format!("weapons/{name}/profile.json")))
-                    .ok()
-                    .and_then(|t| serde_json::from_str(&t).ok()),
-                tracks: vec![],
+                reload_sound,
+                clip_size,
+                clips,
+                bound: Default::default(),
                 age: 0.0,
+                phase: Phase::Profile,
+                ammo: clip_size,
+                reloads: 0,
+                barrel: 1,
             },
             crate::particles::AssetDir(format!("weapons/{name}")),
             RenderLayers::layer(LAYER),
@@ -299,27 +331,74 @@ fn hide_weapon_extras(
     }
 }
 
+/// ShopShootingController.Update, simplified: hold Shoot and the weapon's arms cross-fade
+/// from the profile pose to the first-person Idle, play "Shoot" for every shot (muzzle
+/// flash and sound with it), "Reload" when the pretend clip runs low (the first two times
+/// after a third of a clip, then when empty), and on release go to Idle and fade back to
+/// the profile pose.
 fn shoot(
     mut commands: Commands,
     time: Res<Time>,
+    mouse: Res<ButtonInput<MouseButton>>,
     mut st: ResMut<PreviewShoot>,
-    weapons: Query<(Entity, &HeldWeapon)>,
+    mut weapons: Query<(Entity, &mut HeldWeapon)>,
     mut flashes: MessageWriter<crate::particles::Burst>,
 ) {
+    // PG3D_HOLD_SHOOT=1 (automated screenshots): keep the button held
+    if !mouse.pressed(MouseButton::Left) && std::env::var("PG3D_HOLD_SHOOT").is_err() {
+        st.held = false;
+    }
+    if std::env::var("PG3D_HOLD_SHOOT").is_ok() {
+        st.held = true;
+    }
     let dt = time.delta_secs();
-    let firing = st.time > 0.0;
-    st.time = (st.time - dt).max(0.0);
-    let target = if firing { 1.0 } else { 0.0 };
-    st.aim += (target - st.aim) * (dt * 10.0).min(1.0);
-    let Ok((we, w)) = weapons.single() else { return };
-    if firing && st.aim > 0.9 {
-        st.next_shot -= dt;
-        if st.next_shot <= 0.0 {
-            st.next_shot = w.interval;
-            // the weapon's own muzzle flash particles (particles.rs)
-            flashes.write(crate::particles::Burst(we));
-            crate::sound::play(&mut commands, w.sound.as_ref(), None, 0.6);
+    let Ok((we, mut w)) = weapons.single_mut() else { return };
+    let len = |w: &HeldWeapon, c: &str| w.clips.get(c).map_or(0.0, |p| p.length);
+    let has_fp = w.clips.contains_key("Idle");
+    w.phase = match w.phase {
+        Phase::Profile if st.held => Phase::ToIdle(0.0),
+        Phase::Profile => Phase::Profile,
+        Phase::ToIdle(t) if t + dt < START_FADE => Phase::ToIdle(t + dt),
+        Phase::ToIdle(_) => Phase::Shot("", f32::MAX),
+        Phase::Shot(c, t) if t + dt < len(&w, c).max(0.1) => Phase::Shot(c, t + dt),
+        Phase::Shot(..) => {
+            let low = if w.reloads < 2 { w.clip_size - w.clip_size / 3 } else { 0 };
+            if w.clip_size > 0 && w.ammo <= low {
+                crate::sound::play(&mut commands, w.reload_sound.as_ref(), None, 0.6);
+                Phase::Reload(0.0)
+            } else if st.held {
+                // Shoot, or Shoot1 / Shoot2 in turn for two-barrelled weapons
+                let clip = if w.clips.contains_key("Shoot") || !w.clips.contains_key("Shoot1") {
+                    "Shoot"
+                } else {
+                    let c = if w.barrel == 1 { "Shoot1" } else { "Shoot2" };
+                    w.barrel = if w.barrel == 1 && w.clips.contains_key("Shoot2") { 2 } else { 1 };
+                    c
+                };
+                w.ammo -= 1;
+                flashes.write(crate::particles::Burst(we));
+                crate::sound::play(&mut commands, w.sound.as_ref(), None, 0.6);
+                Phase::Shot(clip, 0.0)
+            } else {
+                Phase::ToProfile(0.0)
+            }
         }
+        Phase::Reload(t) if t + dt < len(&w, "Reload").max(0.3) => Phase::Reload(t + dt),
+        Phase::Reload(_) => {
+            w.ammo = w.clip_size;
+            w.reloads += 1;
+            if st.held { Phase::Shot("", f32::MAX) } else { Phase::ToProfile(0.0) }
+        }
+        Phase::ToProfile(t) if st.held => {
+            let _ = t;
+            Phase::ToIdle(START_FADE)
+        }
+        Phase::ToProfile(t) if t + dt < END_FADE => Phase::ToProfile(t + dt),
+        Phase::ToProfile(_) => Phase::Profile,
+    };
+    // weapons without first-person clips only flash
+    if !has_fp && matches!(w.phase, Phase::ToIdle(_)) {
+        w.phase = Phase::Shot("", f32::MAX);
     }
 }
 
@@ -368,8 +447,62 @@ fn hide_char_arms(chars: Query<Entity, With<PreviewChar>>, children: Query<&Chil
     }
 }
 
-/// Play the weapon's profile animation (its Armory pose, looping) on the prefab's arms and
-/// gun bones.
+/// A bone's rotation, translation and scale in one pose (None: the clip doesn't key it).
+type BonePose = (Option<Quat>, Option<Vec3>, Option<Vec3>);
+
+/// Bone transforms of one clip at time `t` (looping or held at the end).
+fn sample(p: &Profile, bound: &[(Entity, usize)], t: f32, looped: bool) -> Vec<(Entity, BonePose)> {
+    let t = if p.length <= 0.0 {
+        0.0
+    } else if looped {
+        t % p.length
+    } else {
+        t.clamp(0.0, p.length)
+    };
+    let f = t * p.fps;
+    let (i, a) = (f.floor() as usize, f.fract());
+    let pick = |n: usize| (i.min(n.saturating_sub(1)), (i + 1).min(n.saturating_sub(1)));
+    bound
+        .iter()
+        .map(|&(e, k)| {
+            let tr = &p.tracks[k];
+            let rot = (!tr.rotation.is_empty()).then(|| {
+                let (i0, i1) = pick(tr.rotation.len());
+                Quat::from_array(tr.rotation[i0]).slerp(Quat::from_array(tr.rotation[i1]), a)
+            });
+            let pos = (!tr.translation.is_empty()).then(|| {
+                let (i0, i1) = pick(tr.translation.len());
+                Vec3::from(tr.translation[i0]).lerp(Vec3::from(tr.translation[i1]), a)
+            });
+            let sc = (!tr.scale.is_empty()).then(|| {
+                let (i0, i1) = pick(tr.scale.len());
+                Vec3::from(tr.scale[i0]).lerp(Vec3::from(tr.scale[i1]), a)
+            });
+            (e, (rot, pos, sc))
+        })
+        .collect()
+}
+
+/// Rounds in the weapon's clip (weapons.json ammoInClip; 0 for melee).
+fn weapon_clip_size(data: &std::path::Path, name: &str) -> i32 {
+    #[derive(Deserialize)]
+    #[allow(non_snake_case)]
+    struct W {
+        #[serde(default)]
+        ammoInClip: i32,
+        #[serde(default)]
+        isMelee: i32,
+    }
+    static ALL: std::sync::OnceLock<std::collections::HashMap<String, W>> = std::sync::OnceLock::new();
+    let all = ALL.get_or_init(|| {
+        std::fs::read_to_string(data.join("weapons/weapons.json")).ok().and_then(|t| serde_json::from_str(&t).ok()).unwrap_or_default()
+    });
+    all.get(name).map_or(0, |w| if w.isMelee != 0 { 0 } else { w.ammoInClip.max(0) })
+}
+
+/// Pose the weapon's arms and gun bones: the profile clip (the Armory pose, looping) or,
+/// while shooting, the first-person clips, cross-fading between them (Unity
+/// Animation.CrossFade: a linear blend over the fade time).
 fn play_profile(
     time: Res<Time>,
     mut weapons: Query<(Entity, &mut HeldWeapon)>,
@@ -378,58 +511,86 @@ fn play_profile(
     mut tf: Query<&mut Transform>,
 ) {
     for (w, mut h) in &mut weapons {
-        let Some(p) = h.profile.clone() else { continue };
-        if h.tracks.is_empty() {
+        if h.bound.is_empty() && !h.clips.is_empty() {
             // paths start below the weapon's "*_Inner" object
             let all: Vec<Entity> = children.iter_descendants(w).collect();
             let inner = all.iter().copied().find(|e| names.get(*e).is_ok_and(|n| n.as_str().to_lowercase().ends_with("_inner")));
             let Some(inner) = inner else { continue };
-            for (k, t) in p.tracks.iter().enumerate() {
+            let resolve = |path: &str| {
                 let mut node = inner;
-                let mut ok = true;
-                for part in t.path.split('/').filter(|x| !x.is_empty()) {
-                    let hit = children
+                for part in path.split('/').filter(|x| !x.is_empty()) {
+                    node = children
                         .get(node)
                         .into_iter()
                         .flatten()
                         .copied()
-                        .find(|c| names.get(*c).is_ok_and(|n| n.as_str().eq_ignore_ascii_case(part)));
-                    match hit {
-                        Some(c) => node = c,
-                        None => {
-                            ok = false;
-                            break;
-                        }
-                    }
+                        .find(|c| names.get(*c).is_ok_and(|n| n.as_str().eq_ignore_ascii_case(part)))?;
                 }
-                if ok {
-                    h.tracks.push((node, k));
-                }
-            }
-            if h.tracks.is_empty() {
-                h.profile = None;
-                continue;
-            }
+                Some(node)
+            };
+            let bound: std::collections::HashMap<String, Vec<(Entity, usize)>> = h
+                .clips
+                .iter()
+                .map(|(name, p)| {
+                    let v = p.tracks.iter().enumerate().filter_map(|(k, t)| resolve(&t.path).map(|e| (e, k))).collect();
+                    (name.clone(), v)
+                })
+                .collect();
+            h.bound = bound;
         }
-        h.age += time.delta_secs();
-        let t = if p.length > 0.0 { h.age % p.length } else { 0.0 };
-        let f = t * p.fps;
-        let (i, a) = (f.floor() as usize, f.fract());
-        for &(e, k) in &h.tracks {
-            let tr = &p.tracks[k];
+        if !h.bound.get("Profile").is_some_and(|b| !b.is_empty()) {
+            continue;
+        }
+        let dt = time.delta_secs();
+        // the profile pose keeps its place while shooting (normalizedTime restored)
+        if matches!(h.phase, Phase::Profile | Phase::ToProfile(_)) {
+            h.age += dt;
+        }
+        let clip = |name: &str, t: f32, looped: bool| match (h.clips.get(name), h.bound.get(name)) {
+            (Some(p), Some(b)) => sample(p, b, t, looped),
+            _ => vec![],
+        };
+        let profile = clip("Profile", h.age, true);
+        let idle = clip("Idle", 0.0, true);
+        let (a, b, k) = match h.phase {
+            Phase::Profile => (profile, vec![], 0.0),
+            Phase::ToIdle(t) => (profile, idle, (t / START_FADE).clamp(0.0, 1.0)),
+            Phase::Shot(c, t) => {
+                let shot = if c.is_empty() || t == f32::MAX { idle } else { clip(c, t, false) };
+                (shot, vec![], 0.0)
+            }
+            Phase::Reload(t) => (clip("Reload", t, false), vec![], 0.0),
+            Phase::ToProfile(t) => (idle, profile, (t / END_FADE).clamp(0.0, 1.0)),
+        };
+        let mut pose: std::collections::HashMap<Entity, BonePose> = a.into_iter().collect();
+        for (e, (r, p, s)) in b {
+            let x = pose.entry(e).or_insert((None, None, None));
+            x.0 = match (x.0, r) {
+                (Some(q0), Some(q1)) => Some(q0.slerp(q1, k)),
+                (q, None) => q,
+                (None, q) => q,
+            };
+            x.1 = match (x.1, p) {
+                (Some(v0), Some(v1)) => Some(v0.lerp(v1, k)),
+                (v, None) => v,
+                (None, v) => v,
+            };
+            x.2 = match (x.2, s) {
+                (Some(v0), Some(v1)) => Some(v0.lerp(v1, k)),
+                (v, None) => v,
+                (None, v) => v,
+            };
+        }
+        for (e, (r, p, s)) in pose {
             let Ok(mut x) = tf.get_mut(e) else { continue };
-            let pick = |n: usize| (i.min(n.saturating_sub(1)), (i + 1).min(n.saturating_sub(1)));
-            if !tr.rotation.is_empty() {
-                let (i0, i1) = pick(tr.rotation.len());
-                x.rotation = Quat::from_array(tr.rotation[i0]).slerp(Quat::from_array(tr.rotation[i1]), a);
+            if let Some(r) = r {
+                x.rotation = r;
             }
-            if !tr.translation.is_empty() {
-                let (i0, i1) = pick(tr.translation.len());
-                x.translation = Vec3::from(tr.translation[i0]).lerp(Vec3::from(tr.translation[i1]), a);
+            if let Some(p) = p {
+                x.translation = p;
             }
-            if !tr.scale.is_empty() {
-                let (i0, i1) = pick(tr.scale.len());
-                x.scale = Vec3::from(tr.scale[i0]).lerp(Vec3::from(tr.scale[i1]), a);
+            if let Some(s) = s {
+                x.scale = s;
             }
         }
     }
