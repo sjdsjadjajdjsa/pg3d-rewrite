@@ -516,11 +516,7 @@ fn lobby_clicks(
                 crate::mode_select::show(&mut s, &mut sel, &assets, &data, &maps, true, m);
                 continue;
             }
-            if n == "btn_back" && sel.open {
-                let m = sel.mode;
-                crate::mode_select::show(&mut s, &mut sel, &assets, &data, &maps, false, m);
-                continue;
-            }
+
             if n == "Button_Battle" && sel.open {
                 let mode = &crate::mode_select::MODES[sel.mode];
                 let map = sel.map.clone().or_else(|| {
@@ -550,13 +546,21 @@ fn lobby_clicks(
         } else if Some(c.screen) == screens.armory {
             // handled in armory.rs
         } else if n.starts_with("BtnBattle") && screens.modes.is_some() {
+            // straight to the mode / map picker (the card hub in front of it is skipped)
+            if let Some(m) = screens.modes
+                && let Ok(mut s) = ngui.get_mut(m)
+            {
+                let mode = sel.mode;
+                crate::mode_select::show(&mut s, &mut sel, &assets, &data, &maps, true, mode);
+            }
             show(&mut commands, screens.lobby, false);
             show(&mut commands, screens.modes, true);
         } else if n == "btn_back" {
             if let Some(m) = screens.modes
                 && let Ok(mut s) = ngui.get_mut(m)
             {
-                crate::mode_select::show(&mut s, &mut sel, &assets, &data, &maps, false, 0);
+                sel.open = false;
+                let _ = &mut s;
             }
             show(&mut commands, screens.modes, false);
             show(&mut commands, screens.lobby, true);
