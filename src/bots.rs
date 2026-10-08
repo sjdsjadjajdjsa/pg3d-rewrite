@@ -302,6 +302,8 @@ fn spawner(
     player: Single<&Transform, With<Player>>,
     mut next: Local<f32>,
     mut wave: ResMut<Wave>,
+    nav: Res<crate::navmesh::NavMesh>,
+    spatial: SpatialQuery,
 ) {
     if types.0.is_empty() || std::env::var("PG3D_NOBOTS").is_ok() {
         return;
@@ -348,6 +350,11 @@ fn spawner(
         return;
     }
     let pos = candidates[(rand01(t * 1.7) * candidates.len() as f32) as usize % candidates.len()];
+    // some zone markers sit inside the floor or off the walkable area (Hill's is 21 m under
+    // the ground): move to the navmesh, then stand on the collider below
+    let pos = nav.walkable_point(pos).unwrap_or(pos);
+    let floor = SpatialQueryFilter::from_mask(Layer::World);
+    let pos = spatial.cast_ray(pos + Vec3::Y * 1.5, Dir3::NEG_Y, 4.0, true, &floor).map_or(pos, |h| pos + Vec3::Y * (1.5 - h.distance));
     // early waves only use the weaker zombie types (sorted by health), later ones all
     let mut order: Vec<usize> = (0..types.0.len()).collect();
     order.sort_by(|a, b| types.0[*a].def.health.total_cmp(&types.0[*b].def.health));
@@ -519,13 +526,17 @@ fn bot_move(
     types: Res<BotTypes>,
     player: Single<&Transform, (With<Player>, Without<Bot>)>,
     mut bots: Query<(Entity, &mut Transform, &mut Bot, &Children)>,
-    colliders: Query<&Collider>,
+    colliders: Query<(&Collider, &Transform), Without<Bot>>,
     move_and_slide: MoveAndSlide,
     nav: Res<crate::navmesh::NavMesh>,
 ) {
     let dt = time.delta_secs();
     for (e, mut t, mut b, children) in &mut bots {
-        let Some((ce, col)) = children.iter().find_map(|c| colliders.get(c).ok().map(|x| (c, x))) else { continue };
+        // the body hit box moves the bot; it sits at its own offset above the feet (a cuboid
+        // centred 0.35 m up for the small zombies)
+        let Some((ce, col, off)) = children.iter().find_map(|c| colliders.get(c).ok().map(|(x, ct)| (c, x, ct.translation))) else {
+            continue;
+        };
         let def = &types.0[b.kind].def;
         // flying bots: physics and path finding work on the point below them
         let hover_before = b.hover;
@@ -579,8 +590,8 @@ fn bot_move(
         let mut grounded = false;
         let out = move_and_slide.move_and_slide(
             col,
-            t.translation + Vec3::Y,
-            Quat::IDENTITY,
+            t.translation + t.rotation * off,
+            t.rotation,
             b.velocity,
             time.delta(),
             &MoveAndSlideConfig::default(),
@@ -593,7 +604,7 @@ fn bot_move(
             },
         );
         let before = t.translation;
-        t.translation = out.position - Vec3::Y;
+        t.translation = out.position - t.rotation * off;
         b.grounded = grounded;
         let bob = if b.hover > 0.0 && b.state != BotState::Dead {
             (time.elapsed_secs() * 2.0 + e.index().index() as f32).sin() * 0.15

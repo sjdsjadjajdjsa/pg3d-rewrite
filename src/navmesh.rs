@@ -158,6 +158,35 @@ impl NavMesh {
         })
     }
 
+    /// A walkable spot for `p`: on the polygon under it (within 3 m in height), else the
+    /// centre of the nearest polygon. None without a navmesh.
+    pub fn walkable_point(&self, p: Vec3) -> Option<Vec3> {
+        let q = xz(p);
+        let inside = |poly: &Poly| {
+            let n = poly.verts.len();
+            let mut sign = 0.0f32;
+            (0..n).all(|k| {
+                let c = cross2(xz(poly.verts[(k + 1) % n]) - xz(poly.verts[k]), q - xz(poly.verts[k]));
+                if c.abs() < 1e-6 {
+                    return true;
+                }
+                if sign == 0.0 {
+                    sign = c.signum();
+                }
+                c.signum() == sign
+            })
+        };
+        let under = self
+            .polys
+            .iter()
+            .filter(|poly| (poly.center.y - p.y).abs() < 3.0 && inside(poly))
+            .min_by(|a, b| (a.center.y - p.y).abs().total_cmp(&(b.center.y - p.y).abs()));
+        if let Some(poly) = under {
+            return Some(Vec3::new(p.x, poly.center.y, p.z));
+        }
+        self.polys.iter().map(|poly| poly.center).min_by(|a, b| a.distance_squared(p).total_cmp(&b.distance_squared(p)))
+    }
+
     /// Waypoints from `from` to `to` (excluding `from`, including `to`), or None if there is
     /// no connection.
     pub fn find_path(&self, from: Vec3, to: Vec3) -> Option<Vec<Vec3>> {
