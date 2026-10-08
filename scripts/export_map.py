@@ -933,12 +933,15 @@ class Exporter:
 
     def light(self, name, ptr, world):
         l = deref(ptr)
-        if l is None:
+        if l is None or not getattr(l, "m_Enabled", True):
             return
         c = l.m_Color
-        fwd = world[:3, :3] @ np.array([0, 0, -1.0])  # glTF lights point down -Z
+        # a Unity light shines along its +Z (mirrored like the cameras' forward)
+        fwd = world[:3, :3] @ np.array([0, 0, 1.0])
+        fwd = fwd / max(float(np.linalg.norm(fwd)), 1e-9)
         self.lights.append({"name": name, "type": int(l.m_Type), "color": [c.r, c.g, c.b],
                             "intensity": l.m_Intensity, "range": l.m_Range,
+                            "spot_angle": float(getattr(l, "m_SpotAngle", 30.0)),
                             "position": world[:3, 3].tolist(), "direction": fwd.tolist(),
                             "baked": int(getattr(l, "m_Lightmapping", getattr(getattr(l, "m_BakingOutput", None), "lightmapBakeType", 0)) or 0)})
 
