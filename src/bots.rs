@@ -304,8 +304,13 @@ fn spawner(
     mut wave: ResMut<Wave>,
     nav: Res<crate::navmesh::NavMesh>,
     spatial: SpatialQuery,
+    collision: Res<crate::map::CollisionReady>,
 ) {
     if types.0.is_empty() || std::env::var("PG3D_NOBOTS").is_ok() || crate::team_match::team_mode() {
+        return;
+    }
+    // nothing spawns before the map's floors are in the physics scene (they'd land under them)
+    if !collision.ready() {
         return;
     }
     let dt = time.delta_secs();
@@ -352,9 +357,9 @@ fn spawner(
     let pos = candidates[(rand01(t * 1.7) * candidates.len() as f32) as usize % candidates.len()];
     // some zone markers sit inside the floor or off the walkable area (Hill's is 21 m under
     // the ground): move to the navmesh, then stand on the collider below
-    let pos = nav.walkable_point(pos).unwrap_or(pos);
     let floor = SpatialQueryFilter::from_mask(Layer::World);
-    let pos = spatial.cast_ray(pos + Vec3::Y * 1.5, Dir3::NEG_Y, 4.0, true, &floor).map_or(pos, |h| pos + Vec3::Y * (1.5 - h.distance));
+    let below = |p: Vec3| spatial.cast_ray(p + Vec3::Y * 1.5, Dir3::NEG_Y, 4.0, false, &floor).map(|h| p + Vec3::Y * (1.5 - h.distance));
+    let pos = below(pos).or_else(|| nav.walkable_point(pos).map(|p| below(p).unwrap_or(p))).unwrap_or(pos);
     // early waves only use the weaker zombie types (sorted by health), later ones all
     let mut order: Vec<usize> = (0..types.0.len()).collect();
     order.sort_by(|a, b| types.0[*a].def.health.total_cmp(&types.0[*b].def.health));

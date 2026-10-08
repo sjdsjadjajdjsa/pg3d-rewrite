@@ -230,6 +230,8 @@ pub struct PlayerBot {
     /// seconds without getting anywhere, and a detour being walked (direction, seconds)
     stuck: f32,
     detour: (Vec3, f32),
+    /// seconds left to put it on the floor below once the colliders are there (spawning)
+    settle: f32,
     // weapon
     damage: f32,
     interval: f32,
@@ -283,7 +285,14 @@ fn spawn_points(markers: &MapMarkers) -> (Vec<Vec3>, Vec<Vec3>, Vec<Vec3>) {
     let pts = |f: &dyn Fn(&str) -> bool| markers.0.iter().filter(|m| f(&m.name)).map(|m| m.position).collect::<Vec<_>>();
     let mut blue = pts(&|n| n.starts_with("MultyPlayerCreateZoneCommand1"));
     let mut red = pts(&|n| n.starts_with("MultyPlayerCreateZoneCommand2"));
-    let all = pts(&|n| n.starts_with("MultyPlayerCreateZone") && !n.contains("Flag") && !n.contains("Duel") && !n.contains("COOP"));
+    let mut all = pts(&|n| n.starts_with("MultyPlayerCreateZone") && !n.contains("Flag") && !n.contains("Duel") && !n.contains("COOP"));
+    if all.is_empty() {
+        // survival arenas (Mine, Hockey, Castle, ...) have no multiplayer spawn zones: use
+        // their co-op, bonus and enemy zones, which are spread over the walkable area
+        all = pts(&|n| {
+            n.starts_with("MultyPlayerCreateZone") || n.starts_with("BonusCreationZone") || n.starts_with("EnemyCreationZone") || n.starts_with("PlayerSpawnPoint")
+        });
+    }
     if blue.is_empty() || red.is_empty() {
         // no team zones: split the free-for-all ones by side of the map
         let c = all.iter().copied().sum::<Vec3>() / all.len().max(1) as f32;
@@ -307,7 +316,6 @@ fn spawn_bots(
     mut scores: ResMut<TdmScores>,
     mut player: Query<(&mut Transform, &mut Player)>,
     nav: Res<crate::navmesh::NavMesh>,
-    spatial: SpatialQuery,
 ) {
     let (blue_spawns, red_spawns, roam) = spawn_points(&markers);
     let _ = &mut graphs;
@@ -334,6 +342,7 @@ fn spawn_bots(
         .and_then(|t| serde_json::from_str(&t).ok())
         .unwrap_or_default();
     let mut k = 0usize;
+    let mut taken: Vec<Vec3> = player.iter().map(|(t, _)| t.translation).collect();
     for (team, n) in [(Team::Blue, TEAM_SIZE - 1), (Team::Red, TEAM_SIZE)] {
         for _ in 0..n {
             let row = scores.rows.len();
@@ -349,8 +358,11 @@ fn spawn_bots(
             let damage = ws.and_then(|w| w.damageByTier.first().copied()).unwrap_or(1.0) * pellets;
             let interval = info.animations.get("Shoot").copied().filter(|v| *v > 0.05).unwrap_or(0.3).max(0.08);
             let spawns = if team == Team::Blue { &setup.blue_spawns } else { &setup.red_spawns };
-            let at = spawns.get(k % spawns.len().max(1)).copied().unwrap_or(Vec3::ZERO);
-            let at = stand_at(&spatial, at);
+            let r = ((k as u32).wrapping_mul(2_654_435_761) % 1000) as f32 / 1000.0;
+            let at = free_spawn(spawns, &taken, r, (k as f32 * 0.37).fract()).unwrap_or(Vec3::ZERO);
+            // the physics scene isn't queryable yet: start at the marker, `settle` puts the
+            // bot on the floor in its first frames
+            taken.push(at);
             let tc = &setup.tuning.controller;
             let mut bot = PlayerBot {
                 team,
@@ -369,6 +381,7 @@ fn spawn_bots(
                 dodge_dir: 1.0,
                 next_shot: 1.0,
                 respawn_in: 0.0,
+                settle: SETTLE,
                 air: 0.0,
                 hurt: 0.0,
                 strafe: 0.0,
@@ -706,8 +719,40 @@ fn move_towards(a: Vec2, b: Vec2, step: f32) -> Vec2 {
 /// Where to stand for a spawn marker: on the floor under it (markers float a little;
 /// the navmesh point can be inside a block).
 fn stand_at(spatial: &SpatialQuery, p: Vec3) -> Vec3 {
+    floor_below(spatial, p).unwrap_or(p)
+}
+
+/// The floor under (or a little over) `p`, feet just above it. Spawn zone markers often sit
+/// a bit inside the floor; a bot whose capsule starts in the floor can't get out of it.
+fn floor_below(spatial: &SpatialQuery, p: Vec3) -> Option<Vec3> {
     let world = SpatialQueryFilter::from_mask(Layer::World);
-    spatial.cast_ray(p + Vec3::Y * 1.0, Dir3::NEG_Y, 6.0, true, &world).map_or(p, |h| p + Vec3::Y * (1.0 - h.distance)) + Vec3::Y * 0.05
+    spatial.cast_ray(p + Vec3::Y * 2.0, Dir3::NEG_Y, 8.0, false, &world).map(|h| p + Vec3::Y * (2.0 - h.distance + 0.05))
+}
+
+/// Where to put a bot for spawn marker `at`: on the floor under the marker (markers sit on
+/// or just in the floor), or, when there is none, on the floor under the nearest navmesh
+/// point. Not the navmesh point first: on some survival arenas the navmesh lies under the
+/// visible floor, and bots put there walk around buried.
+fn spawn_spot(spatial: &SpatialQuery, nav: &crate::navmesh::NavMesh, at: Vec3) -> Vec3 {
+    floor_below(spatial, at).or_else(|| nav.walkable_point(at).and_then(|p| floor_below(spatial, p).or(Some(p)))).unwrap_or(at)
+}
+
+/// Seconds a (re)spawned bot keeps trying to find the floor under it (the physics scene
+/// may not be queryable in its first frames).
+const SETTLE: f32 = 1.0;
+/// Bots don't (re)spawn closer than this to the player or another bot when they can help it.
+const SPAWN_GAP: f32 = 3.0;
+
+/// A spawn point away from the players already there: a random one of those at least
+/// SPAWN_GAP from everyone, else the emptiest, moved a little to the side.
+fn free_spawn(spawns: &[Vec3], taken: &[Vec3], r: f32, r2: f32) -> Option<Vec3> {
+    let gap = |p: &Vec3| taken.iter().map(|q| Vec2::new(p.x - q.x, p.z - q.z).length()).fold(f32::MAX, f32::min);
+    let free: Vec<Vec3> = spawns.iter().copied().filter(|p| gap(p) >= SPAWN_GAP).collect();
+    if !free.is_empty() {
+        return Some(free[((r * free.len() as f32) as usize).min(free.len() - 1)]);
+    }
+    let best = spawns.iter().copied().max_by(|a, b| gap(a).total_cmp(&gap(b)))?;
+    Some(best + Quat::from_rotation_y(r2 * std::f32::consts::TAU) * Vec3::Z * 1.5)
 }
 
 fn eye(p: Vec3) -> Vec3 {
@@ -972,16 +1017,22 @@ fn respawn(
     time: Res<Time>,
     setup: Option<Res<BotSetup>>,
     mut bots: Query<(Entity, &mut Transform, &mut PlayerBot)>,
+    player: Query<&Transform, (With<Player>, Without<PlayerBot>)>,
     spatial: SpatialQuery,
+    nav: Res<crate::navmesh::NavMesh>,
 ) {
     let Some(setup) = setup else { return };
+    let mut taken: Vec<Vec3> = player.iter().map(|t| t.translation).chain(bots.iter().filter(|(_, _, b)| b.alive()).map(|(_, t, _)| t.translation)).collect();
     for (e, mut t, mut b) in &mut bots {
         // hopelessly stuck (inside a block): start again from a spawn point
         if b.alive() && b.stuck > 6.0 {
             let spawns = if b.team == Team::Blue { &setup.blue_spawns } else { &setup.red_spawns };
-            let i = (b.rand() * spawns.len() as f32) as usize;
-            if let Some(&at) = spawns.get(i) {
+            let (r, r2) = (b.rand(), b.rand());
+            if let Some(at) = free_spawn(spawns, &taken, r, r2) {
+                let at = spawn_spot(&spatial, &nav, at);
+                taken.push(at);
                 t.translation = stand_at(&spatial, at);
+                b.settle = SETTLE;
             }
             b.stuck = 0.0;
             b.path.clear();
@@ -994,9 +1045,12 @@ fn respawn(
             continue;
         }
         let spawns = if b.team == Team::Blue { &setup.blue_spawns } else { &setup.red_spawns };
-        let i = (b.rand() * spawns.len() as f32) as usize;
-        let at = spawns.get(i).copied().unwrap_or(t.translation);
+        let (r, r2) = (b.rand(), b.rand());
+        let at = free_spawn(spawns, &taken, r, r2).unwrap_or(t.translation);
+        let at = spawn_spot(&spatial, &nav, at);
+        taken.push(at);
         t.translation = stand_at(&spatial, at);
+        b.settle = SETTLE;
         b.health = PLAYER_MAX_HEALTH;
         b.velocity = Vec3::ZERO;
         b.target = None;
@@ -1016,6 +1070,7 @@ fn movement(
     colliders: Query<(&Collider, &Transform), Without<PlayerBot>>,
     move_and_slide: MoveAndSlide,
     nav: Res<crate::navmesh::NavMesh>,
+    collision: Res<crate::map::CollisionReady>,
 ) {
     let Some(setup) = setup else { return };
     let mv = &setup.tuning.movement;
@@ -1029,6 +1084,26 @@ fn movement(
         let Some((ce, col, off)) = children.iter().find_map(|c| colliders.get(c).ok().map(|(x, ct)| (c, x, ct.translation))) else {
             continue;
         };
+        if b.settle > 0.0 {
+            if !collision.ready() {
+                continue;
+            }
+            b.settle -= dt;
+            let spot = floor_below(&spatial, t.translation).or_else(|| (b.settle <= 0.0).then(|| spawn_spot(&spatial, &nav, t.translation)));
+            if let Some(p) = spot {
+                t.translation = p;
+                b.velocity = Vec3::ZERO;
+                b.settle = 0.0;
+            } else {
+                continue;
+            }
+        }
+        if std::env::var("PG3D_TRACE_GROUND").is_ok() && (time.elapsed_secs() % 2.0) < dt {
+            let below = spatial
+                .cast_ray(t.translation + Vec3::Y * 3.0, Dir3::NEG_Y, 10.0, false, &SpatialQueryFilter::from_mask(Layer::World))
+                .map(|h| t.translation.y - (t.translation.y + 3.0 - h.distance));
+            info!("ground bot {}: feet {:.2} above floor {:?} grounded={}", b.row, t.translation, below, b.grounded);
+        }
         let fighting = b.target.is_some();
         // path to the goal, recomputed twice a second
         b.repath -= dt;

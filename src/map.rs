@@ -139,7 +139,8 @@ impl crate::scene::ScenePlugin for MapPlugin {
             .init_resource::<MapInfo>()
             .add_systems(PreStartup, load_markers)
             .add_systems(Startup, (spawn_map, spawn_colliders))
-            .add_systems(Update, (hide_collision_meshes, hide_campaign_teleports));
+            .init_resource::<CollisionReady>()
+            .add_systems(Update, (hide_collision_meshes, hide_campaign_teleports, collision_ready));
     }
 }
 
@@ -230,6 +231,27 @@ fn spawn_colliders(
         if d.trigger { triggers += 1 } else { solid += 1 }
     }
     info!("colliders: {solid} solid shapes, {triggers} triggers");
+}
+
+/// Whether the map's mesh colliders (collision.gltf, loaded in the background) are in the
+/// physics scene: floors and walls from it don't exist before, so anything put "on the
+/// floor" earlier ends up under it.
+#[derive(Resource, Default)]
+pub struct CollisionReady {
+    frames: u32,
+}
+
+impl CollisionReady {
+    pub fn ready(&self) -> bool {
+        // a couple of frames for the physics step to take the new colliders in
+        self.frames >= 3
+    }
+}
+
+fn collision_ready(mut ready: ResMut<CollisionReady>, roots: Query<Has<ColliderConstructorHierarchy>, With<CollisionMeshes>>) {
+    if roots.iter().all(|pending| !pending) && !roots.is_empty() {
+        ready.frames = ready.frames.saturating_add(1);
+    }
 }
 
 /// Root of the collision.gltf copy.
