@@ -328,6 +328,12 @@ class Ngui:
                        else self.texture_png(tex, "textures", out))
             node["texture"] = {"png": png,
                                "uv": [rc["x"], rc["y"], rc["width"], rc["height"]], "flip": d.get("mFlip", 0)}
+            # UIBasicSprite type (0 simple, 1 sliced, 2 tiled, 3 filled) and the slicing border in
+            # texture pixels (left, bottom, right, top)
+            b = d.get("mBorder")
+            if d.get("mType", 0) or (b and any(b.get(c, 0) for c in "xyzw")):
+                node["texture"].update(type=d.get("mType", 0), fill_center=bool(d.get("mFillCenter", 1)),
+                                       border=[b.get(c, 0.0) for c in "xyzw"] if b else [0.0] * 4)
             # a custom material (e.g. the SDF icon shader of the PC key tips): its shader name
             # and number/colour settings
             mat = self.resolve(owner, d["mMat"]) if d.get("mMat", {}).get("m_PathID") else None
