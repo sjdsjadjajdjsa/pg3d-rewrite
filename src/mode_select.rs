@@ -20,6 +20,13 @@ pub struct Mode {
     /// PG3D_MODE of the match (None: the zombie campaign)
     pub env: Option<&'static str>,
     pub sandbox: bool,
+    /// which maps the mode offers
+    pub maps: fn(&str) -> bool,
+}
+
+/// The Arena mini-game's maps (the original's Arena mode never offers them elsewhere).
+fn arena_map(m: &str) -> bool {
+    m == "arena" || m.starts_with("arena_")
 }
 
 pub const MODES: [Mode; 3] = [
@@ -29,13 +36,17 @@ pub const MODES: [Mode; 3] = [
         icon: "z_mode_teamf",
         env: Some("teamfight"),
         sandbox: false,
+        maps: |m| !arena_map(m),
     },
+    // the original's "Arena" mini-game (Key_0456): waves of monsters, its own score box
     Mode {
-        name: "Campaign",
-        description: "Fight waves of zombies. Survive as long as you can",
+        name: "Arena",
+        // Key_11599
+        description: "[FFDD03]Survive as long as you can[-] under the enemies onslaught. Each completed wave rewards you with [FFDD03]Coins[-]",
         icon: "z_mode_wws",
         env: None,
         sandbox: false,
+        maps: arena_map,
     },
     Mode {
         name: "Sandbox",
@@ -43,6 +54,7 @@ pub const MODES: [Mode; 3] = [
         icon: "z_mode_frp",
         env: None,
         sandbox: true,
+        maps: |_| true,
     },
 ];
 
@@ -58,8 +70,8 @@ pub struct ModeSelect {
     tabs: Vec<(usize, usize)>,
     /// map cells: (cell node, map; None = Random Map)
     cells: Vec<(usize, Option<String>)>,
-    /// map cells' x before scrolling
-    cell_x: Vec<f32>,
+    /// x before scrolling of the cells the current mode shows
+    cell_x: Vec<(usize, f32)>,
     scroll: f32,
     max_scroll: f32,
 }
@@ -161,12 +173,7 @@ fn build(s: &mut NguiScreen, st: &mut ModeSelect, assets: &AssetServer, data: &D
     list.extend(maps.iter().filter(|m| preview(data, m).is_some()).cloned().map(Some));
     for (k, m) in list.iter().enumerate() {
         let c = if k == 0 { cell } else { s.clone_subtree(cell) };
-        let (col, row) = (k / ROWS, k % ROWS);
-        // the original's grid starts near the left edge of a 16:9 screen (OBSERVED in
-        // mode_teamfight_maps.png); the prefab's Grid (x -503) is laid out for 4:3
-        let x = LEFT_SHIFT + col as f32 * CELL.x;
-        s.set_pos(c, Vec2::new(x, -(row as f32) * CELL.y));
-        st.cell_x.push(x);
+        let _ = k;
         s.make_button(c);
         for hide in ["TimerUI", "ItemHolder", "TegSpecific", "disable-if-locked", "GMHLabelNotification", "XPLockedUI"] {
             if let Some(i) = s.find_in(c, hide) {
@@ -189,8 +196,38 @@ fn build(s: &mut NguiScreen, st: &mut ModeSelect, assets: &AssetServer, data: &D
         }
         st.cells.push((c, m.clone()));
     }
-    let cols = list.len().div_ceil(ROWS) as f32;
-    st.max_scroll = (cols * CELL.x - 1340.0).max(0.0);
+}
+
+/// Show only the current mode's maps (Random Map first), laid out column by column.
+fn lay_out_cells(s: &mut NguiScreen, st: &mut ModeSelect) {
+    let m = &MODES[st.mode];
+    st.cell_x.clear();
+    st.scroll = 0.0;
+    let mut k = 0;
+    for (c, map) in st.cells.clone() {
+        let on = map.as_deref().is_none_or(|n| (m.maps)(n));
+        s.set_active(c, on);
+        if !on {
+            continue;
+        }
+        let (col, row) = (k / ROWS, k % ROWS);
+        // the original's grid starts near the left edge of a 16:9 screen (OBSERVED in
+        // mode_teamfight_maps.png); the prefab's Grid (x -503) is laid out for 4:3
+        let x = LEFT_SHIFT + col as f32 * CELL.x;
+        s.set_pos(c, Vec2::new(x, -(row as f32) * CELL.y));
+        st.cell_x.push((c, x));
+        k += 1;
+    }
+    st.max_scroll = (k.div_ceil(ROWS) as f32 * CELL.x - 1340.0).max(0.0);
+    // a map the new mode doesn't have: back to Random Map
+    if st.map.as_deref().is_some_and(|n| !(m.maps)(n)) {
+        st.map = None;
+    }
+}
+
+/// The current mode's maps (for Random Map).
+pub fn mode_maps<'a>(st: &ModeSelect, maps: &'a [String], data: &DataDir) -> Vec<&'a String> {
+    maps.iter().filter(|m| (MODES[st.mode].maps)(m) && preview(data, m).is_some()).collect()
 }
 
 /// Show the picker for `mode` (or the hub again with `open == false`).
@@ -200,6 +237,9 @@ pub fn show(s: &mut NguiScreen, st: &mut ModeSelect, assets: &AssetServer, data:
     }
     st.open = open;
     st.mode = mode.min(MODES.len() - 1);
+    if open {
+        lay_out_cells(s, st);
+    }
     if let Some(i) = s.find("ModeMapSelector (OFF)") {
         s.set_active(i, open);
     }
@@ -258,6 +298,7 @@ pub fn click(s: &mut NguiScreen, st: &mut ModeSelect, node: usize) -> bool {
     }
     if let Some(&(_, k)) = st.tabs.iter().find(|(h, _)| *h == node) {
         st.mode = k;
+        lay_out_cells(s, st);
         refresh(s, st);
         return true;
     }
@@ -282,7 +323,7 @@ pub fn scroll(
     st.scroll = (st.scroll - d * 120.0).clamp(0.0, st.max_scroll);
     for mut s in &mut screens {
         if s.nodes.first().is_some_and(|n| n.name == "AllModesView") {
-            for (&(c, _), &x) in st.cells.iter().zip(&st.cell_x) {
+            for &(c, x) in &st.cell_x {
                 let y = s.nodes[c].pos[1];
                 let y = s.pos_override.get(&c).map_or(y, |p| p.y);
                 s.set_pos(c, Vec2::new(x - st.scroll, y));

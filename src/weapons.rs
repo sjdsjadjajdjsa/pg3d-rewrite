@@ -152,6 +152,8 @@ pub struct Weapon {
     pub rocket: Option<RocketDef>,
     /// damage multiplier for hits on a head (BalanceWeaponsCore "H", default HeadShotCoef 1.4)
     pub head_coef: f32,
+    /// speed the Reload clip plays at (reload_time = clip length / this)
+    pub reload_speed: f32,
     pub sounds: HashMap<String, Handle<AudioSource>>,
 }
 
@@ -162,12 +164,18 @@ struct HeadCoefs {
     head: HashMap<String, f32>,
     #[serde(default)]
     head_default: Option<f32>,
+    /// Weapons "R": speed of the Reload animation (BalanceController; 1 if absent)
+    #[serde(default)]
+    reload_speed: HashMap<String, f32>,
 }
 
 impl HeadCoefs {
     fn get(&self, weapon: &str) -> f32 {
         let num = weapon.trim_start_matches("Weapon");
         self.head.get(num).copied().or(self.head_default).unwrap_or(1.4).max(1.0)
+    }
+    fn reload_speed(&self, weapon: &str) -> f32 {
+        self.reload_speed.get(weapon.trim_start_matches("Weapon")).copied().filter(|v| *v > 0.05).unwrap_or(1.0)
     }
 }
 
@@ -293,7 +301,8 @@ fn load_loadout(mut commands: Commands, data: Res<DataDir>, assets: Res<AssetSer
             name: name.to_string(),
             def: def.clone(),
             fire_interval: anim("Shoot", 0.3),
-            reload_time: anim("Reload", 1.5),
+            reload_time: anim("Reload", 1.5) / heads.reload_speed(name),
+            reload_speed: heads.reload_speed(name),
             clip,
             reserve: (def.maxAmmo - clip).max(0),
             spread: 0.0,
@@ -690,8 +699,13 @@ fn animate_view_model(
         if let Some(name) = request {
             if let Some(n) = node(name) {
                 ap.stop_all();
-                // clip lengths already equal the gameplay timings (fire interval, reload time)
+                // the Shoot clip's length is the fire interval; Reload plays at the weapon's
+                // balance reload speed (so it lasts reload_time)
+                let speed = if name == "Reload" { w.reload_speed } else { 1.0 };
                 ap.play(n).replay();
+                if let Some(a) = ap.animation_mut(n) {
+                    a.set_speed(speed);
+                }
                 continue;
             }
         }

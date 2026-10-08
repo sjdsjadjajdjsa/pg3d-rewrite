@@ -397,12 +397,13 @@ pub fn test_click(
     if *done >= names.len() || time.elapsed_secs() < 2.0 * (*done + 1) as f32 {
         return;
     }
-    let name = names[*done];
+    // "Name#k": the k-th visible button of that name (cloned tabs / cells)
+    let (name, nth) = names[*done].split_once('#').map_or((names[*done], 0), |(n, k)| (n, k.parse().unwrap_or(0)));
     for (e, s, vis) in &screens {
         if !vis.get() {
             continue;
         }
-        let node = (0..s.nodes.len()).find(|&i| s.nodes[i].name == name && s.nodes[i].button.is_some() && s.visible(i));
+        let node = (0..s.nodes.len()).filter(|&i| s.nodes[i].name == name && s.nodes[i].button.is_some() && s.visible(i)).nth(nth);
         if let Some(node) = node.or_else(|| s.nodes.iter().position(|n| n.name == name)) {
             info!("test click {name}");
             out.write(crate::ngui::NguiClick { screen: e, node, name: name.to_string() });
@@ -522,7 +523,7 @@ fn lobby_clicks(
                 let map = sel.map.clone().or_else(|| {
                     // Random Map
                     let t = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.subsec_nanos() as usize);
-                    let ok: Vec<&String> = maps.iter().filter(|m| crate::mode_select::preview(&data, m).is_some()).collect();
+                    let ok = crate::mode_select::mode_maps(&sel, &maps, &data);
                     (!ok.is_empty()).then(|| ok[t % ok.len()].clone())
                 });
                 if let Some(map) = map {
@@ -768,6 +769,10 @@ pub fn relaunch_with(map: Option<&str>, sandbox: bool) {
 /// `mode`: PG3D_MODE of the new copy (None: the zombie campaign).
 pub fn relaunch_mode(map: Option<&str>, sandbox: bool, mode: Option<&str>) {
     let Ok(exe) = std::env::current_exe() else { return };
+    info!("starting {map:?} mode={mode:?} sandbox={sandbox}");
+    if std::env::var("PG3D_NO_RELAUNCH").is_ok() {
+        return;
+    }
     let mut cmd = std::process::Command::new(exe);
     match mode {
         Some(m) => cmd.env("PG3D_MODE", m),
