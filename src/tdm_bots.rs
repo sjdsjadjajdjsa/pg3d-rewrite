@@ -425,9 +425,9 @@ fn spawn_bots(
             commands.spawn((
                 NameTag(root),
                 Text::new(name),
-                TextFont { font_size: FontSize::Px(14.0), ..default() },
+                TextFont { font: assets.load("fonts/RussoOne-Regular.ttf").into(), font_size: FontSize::Px(14.0), ..default() },
                 TextColor(if team == Team::Blue { Color::srgb(0.3, 0.6, 1.0) } else { Color::srgb(1.0, 0.25, 0.2) }),
-                TextShadow { offset: Vec2::splat(1.0), color: Color::BLACK },
+                TextShadow { offset: Vec2::splat(1.5), color: Color::srgba(0.0, 0.0, 0.0, 0.85) },
                 Node { position_type: PositionType::Absolute, ..default() },
                 Visibility::Hidden,
             ));
@@ -448,6 +448,8 @@ fn hook_up(
     transforms: Query<&Transform>,
     weapons: Query<&Children>,
     meshes: Query<(), With<Mesh3d>>,
+    mats: Query<&MeshMaterial3d<StandardMaterial>>,
+    mut materials: ResMut<Assets<StandardMaterial>>,
 ) {
     for (e, b, mut anim) in &mut bots {
         let all: Vec<Entity> = children.iter_descendants(e).collect();
@@ -473,7 +475,18 @@ fn hook_up(
         anim.bones = bones;
         // as in the Armory (CharacterInterfaceV2): the weapon brings its own arms; the
         // body's arms mesh is hidden
-        let _ = (&meshes, arms);
+        let _ = &meshes;
+        // the prefab's arms are drawn for first person with an unlit shader (Cubic/Universal
+        // with UNLIT); on a body seen from outside they are lit like the body
+        // (Character/BRCharakter), or they glow next to it. A copy, since the material is
+        // shared with your own view model.
+        for d in std::iter::once(arms).chain(children.iter_descendants(arms)) {
+            if let Ok(m) = mats.get(d)
+                && let Some(lit) = materials.get(&m.0).filter(|m| m.unlit).cloned()
+            {
+                commands.entity(d).insert(MeshMaterial3d(materials.add(StandardMaterial { unlit: false, ..lit })));
+            }
+        }
         for d in &all {
             if names.get(*d).is_ok_and(|n| n.as_str() == "rp_arms_mesh") {
                 commands.entity(*d).insert(Visibility::Hidden);
@@ -1186,26 +1199,43 @@ fn movement(
     }
 }
 
-/// Names above the bots' heads (only those you can see).
+/// Player_move_c's NickLabel: a TextMesh in the world (RussoOne, font size 32, character
+/// size 1, scale 0.1, anchored at its bottom centre) 1.486 m above the player's origin, which
+/// sits 1 m above the feet (CharacterController height 1.8, centre -0.1). Text one em tall:
+/// 32 px x 0.1 x 0.1 = 0.32 m.
+const NICK_HEIGHT: f32 = 2.486;
+const NICK_EM: f32 = 0.32;
+
+/// Names above the bots' heads, as the world-space label they are in the original: sized by
+/// distance, the bottom of the text on the label's point. Teammates' names show through walls
+/// (the original has a NickLabelThrueWalls material; GUESS: for teammates), enemies' only when
+/// in sight.
 fn name_tags(
-    mut tags: Query<(&NameTag, &mut Node, &mut Visibility, &ComputedNode)>,
+    mut tags: Query<(&NameTag, &mut Node, &mut Visibility, &mut TextFont, &ComputedNode)>,
     bots: Query<(&GlobalTransform, &PlayerBot)>,
-    camera: Query<(&Camera, &GlobalTransform), With<crate::camera::PlayerCamera>>,
+    camera: Query<(&Camera, &GlobalTransform, &Projection), With<crate::camera::PlayerCamera>>,
     spatial: SpatialQuery,
 ) {
-    let Ok((cam, ct)) = camera.single() else { return };
-    for (tag, mut node, mut vis, cn) in &mut tags {
+    let Ok((cam, ct, proj)) = camera.single() else { return };
+    let fov = if let Projection::Perspective(p) = proj { p.fov } else { 1.0 };
+    let screen_h = cam.logical_viewport_size().map_or(720.0, |s| s.y);
+    for (tag, mut node, mut vis, mut font, cn) in &mut tags {
         let Ok((gt, b)) = bots.get(tag.0) else { continue };
-        let head = gt.translation() + Vec3::Y * 2.2;
+        let head = gt.translation() + Vec3::Y * NICK_HEIGHT;
+        let dist = head.distance(ct.translation());
         let mut shown = false;
         if b.alive()
-            && head.distance(ct.translation()) < 40.0
-            && line_clear(&spatial, ct.translation(), head)
+            && dist < 60.0
+            && (b.team == Team::Blue || line_clear(&spatial, ct.translation(), head))
             && let Ok(p) = cam.world_to_viewport(ct, head)
         {
-            let w = cn.size().x * cn.inverse_scale_factor();
-            node.left = px(p.x - w / 2.0);
-            node.top = px(p.y);
+            let size = (screen_h * NICK_EM / (2.0 * dist.max(0.1) * (fov / 2.0).tan())).clamp(10.0, 30.0);
+            if font.font_size != FontSize::Px(size.round()) {
+                font.font_size = FontSize::Px(size.round());
+            }
+            let sz = cn.size() * cn.inverse_scale_factor();
+            node.left = px(p.x - sz.x / 2.0);
+            node.top = px(p.y - sz.y);
             shown = true;
         }
         *vis = if shown { Visibility::Inherited } else { Visibility::Hidden };
