@@ -42,6 +42,9 @@ def main():
         "prices": eco["WeaponPrices"],
         "economy": {k: {f: v.get(f) for f in ("L", "L3", "G", "PC", "BC", "UC")} for k, v in weco.items()},
         "shop": {k: {f: v.get(f) for f in ("SR", "A", "SM", "DC", "L")} for k, v in wb.items()},
+        # reload speed per weapon number (Weapons "R"; BalanceController hands it to the
+        # Reload animation's speed, default 1): reload time = Reload clip length / R
+        "reload_speed": {k: v["R"] for k, v in wb.items() if v.get("R")},
         # headshot damage multiplier per weapon number (WeaponsCore "H", else Weapons "H");
         # weapons without one use BalanceOthers HeadShotCoef
         "head": {k: v["H"] for k, v in {**{k: v for k, v in wb.items() if "H" in v},
