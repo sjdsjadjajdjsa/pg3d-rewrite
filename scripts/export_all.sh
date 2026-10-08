@@ -24,7 +24,7 @@ done
 echo "== menu (lobby UI, lobby scene, character)"
 $PY scripts/export_ngui.py level17 MainMenuNGUI lobby 2>/dev/null | grep -E '^(lobby|strings)'
 $PY scripts/export_map.py level17 --out lobby --skip MainMenuNGUI FriendsWindowGUI \
-  --prefab slo_seasonlobby_current:SeasonLobbyRoot 2>/dev/null | grep -E '^\{' | cut -c1-120
+  --prefab slo_seasonlobby_cyber_oriental_season:SeasonLobbyRoot 2>/dev/null | grep -E '^\{' | cut -c1-120
 $PY scripts/export_character.py 2>/dev/null | grep '^character' | cut -c1-120
 $PY scripts/export_ngui.py resources.assets AllModesView modes 2>/dev/null | grep -E '^modes'
 $PY scripts/export_ngui.py resources.assets NetworkStartTableNGUI table 2>/dev/null | grep -E '^table'
