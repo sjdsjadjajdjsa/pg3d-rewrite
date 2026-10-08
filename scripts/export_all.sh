@@ -45,6 +45,7 @@ $PY scripts/export_rays.py 2>/dev/null | grep -E '^rays'
 python3 scripts/export_balance.py | grep -E '^balance'
 python3 scripts/export_effects.py | grep -E '^effects'
 $PY scripts/export_profiles.py 2>/dev/null | grep -E '^profiles'
+python3 scripts/export_weapon_skins.py
 echo "== rockets"
 [ -f private/index/rockets.tsv ] || $PY scripts/find_behaviours.py RocketSettings > private/index/rockets.tsv
 $PY scripts/export_rockets.py 2>/dev/null | grep -E '^model'
