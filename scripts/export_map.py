@@ -356,8 +356,10 @@ class Exporter:
             self.textures[key] = idx
         return self.textures[key]
 
-    def material(self, mat_ptr):
-        key = ptr_key(mat_ptr)
+    def material(self, mat_ptr, no_lightmap=False):
+        """`no_lightmap`: the renderer has no baked lightmap, so Cubic/Universal's UNLIT
+        keyword counts even in map exports (season lobby decor, props placed by code)."""
+        key = (ptr_key(mat_ptr), no_lightmap and not self.unlit_keywords)
         if key in self.materials:
             return self.materials[key]
         mat = deref(mat_ptr)
@@ -411,7 +413,7 @@ class Exporter:
             s = shader_name.lower()
             # Cubic/Universal (most game objects) switches lighting off per material with the
             # UNLIT keyword (set by its misleadingly named _LightingEnable toggle)
-            unlit_material = self.unlit_keywords and ("UNLIT" in keywords or "particle" in mat.m_Name.lower())
+            unlit_material = (self.unlit_keywords or no_lightmap) and ("UNLIT" in keywords or "particle" in mat.m_Name.lower())
             if "cutout" in s or "alphatest" in s or "cutoff" in s:
                 out["alphaMode"], out["alphaCutoff"] = "MASK", 0.5
                 out["doubleSided"] = True
@@ -772,7 +774,7 @@ class Exporter:
                 prim = {"attributes": attrs,
                         "indices": self.vis.accessor(tri.flatten().astype(np.uint32), "SCALAR", 34963)}
                 if mats:
-                    prim["material"] = self.material(mats[min(i, len(mats) - 1)])
+                    prim["material"] = self.material(mats[min(i, len(mats) - 1)], no_lightmap=extras is None)
                 prims.append(prim)
                 self.stats["triangles"] += len(tri)
             self.vis.doc["meshes"].append({"name": md["name"], "primitives": prims} if prims else None)
