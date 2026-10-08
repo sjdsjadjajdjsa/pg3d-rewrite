@@ -10,6 +10,7 @@
 //!           left mouse = fire, R = reload, 1-6 / wheel = switch weapon,
 //!           V = toggle walk / fly camera, F12 = screenshot, F10 = back to menu.
 
+mod animator;
 mod armory;
 mod armory_preview;
 mod beams;

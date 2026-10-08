@@ -22,6 +22,7 @@ use bevy::{
     window::{CursorGrabMode, CursorOptions},
 };
 use crate::ngui::NguiScreen;
+use bevy::camera::primitives::Aabb;
 use serde::Deserialize;
 
 #[allow(unused_imports)]
@@ -44,7 +45,7 @@ impl crate::scene::ScenePlugin for TdmBotsPlugin {
         app.init_resource::<TdmScores>()
             .add_systems(Startup, (spawn_bots.after(crate::player::spawn_player), spawn_respawn_screen))
             .add_systems(FixedUpdate, (brain, movement).chain())
-            .add_systems(Update, (hook_up, animate_bodies, take_damage, player_killed, respawn, name_tags, death_view))
+            .add_systems(Update, (hook_up, animate_bodies, trace_visibility, take_damage, player_killed, respawn, name_tags, death_view))
             .add_systems(PostUpdate, bot_view);
     }
 }
@@ -169,58 +170,20 @@ struct BotSetup {
     blue_spawns: Vec<Vec3>,
     red_spawns: Vec<Vec3>,
     roam: Vec<Vec3>,
-    /// the player body's clips (export_player_anims.py: RoyalePlayerAnimController)
-    anims: std::collections::HashMap<String, Clip>,
+    /// the player body's Animator (export_player_anims.py: FPSPlayerAnimController)
+    body: Option<std::sync::Arc<crate::animator::Controller>>,
 }
 
-/// One body animation (same layout as the weapons' profile.json).
-#[derive(Deserialize, Clone, Default)]
-struct Clip {
-    length: f32,
-    fps: f32,
-    tracks: Vec<ClipTrack>,
-}
-
-#[derive(Deserialize, Clone, Default)]
-struct ClipTrack {
-    path: String,
-    #[serde(default)]
-    rotation: Vec<[f32; 4]>,
-    #[serde(default)]
-    translation: Vec<[f32; 3]>,
-}
-
-impl Clip {
-    /// Bone rotation / position of track `k` at `t` seconds (looping).
-    fn sample(&self, k: usize, t: f32) -> (Option<Quat>, Option<Vec3>) {
-        let tr = &self.tracks[k];
-        let t = if self.length > 0.0 { t.rem_euclid(self.length) } else { 0.0 };
-        let f = t * self.fps.max(1.0);
-        let (i, a) = (f.floor() as usize, f.fract());
-        let pick = |n: usize| (i.min(n.saturating_sub(1)), (i + 1).min(n.saturating_sub(1)));
-        let rot = (!tr.rotation.is_empty()).then(|| {
-            let (i0, i1) = pick(tr.rotation.len());
-            Quat::from_array(tr.rotation[i0]).slerp(Quat::from_array(tr.rotation[i1]), a)
-        });
-        let pos = (!tr.translation.is_empty()).then(|| {
-            let (i0, i1) = pick(tr.translation.len());
-            Vec3::from(tr.translation[i0]).lerp(Vec3::from(tr.translation[i1]), a)
-        });
-        (rot, pos)
-    }
-}
-
-/// A bot's body bones by path (below Royale_Player_body) and the animation state.
+/// The values PlayerAnimationWrapper.LateUpdate keeps between frames to drive the body's
+/// Animator for a player seen from outside.
 #[derive(Component, Default)]
 struct BodyAnim {
-    bones: std::collections::HashMap<String, Entity>,
-    /// bones' rest pose, for tracks a clip doesn't key
-    rest: std::collections::HashMap<Entity, (Quat, Vec3)>,
-    clip: String,
-    prev: String,
-    fade: f32,
-    time: f32,
-    prev_time: f32,
+    /// MovingDirectionX / Y as they ease towards the movement direction
+    dir: Vec2,
+    rotation_x: f32,
+    prev_yaw: f32,
+    prev_hurt: f32,
+    was_grounded: bool,
 }
 
 /// What a bot is aiming at.
@@ -346,17 +309,16 @@ fn spawn_bots(
 ) {
     let (blue_spawns, red_spawns, roam) = spawn_points(&markers);
     let _ = &mut graphs;
-    let anims: std::collections::HashMap<String, Clip> = std::fs::read_to_string(data.0.join("characters/player_body/anims.json"))
-        .ok()
-        .and_then(|t| serde_json::from_value::<serde_json::Map<String, serde_json::Value>>(serde_json::from_str(&t).ok()?).ok())
-        .map(|m| m.into_iter().filter_map(|(k, v)| serde_json::from_value(v).ok().map(|c| (k, c))).collect())
-        .unwrap_or_default();
+    let body = crate::animator::Controller::load(&data.0.join("characters/player_body/anims.json")).map(std::sync::Arc::new);
+    if body.is_none() {
+        warn!("bots: no body animator (run export_player_anims.py)");
+    }
     let setup = BotSetup {
         tuning: Tuning::load(&data.0),
         blue_spawns: blue_spawns.clone(),
         red_spawns: red_spawns.clone(),
         roam: if roam.is_empty() { blue_spawns.iter().chain(&red_spawns).copied().collect() } else { roam },
-        anims,
+        body,
     };
     // you start with your team
     if let (Ok((mut t, mut p)), Some(&s)) = (player.single_mut(), blue_spawns.first()) {
@@ -440,6 +402,7 @@ fn spawn_bots(
                     TransformInterpolation,
                     WorldAssetRoot(assets.load(GltfAssetLabel::Scene(0).from_asset("characters/player_body/body.gltf"))),
                     BodyAnim::default(),
+                    crate::animator::Animator::default(),
                 ))
                 .id();
             commands.entity(root).with_children(|c| {
@@ -476,7 +439,7 @@ fn spawn_bots(
 #[allow(clippy::too_many_arguments)]
 fn hook_up(
     mut commands: Commands,
-    mut bots: Query<(Entity, &PlayerBot, &mut BodyAnim), Without<Hooked>>,
+    mut bots: Query<(Entity, &PlayerBot, &mut crate::animator::Animator), Without<Hooked>>,
     children: Query<&Children>,
     names: Query<&Name>,
     transforms: Query<&Transform>,
@@ -505,7 +468,6 @@ fn hook_up(
             }
         }
         anim.bones = bones;
-        anim.clip = "Idle_v02".into();
         // as in the Armory (CharacterInterfaceV2): the weapon brings its own arms; the
         // body's arms mesh is hidden
         let _ = (&meshes, arms);
@@ -521,86 +483,121 @@ fn hook_up(
     }
 }
 
-/// Pick the body clip from how the bot moves relative to where it faces (the original's
-/// locomotion blend: run forward / 45 / sideways / backward, standing idle, in the air) and
-/// play it, cross-fading 0.15 s; "TakeDamage" plays over it for a moment when hit.
+/// PlayerAnimationWrapper.LateUpdate for a player seen from outside: the Animator's
+/// parameters from how the body moved this frame, then the controller plays them.
+///
+/// * MovingSpeed: metres per second moved. MovingDirectionX/Y: the move direction in the
+///   body's frame (x right, y forward) at full length once moving faster than a tenth of
+///   the run speed, eased towards at networkAnimationsLerpSpeed (4 per second).
+/// * MovingRotationX: turning, eased the same way; RotationSpeed: rotationMoveSpeedModifier
+///   (0.05) x degrees turned per second.
+/// * Jump on leaving the ground upwards, State 3 (falling) while in the air, IsGrounded.
+/// * PlayGetHit: one of TakeDamage / TakeDamage2 / TakeDamage3 at random (additive layer).
 fn animate_bodies(
     time: Res<Time>,
     setup: Option<Res<BotSetup>>,
-    mut bots: Query<(&PlayerBot, &mut BodyAnim)>,
+    mut bots: Query<(&mut PlayerBot, &mut BodyAnim, &mut crate::animator::Animator)>,
     mut tf: Query<&mut Transform, Without<PlayerBot>>,
 ) {
-    let Some(setup) = setup else { return };
+    let Some(ctrl) = setup.and_then(|s| s.body.clone()) else { return };
     let dt = time.delta_secs();
-    for (b, mut a) in &mut bots {
-        if a.bones.is_empty() || !b.alive() || std::env::var("PG3D_NOBODYANIM").is_ok() {
+    if dt <= 0.0 {
+        return;
+    }
+    for (mut b, mut a, mut anim) in &mut bots {
+        if anim.bones.is_empty() || !b.alive() {
             continue;
         }
+        // movement in the body's frame; the model's right is -X (Unity's +X, mirrored)
         let v = Vec3::new(b.velocity.x, 0.0, b.velocity.z);
         let speed = v.length();
-        let fwd = Quat::from_rotation_y(b.yaw) * Vec3::Z;
-        // the model's right is -X (Unity's +X, mirrored by the export)
-        let right = Quat::from_rotation_y(b.yaw) * Vec3::NEG_X;
-        let want = if !b.grounded && b.air > 0.25 {
-            "Jump_idle"
-        } else if speed < 0.6 {
-            "Idle_v02"
-        } else {
-            let ang = v.dot(right).atan2(v.dot(fwd)).to_degrees();
-            match ang {
-                a if a.abs() < 22.5 => "run_forward",
-                a if a.abs() > 157.5 => "run_backward",
-                a if (22.5..67.5).contains(&a) => "run_forward_right_45",
-                a if (67.5..112.5).contains(&a) => "run_right",
-                a if a >= 112.5 => "walk_backward_right_v2",
-                a if (-67.5..-22.5).contains(&a) => "run_forward_left_45",
-                a if (-112.5..-67.5).contains(&a) => "run_left",
-                _ => "walk_backward_left_v2",
-            }
-        };
-        if want != a.clip && setup.anims.contains_key(want) {
-            a.prev = std::mem::replace(&mut a.clip, want.to_string());
-            a.prev_time = a.time;
-            a.time = 0.0;
-            a.fade = 0.0;
+        let rot = Quat::from_rotation_y(b.yaw);
+        let local = Vec2::new(v.dot(rot * Vec3::NEG_X), v.dot(rot * Vec3::Z));
+        let target = if speed / RUN_SPEED >= 0.1 { local.normalize_or_zero() } else { Vec2::ZERO };
+        a.dir = move_towards(a.dir, target, NETWORK_LERP * dt);
+        // turning (degrees this frame; left is negative as in Unity)
+        // (our yaw grows turning left; Unity's grows turning right)
+        let delta = (b.yaw - a.prev_yaw + std::f32::consts::PI).rem_euclid(std::f32::consts::TAU) - std::f32::consts::PI;
+        let turned = -delta.to_degrees();
+        a.prev_yaw = b.yaw;
+        let rot_target = (turned / dt / 180.0).clamp(-1.0, 1.0);
+        a.rotation_x += (rot_target - a.rotation_x).clamp(-NETWORK_LERP * dt, NETWORK_LERP * dt);
+        let rotation_speed = (0.05 * turned.abs() / dt).min(MAX_ROTATION_SPEED);
+        anim.set("MovingSpeed", speed);
+        anim.set("MovingDirectionX", a.dir.x);
+        anim.set("MovingDirectionY", a.dir.y);
+        anim.set("MovingRotationX", a.rotation_x);
+        anim.set("RotationSpeed", if speed > 0.01 { 0.0 } else { rotation_speed });
+        anim.set_bool("IsGrounded", b.grounded);
+        anim.set("State", if !b.grounded && b.air > FALLING_AFTER { 3.0 } else { 0.0 });
+        if a.was_grounded && !b.grounded && b.velocity.y > 1.0 {
+            anim.trigger("Jump");
         }
-        // run clips are made for full running speed
-        let rate = if a.clip.starts_with("run") || a.clip.starts_with("walk") { (speed / RUN_SPEED).clamp(0.5, 1.4) } else { 1.0 };
-        a.time += dt * rate;
-        a.prev_time += dt * rate;
-        a.fade = (a.fade + dt / 0.15).min(1.0);
-        let mut pose: std::collections::HashMap<Entity, (Quat, Vec3)> = std::collections::HashMap::new();
-        let apply = |name: &str, t: f32, w: f32, pose: &mut std::collections::HashMap<Entity, (Quat, Vec3)>| {
-            let Some(c) = setup.anims.get(name) else { return };
-            for (k, tr) in c.tracks.iter().enumerate() {
-                let Some(&e) = a.bones.get(&tr.path) else { continue };
-                let rest = a.rest.get(&e).copied().unwrap_or((Quat::IDENTITY, Vec3::ZERO));
-                let (r, p) = c.sample(k, t);
-                let cur = pose.entry(e).or_insert(rest);
-                if let Some(r) = r {
-                    cur.0 = cur.0.slerp(r, w);
-                }
-                if let Some(p) = p {
-                    cur.1 = cur.1.lerp(p, w);
+        a.was_grounded = b.grounded;
+        if b.hurt > a.prev_hurt {
+            let k = (b.rand() * 3.0) as u32;
+            anim.trigger(["TakeDamage", "TakeDamage2", "TakeDamage3"][k.min(2) as usize]);
+        }
+        a.prev_hurt = b.hurt;
+        if std::env::var("PG3D_NOBODYANIM").is_ok() {
+            continue;
+        }
+        anim.update(&ctrl, dt);
+        anim.apply(&ctrl, &mut tf);
+        if std::env::var("PG3D_TRACE_POSE").is_ok() && (time.elapsed_secs() % 2.0) < dt {
+            let pose = anim.pose(&ctrl);
+            for (path, e) in &anim.bones {
+                if let (Some(p), Some(r)) = (pose.get(e), anim.rest.get(e))
+                    && (p.1.distance(r.1) > 0.3 || !p.0.is_finite() || !p.1.is_finite())
+                {
+                    info!("pose {path}: rest {:.2} now {:.2} rot {:.2}", r.1, p.1, p.0);
                 }
             }
-        };
-        if a.fade < 1.0 && !a.prev.is_empty() {
-            let prev = a.prev.clone();
-            apply(&prev, a.prev_time, 1.0, &mut pose);
         }
-        let clip = a.clip.clone();
-        apply(&clip, a.time, if a.prev.is_empty() { 1.0 } else { a.fade }, &mut pose);
-        if b.hurt > 0.0 {
-            apply("TakeDamage", 0.27 - b.hurt, 0.8, &mut pose);
+        if std::env::var("PG3D_TRACE_ANIM").is_ok() && (time.elapsed_secs() % 1.0) < dt {
+            info!(
+                "bot anim {:?}: {} speed={speed:.1} dir={:.2} rotX={:.2} grounded={}",
+                b.team,
+                anim.state_name(&ctrl, 0).unwrap_or("-"),
+                a.dir,
+                a.rotation_x,
+                b.grounded
+            );
         }
-        for (e, (r, p)) in pose {
-            if let Ok(mut t) = tf.get_mut(e) {
-                t.rotation = r;
-                t.translation = p;
+    }
+}
+
+#[allow(clippy::type_complexity)]
+/// PG3D_TRACE_VIS=1: is each bot's body actually drawn (meshes in view, finite transforms)?
+fn trace_visibility(
+    time: Res<Time>,
+    bots: Query<(Entity, &PlayerBot)>,
+    children: Query<&Children>,
+    meshes: Query<(&Name, &GlobalTransform, &ViewVisibility, &InheritedVisibility, Option<&Aabb>), With<Mesh3d>>,
+) {
+    if std::env::var("PG3D_TRACE_VIS").is_err() || (time.elapsed_secs() % 3.0) >= time.delta_secs() {
+        return;
+    }
+    for (e, b) in bots.iter().take(3) {
+        for d in children.iter_descendants(e) {
+            if let Ok((n, g, vv, iv, aabb)) = meshes.get(d) {
+                info!("vis {:?} alive={} {n}: pos {:.2} scale {:.3} inherited={} drawn={} aabb={:?}", b.team, b.alive(), g.translation(), g.scale(), iv.get(), vv.get(), aabb.map(|a| a.half_extents));
             }
         }
     }
+}
+
+/// PlayerAnimationWrapper.networkAnimationsLerpSpeed (constructor default).
+const NETWORK_LERP: f32 = 4.0;
+/// RotationSpeed's cap (a static of the original we haven't read; GUESS).
+const MAX_ROTATION_SPEED: f32 = 2.0;
+/// Seconds in the air before the falling pose (State 3; GUESS — the original sets it from
+/// its controller's falling check).
+const FALLING_AFTER: f32 = 0.35;
+
+fn move_towards(a: Vec2, b: Vec2, step: f32) -> Vec2 {
+    let d = b - a;
+    if d.length() <= step { b } else { a + d.normalize() * step }
 }
 
 /// Where to stand for a spawn marker: on the floor under it (markers float a little;
@@ -982,11 +979,13 @@ fn movement(
         let ray = |from: Vec3, d: Vec3, len: f32| Dir3::new(d).ok().and_then(|d| spatial.cast_ray(from, d, len, true, &world)).is_some();
         let feet = t.translation;
         let mut want_jump = false;
+        let mut why = "";
         if dir != Vec3::ZERO {
             let knee = ray(feet + Vec3::Y * 0.35, dir, 0.9);
             let chest = ray(feet + Vec3::Y * 1.3, dir, 0.9);
             if knee && !chest {
                 want_jump = true;
+                why = "knee";
             } else if chest && b.detour.1 <= 0.0 {
                 let turns = [0.8f32, -0.8, 1.57, -1.57];
                 if let Some(a) = turns.iter().copied().find(|a| {
@@ -999,14 +998,19 @@ fn movement(
         }
         // jump up a ledge on the path (PlayerBotMovement)
         if let Some(&wp) = b.path.first() {
-            let up = wp.y - t.translation.y;
+            // only a real step: the higher point close ahead (a waypoint far away up a slope
+            // or a staircase is walked to)
+            let flat = Vec2::new(wp.x - t.translation.x, wp.z - t.translation.z).length();
+            let up = if flat < 1.6 { wp.y - t.translation.y } else { 0.0 };
             if up > mv.jump_needed_delta_height || (up > 0.3 && b.rand() * 100.0 < mv.jump_when_possible_chance * dt) {
                 want_jump = true;
+                why = "ledge";
             }
         }
         // stuck (blocked, or hanging on an edge): jump, then walk a detour, then pick a new goal
         if b.stuck > 0.3 {
             want_jump = true;
+            why = "stuck";
         }
         if b.stuck > 1.0 && b.detour.1 <= 0.0 {
             let a = if b.rand() < 0.5 { 1.57 } else { -1.57 };
@@ -1022,6 +1026,9 @@ fn movement(
             dir = b.detour.0;
         }
         let standing = b.grounded || (b.velocity.y.abs() < 0.5 && b.stuck > 0.2);
+        if want_jump && standing && std::env::var("PG3D_TRACE_JUMP").is_ok() {
+            info!("bot jump: {why} up={:.2}", b.path.first().map_or(0.0, |w| w.y - t.translation.y));
+        }
         if want_jump && standing {
             b.velocity.y = mv.jump_speed;
             b.grounded = false;
@@ -1057,6 +1064,11 @@ fn movement(
         );
         let before = t.translation;
         t.translation = out.position - off;
+        // move-and-slide only reports the floor on frames it pushes into it: also count a
+        // floor right under the feet while not going up
+        if !grounded && b.velocity.y <= 0.5 {
+            grounded = spatial.cast_ray(t.translation + Vec3::Y * 0.3, Dir3::NEG_Y, 0.45, true, &world).is_some();
+        }
         b.grounded = grounded;
         b.air = if grounded { 0.0 } else { b.air + dt };
         // progress check (horizontal): under a third of the wanted move counts as stuck
