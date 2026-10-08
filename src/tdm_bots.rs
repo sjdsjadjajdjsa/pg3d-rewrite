@@ -17,7 +17,11 @@
 //! Team Fight score box and table show.
 
 use avian3d::prelude::*;
-use bevy::prelude::*;
+use bevy::{
+    prelude::*,
+    window::{CursorGrabMode, CursorOptions},
+};
+use crate::ngui::NguiScreen;
 use serde::Deserialize;
 
 #[allow(unused_imports)]
@@ -38,9 +42,10 @@ impl crate::scene::ScenePlugin for TdmBotsPlugin {
             return;
         }
         app.init_resource::<TdmScores>()
-            .add_systems(Startup, spawn_bots.after(crate::player::spawn_player))
+            .add_systems(Startup, (spawn_bots.after(crate::player::spawn_player), spawn_respawn_screen))
             .add_systems(FixedUpdate, (brain, movement).chain())
-            .add_systems(Update, (hook_up, take_damage, player_killed, respawn, name_tags));
+            .add_systems(Update, (hook_up, animate_bodies, take_damage, player_killed, respawn, name_tags, death_view))
+            .add_systems(PostUpdate, bot_view);
     }
 }
 
@@ -51,6 +56,14 @@ const RESPAWN: f32 = 3.0;
 const GRAVITY: f32 = 9.81;
 /// Bots run at the player's speed.
 const RUN_SPEED: f32 = crate::player::WALK_SPEED;
+/// Height of the bots' first-person weapon rig's eye (at the chest; GUESS, looks right).
+const BOT_EYE: f32 = 1.3;
+/// Turn rate while roaming, rad/s (aiming uses the bot's own rotationSpeed).
+const ROAM_TURN: f32 = 4.0;
+/// Horizontal acceleration, m/s² (full speed in about a quarter second).
+const ACCEL: f32 = 22.0;
+/// Strafing tops out at this share of running speed.
+const STRAFE_MAX: f32 = 0.65;
 /// Weapons bots carry (exported primaries).
 const BOT_WEAPONS: [&str; 4] = ["Weapon3", "Weapon2", "Weapon9", "Weapon1"];
 
@@ -78,6 +91,8 @@ pub struct TdmScores {
     pub rows: Vec<ScoreRow>,
     /// the bot that last hurt the player (gets the kill)
     last_hit_player: Option<Entity>,
+    /// per bot row: (your kills of it, its kills of you) — the respawn window's "You VS Rival"
+    vs: std::collections::HashMap<usize, (i32, i32)>,
 }
 
 #[derive(Deserialize, Default, Clone)]
@@ -154,8 +169,58 @@ struct BotSetup {
     blue_spawns: Vec<Vec3>,
     red_spawns: Vec<Vec3>,
     roam: Vec<Vec3>,
-    graph: Handle<AnimationGraph>,
-    idle: AnimationNodeIndex,
+    /// the player body's clips (export_player_anims.py: RoyalePlayerAnimController)
+    anims: std::collections::HashMap<String, Clip>,
+}
+
+/// One body animation (same layout as the weapons' profile.json).
+#[derive(Deserialize, Clone, Default)]
+struct Clip {
+    length: f32,
+    fps: f32,
+    tracks: Vec<ClipTrack>,
+}
+
+#[derive(Deserialize, Clone, Default)]
+struct ClipTrack {
+    path: String,
+    #[serde(default)]
+    rotation: Vec<[f32; 4]>,
+    #[serde(default)]
+    translation: Vec<[f32; 3]>,
+}
+
+impl Clip {
+    /// Bone rotation / position of track `k` at `t` seconds (looping).
+    fn sample(&self, k: usize, t: f32) -> (Option<Quat>, Option<Vec3>) {
+        let tr = &self.tracks[k];
+        let t = if self.length > 0.0 { t.rem_euclid(self.length) } else { 0.0 };
+        let f = t * self.fps.max(1.0);
+        let (i, a) = (f.floor() as usize, f.fract());
+        let pick = |n: usize| (i.min(n.saturating_sub(1)), (i + 1).min(n.saturating_sub(1)));
+        let rot = (!tr.rotation.is_empty()).then(|| {
+            let (i0, i1) = pick(tr.rotation.len());
+            Quat::from_array(tr.rotation[i0]).slerp(Quat::from_array(tr.rotation[i1]), a)
+        });
+        let pos = (!tr.translation.is_empty()).then(|| {
+            let (i0, i1) = pick(tr.translation.len());
+            Vec3::from(tr.translation[i0]).lerp(Vec3::from(tr.translation[i1]), a)
+        });
+        (rot, pos)
+    }
+}
+
+/// A bot's body bones by path (below Royale_Player_body) and the animation state.
+#[derive(Component, Default)]
+struct BodyAnim {
+    bones: std::collections::HashMap<String, Entity>,
+    /// bones' rest pose, for tracks a clip doesn't key
+    rest: std::collections::HashMap<Entity, (Quat, Vec3)>,
+    clip: String,
+    prev: String,
+    fade: f32,
+    time: f32,
+    prev_time: f32,
 }
 
 /// What a bot is aiming at.
@@ -179,11 +244,24 @@ pub struct PlayerBot {
     goal: Vec3,
     path: Vec<Vec3>,
     repath: f32,
-    dodge: f32,
     dodge_dir: f32,
     next_shot: f32,
     respawn_in: f32,
     rng: u32,
+    /// seconds in the air (short hops don't switch to the jump pose)
+    air: f32,
+    /// seconds left of the "hit" flinch (TakeDamage)
+    hurt: f32,
+    /// seconds left of a strafe burst (0: not strafing)
+    strafe: f32,
+    /// next moment to consider strafing while shooting
+    strafe_check: f32,
+    /// seconds before the first shot at a newly seen target (reaction time)
+    react: f32,
+    /// 0.6 .. 1.0: how well this bot aims and how fast it reacts
+    skill: f32,
+    /// distance it likes to fight at
+    fight_dist: f32,
     /// seconds without getting anywhere, and a detour being walked (direction, seconds)
     stuck: f32,
     detour: (Vec3, f32),
@@ -192,6 +270,7 @@ pub struct PlayerBot {
     interval: f32,
     shoot_sound: Option<Handle<AudioSource>>,
     weapon: Option<Entity>,
+    weapon_name: &'static str,
 }
 
 impl PlayerBot {
@@ -266,15 +345,18 @@ fn spawn_bots(
     spatial: SpatialQuery,
 ) {
     let (blue_spawns, red_spawns, roam) = spawn_points(&markers);
-    let (graph, idle) =
-        AnimationGraph::from_clip(assets.load(GltfAssetLabel::Animation(0).from_asset("characters/default/character.gltf")));
+    let _ = &mut graphs;
+    let anims: std::collections::HashMap<String, Clip> = std::fs::read_to_string(data.0.join("characters/player_body/anims.json"))
+        .ok()
+        .and_then(|t| serde_json::from_value::<serde_json::Map<String, serde_json::Value>>(serde_json::from_str(&t).ok()?).ok())
+        .map(|m| m.into_iter().filter_map(|(k, v)| serde_json::from_value(v).ok().map(|c| (k, c))).collect())
+        .unwrap_or_default();
     let setup = BotSetup {
         tuning: Tuning::load(&data.0),
         blue_spawns: blue_spawns.clone(),
         red_spawns: red_spawns.clone(),
         roam: if roam.is_empty() { blue_spawns.iter().chain(&red_spawns).copied().collect() } else { roam },
-        graph: graphs.add(graph),
-        idle,
+        anims,
     };
     // you start with your team
     if let (Ok((mut t, mut p)), Some(&s)) = (player.single_mut(), blue_spawns.first()) {
@@ -319,10 +401,16 @@ fn spawn_bots(
                 goal: at,
                 path: vec![],
                 repath: 0.0,
-                dodge: 0.0,
                 dodge_dir: 1.0,
                 next_shot: 1.0,
                 respawn_in: 0.0,
+                air: 0.0,
+                hurt: 0.0,
+                strafe: 0.0,
+                strafe_check: 1.0,
+                react: 0.0,
+                skill: 1.0,
+                fight_dist: 10.0,
                 stuck: 0.0,
                 detour: (Vec3::ZERO, 0.0),
                 rng: 0x9E37_79B9 ^ (k as u32 * 7919 + 1),
@@ -330,8 +418,12 @@ fn spawn_bots(
                 interval,
                 shoot_sound: info.sounds.get("shoot").map(|r| assets.load(format!("weapons/{wname}/{r}"))),
                 weapon: None,
+                weapon_name: wname,
             };
             bot.turn_speed = tc.rotation_speed_min + (tc.rotation_speed_max - tc.rotation_speed_min) * bot.rand();
+            // GUESS (for fun): mixed skill, each bot with its own favourite range
+            bot.skill = 0.6 + 0.4 * bot.rand();
+            bot.fight_dist = 7.0 + 9.0 * bot.rand();
             let layers = if team == Team::Red {
                 // enemies: hit by your bullets
                 CollisionLayers::new(Layer::Enemy, LayerMask::ALL)
@@ -346,7 +438,8 @@ fn spawn_bots(
                     RigidBody::Kinematic,
                     CustomPositionIntegration,
                     TransformInterpolation,
-                    WorldAssetRoot(assets.load(GltfAssetLabel::Scene(0).from_asset("characters/default/character.gltf"))),
+                    WorldAssetRoot(assets.load(GltfAssetLabel::Scene(0).from_asset("characters/player_body/body.gltf"))),
+                    BodyAnim::default(),
                 ))
                 .id();
             commands.entity(root).with_children(|c| {
@@ -378,39 +471,135 @@ fn spawn_bots(
     commands.insert_resource(setup);
 }
 
-/// Once a bot's character has loaded: idle animation, the weapon in its hand at the
-/// character's Weapon_point (CharacterInterfaceV2's placement), the character's own arms
-/// hidden (the weapon brings its arms), the weapon's muzzle point hidden until it fires.
+/// Once a bot's body has loaded: its bones by path, the weapon (with its own arms) at the
+/// body's WeaponPoint (the original's weaponPointNotMine).
 #[allow(clippy::too_many_arguments)]
 fn hook_up(
     mut commands: Commands,
-    setup: Option<Res<BotSetup>>,
-    bots: Query<(Entity, &PlayerBot), Without<Hooked>>,
+    mut bots: Query<(Entity, &PlayerBot, &mut BodyAnim), Without<Hooked>>,
     children: Query<&Children>,
     names: Query<&Name>,
-    mut players: Query<&mut AnimationPlayer>,
+    transforms: Query<&Transform>,
+    weapons: Query<&Children>,
+    meshes: Query<(), With<Mesh3d>>,
 ) {
-    let Some(setup) = setup else { return };
-    for (e, b) in &bots {
+    for (e, b, mut anim) in &mut bots {
         let all: Vec<Entity> = children.iter_descendants(e).collect();
-        let Some(point) = all.iter().copied().find(|d| names.get(*d).is_ok_and(|n| n.as_str() == "Weapon_point")) else { continue };
-        let Some(ap) = all.iter().copied().find(|d| players.contains(*d)) else { continue };
-        if let Ok(mut p) = players.get_mut(ap) {
-            p.play(setup.idle).repeat();
+        let Some(root) = all.iter().copied().find(|d| names.get(*d).is_ok_and(|n| n.as_str() == "Royale_Player_body")) else { continue };
+        let _ = &transforms;
+        // the weapon must have loaded too (its arm mesh is hidden below)
+        let Some(w) = b.weapon else { continue };
+        let wall: Vec<Entity> = weapons.iter_descendants(w).collect();
+        let Some(arms) = wall.iter().copied().find(|d| names.get(*d).is_ok_and(|n| n.as_str() == "Arms_Mesh")) else { continue };
+        let mut bones = std::collections::HashMap::new();
+        let mut stack = vec![(root, String::new())];
+        while let Some((n, path)) = stack.pop() {
+            for c in children.get(n).into_iter().flatten() {
+                let Ok(name) = names.get(*c) else { continue };
+                let p = if path.is_empty() { name.to_string() } else { format!("{path}/{name}") };
+                bones.insert(p.clone(), *c);
+                if let Ok(t) = transforms.get(*c) {
+                    anim.rest.insert(*c, (t.rotation, t.translation));
+                }
+                stack.push((*c, p));
+            }
         }
-        commands.entity(ap).insert(AnimationGraphHandle(setup.graph.clone()));
+        anim.bones = bones;
+        anim.clip = "Idle_v02".into();
+        // as in the Armory (CharacterInterfaceV2): the weapon brings its own arms; the
+        // body's arms mesh is hidden
+        let _ = (&meshes, arms);
         for d in &all {
-            if names.get(*d).is_ok_and(|n| n.as_str() == "Arm_left" || n.as_str() == "Arm_right") {
+            if names.get(*d).is_ok_and(|n| n.as_str() == "rp_arms_mesh") {
                 commands.entity(*d).insert(Visibility::Hidden);
             }
         }
-        commands.entity(point).insert(
-            Transform::from_xyz(-0.04, 0.0, -0.52).with_rotation(Quat::from_xyzw(0.5, -0.5, -0.5, 0.5)).with_scale(Vec3::splat(0.63)),
-        );
-        if let Some(w) = b.weapon {
-            commands.entity(w).insert(ChildOf(point));
-        }
+        // the weapon prefab is a first-person rig whose origin is gunPosition (y -1.7) below
+        // the eye; put that "eye" at the chest so its arms come out at the shoulders
+        commands.entity(w).insert((ChildOf(e), Transform::from_translation(Vec3::new(0.0, BOT_EYE - 1.7, 0.12))));
         commands.entity(e).insert(Hooked);
+    }
+}
+
+/// Pick the body clip from how the bot moves relative to where it faces (the original's
+/// locomotion blend: run forward / 45 / sideways / backward, standing idle, in the air) and
+/// play it, cross-fading 0.15 s; "TakeDamage" plays over it for a moment when hit.
+fn animate_bodies(
+    time: Res<Time>,
+    setup: Option<Res<BotSetup>>,
+    mut bots: Query<(&PlayerBot, &mut BodyAnim)>,
+    mut tf: Query<&mut Transform, Without<PlayerBot>>,
+) {
+    let Some(setup) = setup else { return };
+    let dt = time.delta_secs();
+    for (b, mut a) in &mut bots {
+        if a.bones.is_empty() || !b.alive() || std::env::var("PG3D_NOBODYANIM").is_ok() {
+            continue;
+        }
+        let v = Vec3::new(b.velocity.x, 0.0, b.velocity.z);
+        let speed = v.length();
+        let fwd = Quat::from_rotation_y(b.yaw) * Vec3::Z;
+        // the model's right is -X (Unity's +X, mirrored by the export)
+        let right = Quat::from_rotation_y(b.yaw) * Vec3::NEG_X;
+        let want = if !b.grounded && b.air > 0.25 {
+            "Jump_idle"
+        } else if speed < 0.6 {
+            "Idle_v02"
+        } else {
+            let ang = v.dot(right).atan2(v.dot(fwd)).to_degrees();
+            match ang {
+                a if a.abs() < 22.5 => "run_forward",
+                a if a.abs() > 157.5 => "run_backward",
+                a if (22.5..67.5).contains(&a) => "run_forward_right_45",
+                a if (67.5..112.5).contains(&a) => "run_right",
+                a if a >= 112.5 => "walk_backward_right_v2",
+                a if (-67.5..-22.5).contains(&a) => "run_forward_left_45",
+                a if (-112.5..-67.5).contains(&a) => "run_left",
+                _ => "walk_backward_left_v2",
+            }
+        };
+        if want != a.clip && setup.anims.contains_key(want) {
+            a.prev = std::mem::replace(&mut a.clip, want.to_string());
+            a.prev_time = a.time;
+            a.time = 0.0;
+            a.fade = 0.0;
+        }
+        // run clips are made for full running speed
+        let rate = if a.clip.starts_with("run") || a.clip.starts_with("walk") { (speed / RUN_SPEED).clamp(0.5, 1.4) } else { 1.0 };
+        a.time += dt * rate;
+        a.prev_time += dt * rate;
+        a.fade = (a.fade + dt / 0.15).min(1.0);
+        let mut pose: std::collections::HashMap<Entity, (Quat, Vec3)> = std::collections::HashMap::new();
+        let apply = |name: &str, t: f32, w: f32, pose: &mut std::collections::HashMap<Entity, (Quat, Vec3)>| {
+            let Some(c) = setup.anims.get(name) else { return };
+            for (k, tr) in c.tracks.iter().enumerate() {
+                let Some(&e) = a.bones.get(&tr.path) else { continue };
+                let rest = a.rest.get(&e).copied().unwrap_or((Quat::IDENTITY, Vec3::ZERO));
+                let (r, p) = c.sample(k, t);
+                let cur = pose.entry(e).or_insert(rest);
+                if let Some(r) = r {
+                    cur.0 = cur.0.slerp(r, w);
+                }
+                if let Some(p) = p {
+                    cur.1 = cur.1.lerp(p, w);
+                }
+            }
+        };
+        if a.fade < 1.0 && !a.prev.is_empty() {
+            let prev = a.prev.clone();
+            apply(&prev, a.prev_time, 1.0, &mut pose);
+        }
+        let clip = a.clip.clone();
+        apply(&clip, a.time, if a.prev.is_empty() { 1.0 } else { a.fade }, &mut pose);
+        if b.hurt > 0.0 {
+            apply("TakeDamage", 0.27 - b.hurt, 0.8, &mut pose);
+        }
+        for (e, (r, p)) in pose {
+            if let Ok(mut t) = tf.get_mut(e) {
+                t.rotation = r;
+                t.translation = p;
+            }
+        }
     }
 }
 
@@ -458,6 +647,8 @@ fn brain(
             continue;
         }
         let pos = t.translation;
+        b.hurt = (b.hurt - dt).max(0.0);
+        b.strafe = (b.strafe - dt).max(0.0);
         let forward = Quat::from_rotation_y(b.yaw) * Vec3::Z;
         // where a target is (None: gone / dead)
         let where_is = |tg: Target| match tg {
@@ -472,6 +663,7 @@ fn brain(
             let keep = b.target.and_then(|tg| where_is(tg).map(|p| (tg, p))).filter(|(_, p)| {
                 p.distance(pos) < tu.detector.distance_to_lose_awarness && line_clear(&spatial, eye(pos), eye(*p))
             });
+            let had = b.target;
             b.target = keep.map(|(tg, _)| tg).or_else(|| {
                 let mut cands: Vec<(Target, Vec3)> = everyone
                     .iter()
@@ -494,6 +686,10 @@ fn brain(
                     .min_by(|a, b2| a.1.distance(pos).total_cmp(&b2.1.distance(pos)))
                     .map(|(tg, _)| tg)
             });
+            // a new target: a moment to react before the first shot (GUESS 0.25-0.65 s)
+            if b.target.is_some() && b.target != had {
+                b.react = 0.25 + 0.4 * (1.0 - b.skill) / 0.4 * b.rand();
+            }
         }
         let target_pos = b.target.and_then(where_is);
         if target_pos.is_none() {
@@ -507,15 +703,24 @@ fn brain(
                 let diff = (want - b.yaw + std::f32::consts::PI).rem_euclid(std::f32::consts::TAU) - std::f32::consts::PI;
                 b.yaw += diff.clamp(-b.turn_speed * dt, b.turn_speed * dt);
                 b.next_shot -= dt;
-                if diff.abs() < 0.15 && b.next_shot <= 0.0 {
+                b.react -= dt;
+                if diff.abs() < 0.15 && b.next_shot <= 0.0 && b.react <= 0.0 {
                     b.next_shot = b.interval;
                     if let Some(w) = b.weapon {
                         bursts.write(crate::particles::Burst(w));
                     }
                     // the weapon's own Shoot sound, from where the bot stands
                     crate::sound::play_scaled(&mut commands, b.shoot_sound.as_ref(), Some(pos), 0.7, 0.7);
-                    // hit chance falls off with distance (GUESS: 85 % close, 30 % at 30 m)
-                    let chance = (0.85 - to.length() * 0.018).clamp(0.3, 0.85);
+                    // hit chance (GUESS, tuned for fun): falls off with distance, worse
+                    // while strafing, scaled by the bot's skill; the player is a bit harder
+                    // to hit than bots so fights against you last
+                    let mut chance = (0.75 - to.length() * 0.018).clamp(0.2, 0.75) * b.skill;
+                    if b.strafe > 0.0 {
+                        chance *= 0.75;
+                    }
+                    if b.target == Some(Target::Player) {
+                        chance *= 0.7;
+                    }
                     if b.rand() < chance && line_clear(&spatial, eye(pos), eye(tp)) {
                         match b.target {
                             Some(Target::Player) => {
@@ -530,11 +735,16 @@ fn brain(
                         }
                     }
                 }
-                // AIBotController dodging: sideways for dodgingTime, then the other way
-                b.dodge -= dt;
-                if b.dodge <= 0.0 {
-                    b.dodge = tu.controller.dodging_time;
-                    b.dodge_dir = if b.rand() < 0.5 { -1.0 } else { 1.0 };
+                // AIBotController dodging, in bursts like players: now and then while
+                // shooting (every 1.5-3 s, 35 %), and often right after being hit (hurt
+                // starts one in take_damage); a burst lasts dodgingTime x 1..1.8
+                b.strafe_check -= dt;
+                if b.strafe <= 0.0 && b.strafe_check <= 0.0 && b.react <= 0.0 {
+                    b.strafe_check = 1.5 + 1.5 * b.rand();
+                    if b.rand() < 0.35 {
+                        b.strafe = tu.controller.dodging_time * (1.0 + 0.8 * b.rand());
+                        b.dodge_dir = if b.rand() < 0.5 { -1.0 } else { 1.0 };
+                    }
                 }
                 b.goal = tp;
             }
@@ -584,6 +794,14 @@ fn apply_bot_damage(
     }
     b.health -= amount;
     if b.alive() {
+        // flinch; most of the time start dodging (GUESS 60 %)
+        if b.hurt <= 0.0 {
+            b.hurt = 0.27;
+            if b.strafe <= 0.0 && b.rand() < 0.6 {
+                b.strafe = 0.7 * (1.0 + 0.8 * b.rand());
+                b.dodge_dir = if b.rand() < 0.5 { -1.0 } else { 1.0 };
+            }
+        }
         return;
     }
     b.respawn_in = RESPAWN;
@@ -597,6 +815,7 @@ fn apply_bot_damage(
         Some(s) => bots.get(s).ok().map(|(_, _, k)| k.row),
         None => {
             // you
+            scores.vs.entry(row).or_default().0 += 1;
             stats.kills += 1;
             stats.score += 100;
             Some(0)
@@ -640,6 +859,7 @@ fn player_killed(stats: Res<PlayerStats>, mut scores: ResMut<TdmScores>, bots: Q
             && let Some(r) = scores.rows.get_mut(row)
         {
             r.kills += 1;
+            scores.vs.entry(row).or_default().1 += 1;
         }
     }
     *was_dead = dead;
@@ -724,18 +944,32 @@ fn movement(
         let mut dir = Vec3::new(aim.x - t.translation.x, 0.0, aim.z - t.translation.z);
         let close = dir.length() < 1.0;
         dir = dir.normalize_or_zero();
-        let mut speed = RUN_SPEED;
+        // roam a little slower than full speed (players don't sprint everywhere)
+        let mut speed = RUN_SPEED * 0.85;
         if fighting {
-            // keep some distance and strafe (dodgingSpeed)
-            let side = Vec3::new(dir.z, 0.0, -dir.x) * b.dodge_dir;
-            let d = b.goal.distance(t.translation);
-            let approach = if d > 12.0 { 1.0 } else if d < 6.0 { -0.5 } else { 0.0 };
-            dir = (dir * approach + side).normalize_or_zero();
-            speed = setup.tuning.controller.dodging_speed;
+            // close in to its favourite range, back off when too close, otherwise stand
+            // and shoot; strafe only in bursts (dodgingSpeed x 0.8)
+            let to = Vec3::new(b.goal.x - t.translation.x, 0.0, b.goal.z - t.translation.z);
+            let d = to.length();
+            let face = to.normalize_or_zero();
+            let side = Vec3::new(face.z, 0.0, -face.x) * b.dodge_dir;
+            let approach = if d > b.fight_dist + 3.0 { 1.0 } else if d < b.fight_dist - 4.0 { -0.6 } else { 0.0 };
+            let path_dir = dir;
+            dir = if approach > 0.0 { path_dir } else { face * approach };
+            speed = RUN_SPEED * 0.7;
+            if b.strafe > 0.0 {
+                dir = (dir * 0.4 + side).normalize_or_zero();
+                speed = (setup.tuning.controller.dodging_speed * 0.8).min(RUN_SPEED * STRAFE_MAX);
+            } else if approach == 0.0 {
+                dir = Vec3::ZERO;
+            }
         } else {
             // face where it walks
+            // turn smoothly towards where it walks (no snapping round corners)
             if dir != Vec3::ZERO {
-                b.yaw = dir.x.atan2(dir.z);
+                let diff = (dir.x.atan2(dir.z) - b.yaw + std::f32::consts::PI).rem_euclid(std::f32::consts::TAU) - std::f32::consts::PI;
+                let rate = b.turn_speed.min(ROAM_TURN);
+                b.yaw += diff.clamp(-rate * dt, rate * dt);
             }
             if close {
                 dir = Vec3::ZERO;
@@ -792,8 +1026,13 @@ fn movement(
             b.velocity.y = mv.jump_speed;
             b.grounded = false;
         }
-        b.velocity.x = dir.x * speed;
-        b.velocity.z = dir.z * speed;
+        // speed up and slow down like a player (no instant direction flips)
+        let want_v = Vec2::new(dir.x, dir.z) * speed;
+        let cur_v = Vec2::new(b.velocity.x, b.velocity.z);
+        let accel = if b.grounded { ACCEL } else { ACCEL * 0.3 };
+        let new_v = cur_v + (want_v - cur_v).clamp_length_max(accel * dt);
+        b.velocity.x = new_v.x;
+        b.velocity.z = new_v.y;
         if b.grounded && b.velocity.y <= 0.0 {
             b.velocity.y = -2.0;
         } else {
@@ -819,6 +1058,7 @@ fn movement(
         let before = t.translation;
         t.translation = out.position - off;
         b.grounded = grounded;
+        b.air = if grounded { 0.0 } else { b.air + dt };
         // progress check (horizontal): under a third of the wanted move counts as stuck
         let moved = Vec2::new(t.translation.x - before.x, t.translation.z - before.z).length();
         let wanted = Vec2::new(b.velocity.x, b.velocity.z).length() * dt;
@@ -865,4 +1105,225 @@ fn name_tags(
         }
         *vis = if shown { Visibility::Inherited } else { Visibility::Hidden };
     }
+}
+
+/// Seconds after dying before "To Battle!" can be pressed (RespawnWindow's "CAN RESPAWN IN:";
+/// GUESS 3 s, the old fixed respawn time).
+pub const CAN_RESPAWN: f32 = 3.0;
+/// Seconds until the automatic respawn (RespawnWindow's "To respawn" timer; GUESS 10 s).
+pub const AUTO_RESPAWN: f32 = 10.0;
+
+#[derive(Resource)]
+struct RespawnScreen(Option<Entity>);
+
+fn spawn_respawn_screen(mut commands: Commands, assets: Res<AssetServer>, data: Res<DataDir>) {
+    let e = crate::ngui::spawn_screen(&mut commands, &assets, &data, "respawn");
+    if let Some(e) = e {
+        commands.entity(e).insert(Visibility::Hidden);
+    }
+    commands.insert_resource(RespawnScreen(e));
+}
+
+/// The parts of the original RespawnWindow we have nothing for (clans, kill cam, shop
+/// offers, loadouts, battle pass, spawn picker, report, champion classes, armor).
+const RESPAWN_OFF: [&str; 27] = [
+    "KillerClanName_Label",
+    "Killer_veteranbadge",
+    "ProgressBarArmor",
+    "DragArea",
+    "KillerView",
+    "DragKillCam",
+    "ItemToBuyScaler",
+    "ClanWeapon",
+    "EventWeapon",
+    "KillerWeaponModulesIcons",
+    "RW_RivalItems_container",
+    "RW_BtnRivalItems (obs)",
+    "Btn_Report",
+    "RW_UpgradeHolder (OFF)",
+    "LoadoutHolder (OFF)",
+    "OnUpgradeEnable_cont (OFF)",
+    "Progress_IfUpgrade",
+    "KillerItems (obsolete)",
+    "itemToBuyScaler",
+    "Bottom",
+    "CharacterViewHolder",
+    "ScoreConat (OFF)",
+    "RW_LoadoutPanel (OFF)",
+    "NetworkStartTable_FM_SelectSpawn (OFF)",
+    "ChangeClass_Btn (OFF)",
+    "BtnGoBattleImm",
+    "CanRespawnSniper",
+];
+
+fn respawn_layout(s: &mut NguiScreen) {
+    for name in RESPAWN_OFF {
+        if let Some(i) = s.find(name) {
+            s.set_active(i, false);
+        }
+    }
+    // how the player died: shot (no burn / bleed / poison icons)
+    for i in 0..s.nodes.len() {
+        let n = s.nodes[i].name.as_str();
+        if n.starts_with("Icon_dead_by_") || n.starts_with("bg_dead_by_") || n == "arrow_up" || n == "arrow_down" {
+            s.set_active(i, false);
+        }
+    }
+    if let Some(h) = s.find_path("KillerWeapon/Header_Label") {
+        let t = s.string("Key_7756");
+        s.set_text(h, t);
+    }
+    if let Some(h) = s.find_path("AutoRespawnLabel") {
+        let t = s.string("Key_4937");
+        s.set_text(h, t);
+    }
+}
+
+/// While you are dead: the original's RespawnWindow — "You were killed by:" with the
+/// killer's name and rank, your kills of each other (You VS Rival), the killer's health,
+/// its weapon next to yours with their damage bars, and "To Battle!" once the
+/// "CAN RESPAWN IN" count is over (Space works too); otherwise the auto respawn timer.
+#[allow(clippy::too_many_arguments)]
+fn death_view(
+    mut stats: ResMut<PlayerStats>,
+    scores: Res<TdmScores>,
+    bots: Query<&PlayerBot>,
+    data: Res<DataDir>,
+    assets: Res<AssetServer>,
+    screen: Option<Res<RespawnScreen>>,
+    mut screens: Query<&mut NguiScreen>,
+    mut vis: Query<&mut Visibility>,
+    mut clicks: MessageReader<crate::ngui::NguiClick>,
+    keys: Res<ButtonInput<KeyCode>>,
+    loadout: Option<Res<crate::weapons::Loadout>>,
+    mut cursor: Single<&mut CursorOptions>,
+    mut shown: Local<bool>,
+    mut weapons: Local<Option<std::collections::HashMap<String, serde_json::Value>>>,
+) {
+    let Some(e) = screen.and_then(|s| s.0) else { return };
+    let dead = stats.health <= 0.0;
+    let pressed = clicks.read().any(|c| c.name == "BtnGoBattle") || keys.just_pressed(KeyCode::Space);
+    if dead != *shown {
+        *shown = dead;
+        if let Ok(mut v) = vis.get_mut(e) {
+            *v = if dead { Visibility::Inherited } else { Visibility::Hidden };
+        }
+        cursor.grab_mode = if dead { CursorGrabMode::None } else { CursorGrabMode::Locked };
+        cursor.visible = dead;
+        if !dead {
+            return;
+        }
+        let Ok(mut s) = screens.get_mut(e) else { return };
+        respawn_layout(&mut s);
+        let w = weapons.get_or_insert_with(|| {
+            std::fs::read_to_string(data.0.join("weapons/weapons.json")).ok().and_then(|t| serde_json::from_str(&t).ok()).unwrap_or_default()
+        });
+        let wname = |s: &NguiScreen, n: &str| {
+            w.get(n).and_then(|d| d.get("localizeWeaponKey")).and_then(|k| k.as_str()).map(|k| s.string(k)).unwrap_or_else(|| n.to_string())
+        };
+        let damage = |n: &str| {
+            let d = w.get(n);
+            let tier = d.and_then(|d| d.get("damageByTier")).and_then(|v| v.get(0)).and_then(|v| v.as_f64()).unwrap_or(1.0) as f32;
+            let shot = d.and_then(|d| d.get("isShotGun")).and_then(|v| v.as_i64()).unwrap_or(0) != 0;
+            let pellets = if shot { d.and_then(|d| d.get("countShots")).and_then(|v| v.as_i64()).unwrap_or(1).max(1) as f32 } else { 1.0 };
+            tier * pellets
+        };
+        let killer = scores.last_hit_player.and_then(|k| bots.get(k).ok());
+        let row = killer.map(|b| b.row);
+        let name = row.and_then(|r| scores.rows.get(r)).map(|r| r.name.clone()).unwrap_or_default();
+        if let Some(i) = s.find("KillerNicknameLabel") {
+            s.set_text(i, name);
+        }
+        let (mine, theirs) = row.and_then(|r| scores.vs.get(&r)).copied().unwrap_or_default();
+        if let Some(i) = s.find("PlayerKillCount") {
+            s.set_text(i, mine.to_string());
+        }
+        if let Some(i) = s.find("RivalKillCount") {
+            s.set_text(i, theirs.to_string());
+        }
+        // the killer's health left
+        let hp = killer.map_or(0.0, |b| b.health.max(0.0));
+        if let Some(bar) = s.find("ProgressBarHealth") {
+            if let Some(f) = s.find_in(bar, "fill") {
+                s.set_fill(f, hp / PLAYER_MAX_HEALTH);
+            }
+            if let Some(l) = s.find_in(bar, "Amount_Label") {
+                s.set_text(l, (hp.ceil() as i32).to_string());
+            }
+        }
+        // the two weapons and their damage per second, as bars of the stronger one
+        let theirs_w = killer.map(|b| (b.weapon_name.to_string(), b.damage / b.interval.max(0.05)));
+        let mine_w = loadout.as_ref().and_then(|l| l.current()).map(|cw| (cw.name.clone(), damage(&cw.name) / cw.fire_interval.max(0.05)));
+        let top = theirs_w.iter().chain(mine_w.iter()).map(|w| w.1).fold(0.01f32, f32::max);
+        for (panel, wp) in [("KillerWeapon", theirs_w), ("YourWeapon", mine_w)] {
+            let Some(p) = s.find(panel) else { continue };
+            let Some((n, dps)) = wp else {
+                s.set_active(p, false);
+                continue;
+            };
+            s.set_active(p, true);
+            let label = wname(&s, &n);
+            for l in ["ItemName_Label", "ItemName"] {
+                if let Some(i) = s.find_in(p, l) {
+                    s.set_text(i, label.clone());
+                }
+            }
+            if let Some(i) = s.find_in(p, "ItemImage") {
+                s.set_texture(i, assets.load(format!("weapons/{n}/icon.png")));
+            }
+            if let Some(i) = s.find_in(p, "ProgressArmor") {
+                s.set_fill(i, dps / top);
+            }
+        }
+    }
+    if !dead {
+        return;
+    }
+    // the timers
+    let since = AUTO_RESPAWN - stats.respawn_in;
+    let can = since >= CAN_RESPAWN;
+    if let Ok(mut s) = screens.get_mut(e) {
+        for (name, on) in [("CanRespawnLabel", !can), ("BtnGoBattle", can), ("AutoRespawnLabel", can)] {
+            if let Some(i) = s.find(name) {
+                s.set_active(i, on);
+            }
+        }
+        if let Some(i) = s.find_path("CanRespawnLabel/canRespawnTimerLabel") {
+            s.set_text(i, ((CAN_RESPAWN - since).max(0.0).ceil() as i32).to_string());
+        }
+        if let Some(i) = s.find("autoRespawnTimerLabel") {
+            s.set_text(i, (stats.respawn_in.max(0.0).ceil() as i32).to_string());
+        }
+    }
+    if std::env::var("PG3D_TRACE").is_ok()
+        && let Ok(s) = screens.get(e)
+    {
+        let shown: Vec<String> = (0..s.nodes.len()).filter(|&i| s.nodes[i].label.is_some() && s.visible(i)).map(|i| format!("{}={:?}", s.nodes[i].name, s.text(i))).collect();
+        info!("respawn window: {}", shown.join(", "));
+    }
+    if can && pressed && stats.respawn_in > 0.0 {
+        stats.respawn_in = 0.0001;
+    }
+}
+
+/// PG3D_BOT_VIEW=k[,angle] (automated screenshots): the camera follows bot k from 3.5 m,
+/// seen from `angle` degrees off its front (0 = facing you).
+fn bot_view(
+    bots: Query<(&Transform, &PlayerBot)>,
+    mut cam: Query<&mut Transform, (With<crate::camera::PlayerCamera>, Without<PlayerBot>)>,
+    spatial: SpatialQuery,
+) {
+    let Ok(v) = std::env::var("PG3D_BOT_VIEW") else { return };
+    let mut it = v.split(',');
+    let k: usize = it.next().and_then(|x| x.parse().ok()).unwrap_or(0);
+    let ang: f32 = it.next().and_then(|x| x.parse().ok()).unwrap_or(0.0);
+    let Some((t, b)) = bots.iter().filter(|(_, b)| b.alive()).nth(k) else { return };
+    let Ok(mut c) = cam.single_mut() else { return };
+    let dir = Quat::from_rotation_y(b.yaw + ang.to_radians()) * Vec3::Z;
+    let focus = t.translation + Vec3::Y * 1.0;
+    let want = dir * 3.5 + Vec3::Y * 0.6;
+    // closer if something is in the way
+    let d = Dir3::new(want).ok().and_then(|d| spatial.cast_ray(focus, d, want.length(), true, &SpatialQueryFilter::from_mask(Layer::World))).map_or(want.length(), |h| (h.distance - 0.3).max(0.8));
+    c.translation = focus + want.normalize() * d;
+    c.look_at(focus, Vec3::Y);
 }

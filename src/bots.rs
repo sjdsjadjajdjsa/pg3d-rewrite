@@ -734,7 +734,8 @@ fn player_death(
         return;
     }
     if stats.respawn_in <= 0.0 {
-        stats.respawn_in = 3.0;
+        // Team Fight: the respawn window's auto timer ("To Battle!" can cut it short)
+        stats.respawn_in = if crate::team_match::team_mode() { crate::tdm_bots::AUTO_RESPAWN } else { 3.0 };
         info!("player died (score {}, kills {})", stats.score, stats.kills);
     }
     stats.respawn_in -= time.delta_secs();
