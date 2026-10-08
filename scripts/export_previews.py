@@ -3,6 +3,7 @@
 
     tools/venv/bin/python scripts/export_previews.py
 
+Maps without one get their full loading screen (levelloadings/loading_<map>.png).
 Writes private/export/previews/<map>.png where <map> is the lower-case map name
 (Loading_Arena_preview -> arena.png), used by the map picker.
 """
@@ -33,6 +34,22 @@ def main():
             img.thumbnail((512, 512))
             img.save(OUT / f"{m.group(1).lower()}.png")
             n += 1
+    # maps without a preview there (the campaign arenas): their full loading screen,
+    # assets/editor/resources/levelloadings/loading_<map>.png in the map's _data bundle
+    index = ROOT / "private/index/bundle_containers.tsv"
+    if index.exists():
+        for line in open(index, encoding="utf-8"):
+            bundle, path = line.rstrip("\n").split("\t")[:2]
+            m = re.fullmatch(r"assets/editor/resources/levelloadings/loading_(.+)\.png", path)
+            if not m or (OUT / f"{m.group(1).lower()}.png").exists():
+                continue
+            env = UnityPy.load(str(BUNDLES / bundle))
+            for cpath, obj in env.container.items():
+                if cpath == path:
+                    img = obj.read().image.convert("RGB")
+                    img.thumbnail((512, 512))
+                    img.save(OUT / f"{m.group(1).lower()}.png")
+                    n += 1
     print(f"previews: {n} -> {OUT}")
 
 

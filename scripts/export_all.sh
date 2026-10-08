@@ -26,7 +26,8 @@ $PY scripts/export_ngui.py level17 MainMenuNGUI lobby 2>/dev/null | grep -E '^(l
 $PY scripts/export_map.py level17 --out lobby --skip MainMenuNGUI FriendsWindowGUI \
   --prefab slo_seasonlobby_autumn_fairytale_season:SeasonLobbyRoot 2>/dev/null | grep -E '^\{' | cut -c1-120
 $PY scripts/export_character.py 2>/dev/null | grep '^character' | cut -c1-120
-$PY scripts/export_ngui.py resources.assets AllModesView modes 2>/dev/null | grep -E '^modes'
+$PY scripts/export_ngui.py resources.assets AllModesView modes --graft=ModeSelectorHolder=ModeSelector_default --graft=MapSelectorHolder=MapSelector_grid --graft=ModeInfoHolder=ModeInfo_default 2>/dev/null | grep -E '^modes'
+$PY scripts/export_mode_icons.py | grep -E '^mode icons'
 $PY scripts/export_ngui.py resources.assets NetworkStartTableNGUI table 2>/dev/null | grep -E '^table'
 $PY scripts/export_ngui.py resources.assets InGameGUIPart_TeamFight teampart 2>/dev/null | grep -E '^teampart'
 $PY scripts/export_keys.py 2>/dev/null | grep -E "^keys"
