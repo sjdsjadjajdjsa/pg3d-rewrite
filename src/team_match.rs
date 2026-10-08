@@ -533,9 +533,10 @@ fn ending(
     mut hidden: Local<bool>,
     mut hud_hidden: ResMut<crate::ingame_ui::HudHidden>,
     hud: UiRoots<Without<NguiScreen>>,
-    view_models: Query<Entity, With<crate::weapons::ViewModel>>,
+    (view_models, sounds): (Query<Entity, With<crate::weapons::ViewModel>>, Option<Res<crate::sound::GameSounds>>),
     mut commands: Commands,
 ) {
+    let snd = |c: &mut Commands, key: &str| crate::sound::play(c, sounds.as_ref().and_then(|g| g.get(key, 0)), None, 1.0);
     let Some(e) = screen.0 else { return };
     let outcome = match stats.kills.cmp(&m.deaths) {
         std::cmp::Ordering::Greater => Outcome::Victory,
@@ -550,6 +551,12 @@ fn ending(
             }
             info!("team fight over: {outcome:?} {} : {}", stats.kills, m.deaths);
             m.phase = Phase::Banner(0.0);
+            // NetworkStartTableNGUIController win / loose / deadheat sounds
+            snd(&mut commands, match outcome {
+                Outcome::Victory => "match/winSound",
+                Outcome::Defeat => "match/looseSound",
+                Outcome::Draw => "match/deadheatSound",
+            });
             hud_hidden.0 = true;
             vtime.pause();
             cursor.grab_mode = CursorGrabMode::None;
@@ -597,6 +604,8 @@ fn ending(
                 m.paid = true;
                 wallet.add_coins(m.reward.1);
                 let up = crate::progress::Progress::add_xp(&data.0, m.reward.0);
+                // ExperienceController: XP counting, Tierup on a new level
+                snd(&mut commands, if up { "level/Tierup" } else { "level/exp_1" });
                 info!("reward: {} XP, {} coins{}", m.reward.0, m.reward.1, if up { " (level up)" } else { "" });
             }
         }

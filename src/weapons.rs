@@ -507,7 +507,7 @@ fn fire(
     mut hits: MessageWriter<BotDamage>,
     mut rockets: MessageWriter<SpawnProjectile>,
     mut flashes: MessageWriter<crate::particles::Burst>,
-    alive: Res<crate::bots::PlayerStats>,
+    (alive, game_sounds): (Res<crate::bots::PlayerStats>, Option<Res<crate::sound::GameSounds>>),
     mut beams: MessageWriter<crate::beams::SpawnBeam>,
 ) {
     let dt = time.delta_secs();
@@ -630,6 +630,8 @@ fn fire(
             if head {
                 amount *= w.head_coef;
                 debug!("headshot: {} x{}", w.name, w.head_coef);
+                // Player_move_c.headShotSound
+                crate::sound::play(&mut commands, game_sounds.as_ref().and_then(|g| g.get("player/headShotSound", 0)), None, 0.8);
             }
             hits.write(BotDamage { bot: part.0, amount, slow });
         } else {

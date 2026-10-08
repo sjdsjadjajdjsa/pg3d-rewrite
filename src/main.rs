@@ -97,6 +97,8 @@ fn main() {
             .insert_resource(controls::Controls::load())
             .insert_resource(wallet::Wallet::load())
             .add_plugins((menu::MenuPlugin, screenshot::ScreenshotPlugin, cursor::CursorPlugin, armory::ArmoryPlugin, mirrored_skins::MirroredSkinsPlugin))
+            .add_systems(Startup, sound::load_game_sounds)
+            .add_systems(Update, sound::ui_click_sounds)
             .run();
         return;
     };
@@ -167,6 +169,8 @@ fn main() {
             results::ResultsPlugin,
         ))
         .add_plugins((team_match::TeamMatchPlugin, mirrored_skins::MirroredSkinsPlugin))
+        .add_systems(Startup, sound::load_game_sounds)
+        .add_systems(Update, sound::ui_click_sounds)
         .add_plugins((hud::HudPlugin, ingame_ui::InGameUiPlugin, explosives::ExplosivesPlugin, cursor::CursorPlugin, beams::BeamsPlugin))
         .add_systems(Update, (menu::back_to_menu, menu::test_click, hide_hud))
         .add_systems(
