@@ -203,6 +203,8 @@ struct Armory {
     effects: HashMap<i32, EffectDef>,
     /// the Properties popup is open
     popup: bool,
+    /// weapons that have skins (weapons/skins.json)
+    skins: std::collections::HashSet<String>,
 }
 
 /// The weapon picked in a category: the saved one, or the default (weapons.rs LOADOUT).
@@ -406,6 +408,12 @@ fn setup(
                 .filter_map(|(k, v)| Some((k.parse().ok()?, v)))
                 .collect(),
             popup: false,
+            skins: std::fs::read_to_string(dir.join("skins.json"))
+                .ok()
+                .and_then(|t| serde_json::from_str::<HashMap<String, Vec<String>>>(&t).ok())
+                .unwrap_or_default()
+                .into_keys()
+                .collect(),
         });
         // the character holding the selected weapon, behind the stats panel
         if let Some(p) = &preview {
@@ -622,11 +630,14 @@ fn refresh(
             if let Some(i) = s.find_in(c, "BGrare") {
                 s.set_color(i, rarity_band(rarity));
             }
-            // owned items get a blue "bought" tint (BoughtIndicatorBg, off in the prefab);
-            // the equipped one stays green. OBSERVED colour: about [50, 83, 137] in the cell
-            if let Some(i) = s.find_in(c, "BoughtIndicatorBg") {
-                let on = owned && equipped.as_deref() != Some(name);
-                s.set_color(i, [0.07, 0.31, 0.6, if on { 0.5 } else { 0.0 }]);
+            // owned items: the blue "bought" look (BoughtIndicator: tint, inner shine and the
+            // light blue corner border); the equipped one is green instead
+            if let Some(i) = s.find_in(c, "BoughtIndicator") {
+                s.set_active(i, owned && equipped.as_deref() != Some(name));
+            }
+            // weapons that have skins: the paint pattern behind the picture (weaponSkinsIndicator)
+            if let Some(i) = s.find_in(c, "SkinIndicator") {
+                s.set_active(i, a.skins.contains(name));
             }
             if let Some(i) = s.find_in(c, "EQUIPPED") {
                 s.set_active(i, equipped.as_deref() == Some(name));
