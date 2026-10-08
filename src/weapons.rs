@@ -23,7 +23,7 @@ use serde::Deserialize;
 use crate::{
     controls::Action,
     DataDir,
-    bots::{BotDamage, BotPart},
+    bots::{BotDamage, BotHead, BotPart},
     camera::PlayerCamera,
     map::Layer,
     player::Player,
@@ -150,7 +150,25 @@ pub struct Weapon {
     pub clips: Vec<String>,
     /// rocket launchers: the projectile they fire
     pub rocket: Option<RocketDef>,
+    /// damage multiplier for hits on a head (BalanceWeaponsCore "H", default HeadShotCoef 1.4)
+    pub head_coef: f32,
     pub sounds: HashMap<String, Handle<AudioSource>>,
+}
+
+/// Headshot multipliers from weapons/balance.json (export_balance.py).
+#[derive(Deserialize, Default)]
+struct HeadCoefs {
+    #[serde(default)]
+    head: HashMap<String, f32>,
+    #[serde(default)]
+    head_default: Option<f32>,
+}
+
+impl HeadCoefs {
+    fn get(&self, weapon: &str) -> f32 {
+        let num = weapon.trim_start_matches("Weapon");
+        self.head.get(num).copied().or(self.head_default).unwrap_or(1.4).max(1.0)
+    }
 }
 
 #[derive(Resource, Default)]
@@ -236,6 +254,10 @@ fn load_loadout(mut commands: Commands, data: Res<DataDir>, assets: Res<AssetSer
         }
     };
     info!("{} weapon definitions", all.len());
+    let heads: HeadCoefs = std::fs::read_to_string(dir.join("balance.json"))
+        .ok()
+        .and_then(|t| serde_json::from_str(&t).ok())
+        .unwrap_or_default();
     let mut loadout = Loadout::default();
     let custom = std::env::var("PG3D_LOADOUT").ok();
     // the weapons picked in the Armory replace the default of their category (slots 1-6)
@@ -277,6 +299,7 @@ fn load_loadout(mut commands: Commands, data: Res<DataDir>, assets: Res<AssetSer
             spread: 0.0,
             clips: info.clips.clone(),
             rocket: (def.bazooka != 0).then(|| rocket_def(&data.0, def.rocketNum)).flatten(),
+            head_coef: heads.get(name),
             sounds: crate::sound::load_sounds(&assets, &format!("weapons/{name}"), &info.sounds),
         });
     }
@@ -471,7 +494,7 @@ fn fire(
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
     mut impact_assets: Local<Option<(Handle<Mesh>, Handle<StandardMaterial>)>>,
-    bot_parts: Query<&BotPart>,
+    bot_parts: Query<(&BotPart, Has<BotHead>)>,
     mut hits: MessageWriter<BotDamage>,
     mut rockets: MessageWriter<SpawnProjectile>,
     mut flashes: MessageWriter<crate::particles::Burst>,
@@ -558,14 +581,19 @@ fn fire(
         // the railgun's shot goes through walls and hits every enemy on its line, once each
         let dir = spread_dir(camera.rotation(), spread_deg, time.elapsed_secs(), 0);
         let enemies = SpatialQueryFilter::from_mask([Layer::Enemy]);
-        let mut done = vec![];
+        // each bot once; through its head if the line crosses it
+        let mut done: Vec<(Entity, bool)> = vec![];
         for hit in spatial.ray_hits(origin, dir, range, 64, true, &enemies) {
-            if let Ok(part) = bot_parts.get(hit.entity)
-                && !done.contains(&part.0)
-            {
-                done.push(part.0);
-                hits.write(BotDamage { bot: part.0, amount: base_damage, slow: None });
+            if let Ok((part, head)) = bot_parts.get(hit.entity) {
+                match done.iter_mut().find(|(b, _)| *b == part.0) {
+                    Some(d) => d.1 |= head,
+                    None => done.push((part.0, head)),
+                }
             }
+        }
+        for (bot, head) in done {
+            let amount = base_damage * if head { w.head_coef } else { 1.0 };
+            hits.write(BotDamage { bot, amount, slow: None });
         }
         beams.write(crate::beams::SpawnBeam { weapon: w.name.clone(), from: muzzle, to: origin + *dir * 150.0, life: None });
         return;
@@ -586,10 +614,14 @@ fn fire(
     for i in 0..pellets {
         let dir = spread_dir(camera.rotation(), spread_deg, time.elapsed_secs(), i);
         let Some(hit) = spatial.cast_ray(origin, dir, range, true, &filter) else { continue };
-        if let Ok(part) = bot_parts.get(hit.entity) {
+        if let Ok((part, head)) = bot_parts.get(hit.entity) {
             // random variation of +-damageRange percent, like the original
             let r = (time.elapsed_secs() * 91.7 + i as f32 * 3.3).sin() * 0.5 + 0.5;
-            let amount = base_damage * (1.0 + (dmin + (dmax - dmin) * r) / 100.0);
+            let mut amount = base_damage * (1.0 + (dmin + (dmax - dmin) * r) / 100.0);
+            if head {
+                amount *= w.head_coef;
+                debug!("headshot: {} x{}", w.name, w.head_coef);
+            }
             hits.write(BotDamage { bot: part.0, amount, slow });
         } else {
             let p = origin + dir * hit.distance + hit.normal * 0.01;

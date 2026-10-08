@@ -90,6 +90,10 @@ pub struct BotDef {
     /// colour / size of the bullet's particle in the original prefab
     pub bulletColor: Option<[f32; 4]>,
     pub bulletSize: f32,
+    /// colliders of the prefab, relative to its root in Unity axes (export_bots.py hit_boxes):
+    /// head sphere [x, y, z, radius] (hits there are headshots), body box [x, y, z, sx, sy, sz]
+    pub head: Option<[f32; 4]>,
+    pub body: Option<[f32; 6]>,
 }
 
 impl BotDef {
@@ -167,6 +171,10 @@ pub struct BotDamage {
 /// Put on bot colliders; points at the bot's root entity.
 #[derive(Component)]
 pub struct BotPart(pub Entity);
+
+/// The head collider of a bot: weapon hits on it do headshot damage.
+#[derive(Component)]
+pub struct BotHead;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum BotState {
@@ -386,14 +394,19 @@ fn spawner(
         ))
         .observe(hook_up_bot_animations)
         .id();
-    // hit box: NavMeshAgent of the prefab is 0.5 m radius, 2 m tall, origin at the feet
+    // hit boxes of the prefab (Unity x is mirrored in glTF); without them a capsule the size
+    // of the NavMeshAgent (0.5 m radius, 2 m tall, origin at the feet)
+    let layers = CollisionLayers::new(Layer::Enemy, LayerMask::ALL);
     commands.entity(root).with_children(|c| {
-        c.spawn((
-            BotPart(root),
-            Collider::capsule(0.45, 1.0),
-            Transform::from_xyz(0.0, 1.0, 0.0),
-            CollisionLayers::new(Layer::Enemy, LayerMask::ALL),
-        ));
+        match ty.def.body {
+            Some([x, y, z, sx, sy, sz]) => {
+                c.spawn((BotPart(root), Collider::cuboid(sx, sy, sz), Transform::from_xyz(-x, y, z), layers))
+            }
+            None => c.spawn((BotPart(root), Collider::capsule(0.45, 1.0), Transform::from_xyz(0.0, 1.0, 0.0), layers)),
+        };
+        if let Some([x, y, z, r]) = ty.def.head {
+            c.spawn((BotPart(root), BotHead, Collider::sphere(r), Transform::from_xyz(-x, y, z), layers));
+        }
     });
 }
 
@@ -724,19 +737,28 @@ fn player_death(
     }
 }
 
-/// PG3D_AUTOAIM=1 (automated tests): turn the camera to the nearest living bot.
+/// PG3D_AUTOAIM=1 (automated tests): turn the camera to the nearest living bot
+/// (PG3D_AUTOAIM=head: to its head collider).
 fn auto_aim(
-    bots: Query<(&GlobalTransform, &Bot)>,
+    bots: Query<(&GlobalTransform, &Bot, Option<&Children>)>,
+    heads: Query<&GlobalTransform, With<BotHead>>,
+    bodies: Query<&GlobalTransform, (With<BotPart>, Without<BotHead>)>,
     mut camera: Single<&mut Transform, With<crate::camera::PlayerCamera>>,
 ) {
-    if std::env::var("PG3D_AUTOAIM").is_err() {
-        return;
-    }
+    let Ok(mode) = std::env::var("PG3D_AUTOAIM") else { return };
     let eye = camera.translation;
     let target = bots
         .iter()
-        .filter(|(_, b)| b.state != BotState::Dead)
-        .map(|(t, _)| t.translation() + Vec3::Y * 1.2)
+        .filter(|(_, b, _)| b.state != BotState::Dead)
+        .map(|(t, _, kids)| {
+            let head = kids.and_then(|k| k.iter().find_map(|c| heads.get(c).ok()));
+            let body = kids.and_then(|k| k.iter().find_map(|c| bodies.get(c).ok()));
+            match (head, body) {
+                (Some(h), _) if mode == "head" => h.translation(),
+                (_, Some(b)) => b.translation(),
+                _ => t.translation() + Vec3::Y * 1.2,
+            }
+        })
         .min_by(|a, b| a.distance(eye).total_cmp(&b.distance(eye)));
     if let Some(p) = target {
         camera.look_at(p, Vec3::Y);

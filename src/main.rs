@@ -137,6 +137,9 @@ fn main() {
                 }),
         )
         .add_plugins(PhysicsPlugins::default())
+        // PG3D_PHYSDEBUG=1: draw every collider (hit boxes, map)
+        .add_plugins(PhysicsDebugPlugin)
+        .insert_gizmo_config(PhysicsGizmos::default(), GizmoConfig { enabled: std::env::var("PG3D_PHYSDEBUG").is_ok(), ..default() })
         .insert_resource(DataDir(data_dir.into()))
         .insert_resource(settings::Settings::load())
         .insert_resource(controls::Controls::load())
