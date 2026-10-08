@@ -8,6 +8,8 @@
 //! Slot pictures: <data>/weapons/<Weapon>/icon.png from export_weapon_icons.py (the game's
 //! "<Tag>_icon1_big"), else the bar's generic category icon.
 
+#[allow(unused_imports)]
+use crate::scene::{FixedUpdate, PostStartup, PostUpdate, PreStartup, Startup, Update};
 use bevy::prelude::*;
 
 use crate::{
@@ -19,8 +21,8 @@ use crate::{
 
 pub struct InGameUiPlugin;
 
-impl Plugin for InGameUiPlugin {
-    fn build(&self, app: &mut App) {
+impl crate::scene::ScenePlugin for InGameUiPlugin {
+    fn build(&self, app: &mut crate::scene::SceneBuilder) {
         app.init_resource::<HudHidden>().add_systems(Startup, spawn)
             .add_systems(Update, (setup, place_corners, update, update_arena_box, wave_messages, reload_ring, key_tips, invincibility, wallet_bar).chain());
     }

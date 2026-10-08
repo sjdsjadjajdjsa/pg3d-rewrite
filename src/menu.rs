@@ -3,10 +3,12 @@
 //! online services show a short note instead. Without an exported lobby we fall back to a
 //! plain map list.
 //!
-//! The menu is its own small Bevy app. Picking a map starts a fresh copy of this program
-//! with the map name (`pixel-gun-3d-rs <map>`) and closes the menu; F10 in game does the
-//! reverse. Restarting keeps the game code simple: every match starts from a clean world.
+//! The menu is a scene of the one App (scene.rs). Picking a map switches the window to a
+//! match scene; F10 / Quit switch back. Every switch starts from a clean world, as if the
+//! program had just started.
 
+#[allow(unused_imports)]
+use crate::scene::{FixedUpdate, PostStartup, PostUpdate, PreStartup, Startup, Update};
 use bevy::{app::AppExit, prelude::*};
 
 use serde::Deserialize;
@@ -15,8 +17,8 @@ use crate::DataDir;
 
 pub struct MenuPlugin;
 
-impl Plugin for MenuPlugin {
-    fn build(&self, app: &mut App) {
+impl crate::scene::ScenePlugin for MenuPlugin {
+    fn build(&self, app: &mut crate::scene::SceneBuilder) {
         app.insert_resource(ClearColor(Color::srgb(0.08, 0.1, 0.14)))
             .insert_resource(crate::map::CurrentMap(std::env::var("PG3D_LOBBY").unwrap_or_else(|_| "lobby".into())))
             .init_resource::<crate::map::MapInfo>()
@@ -528,7 +530,6 @@ fn lobby_clicks(
                 });
                 if let Some(map) = map {
                     relaunch_mode(Some(&map), mode.sandbox, mode.env);
-                    exit.write(AppExit::Success);
                 }
                 continue;
             }
@@ -747,7 +748,6 @@ fn button_clicks(
     for (i, m) in &maps {
         if *i == Interaction::Pressed {
             relaunch_mode(Some(&m.0), sandbox, team.then_some("teamfight"));
-            exit.write(AppExit::Success);
         }
     }
     if quit.iter().any(|i| *i == Interaction::Pressed) {
@@ -755,7 +755,7 @@ fn button_clicks(
     }
 }
 
-/// Start a new copy of this program (with a map, or without one = menu).
+/// Go to a map (or, with None, the menu) in this window (scene.rs).
 pub fn relaunch(map: Option<&str>) {
     relaunch_mode(map, false, None);
 }
@@ -766,36 +766,22 @@ pub fn relaunch_with(map: Option<&str>, sandbox: bool) {
     relaunch_mode(map, sandbox, std::env::var("PG3D_MODE").ok().as_deref());
 }
 
-/// `mode`: PG3D_MODE of the new copy (None: the zombie campaign).
+/// `mode`: PG3D_MODE of the match (None: Arena).
 pub fn relaunch_mode(map: Option<&str>, sandbox: bool, mode: Option<&str>) {
-    let Ok(exe) = std::env::current_exe() else { return };
     info!("starting {map:?} mode={mode:?} sandbox={sandbox}");
     if std::env::var("PG3D_NO_RELAUNCH").is_ok() {
         return;
     }
-    let mut cmd = std::process::Command::new(exe);
-    match mode {
-        Some(m) => cmd.env("PG3D_MODE", m),
-        None => cmd.env_remove("PG3D_MODE"),
-    };
-    if sandbox {
-        cmd.env("PG3D_NOBOTS", "1");
-    } else {
-        cmd.env_remove("PG3D_NOBOTS");
-    }
-    if let Some(m) = map {
-        cmd.arg(m);
-    }
-    if let Err(e) = cmd.spawn() {
-        error!("could not start {:?}: {e}", map);
-    }
+    crate::scene::request(match map {
+        Some(m) => crate::scene::Scene::Game { map: m.to_string(), mode: mode.map(str::to_string), sandbox },
+        None => crate::scene::Scene::Menu,
+    });
 }
 
 /// In game: F10 goes back to the menu.
-pub fn back_to_menu(keys: Res<ButtonInput<KeyCode>>, mut exit: MessageWriter<AppExit>) {
+pub fn back_to_menu(keys: Res<ButtonInput<KeyCode>>) {
     if keys.just_pressed(KeyCode::F10) {
         relaunch(None);
-        exit.write(AppExit::Success);
     }
 }
 

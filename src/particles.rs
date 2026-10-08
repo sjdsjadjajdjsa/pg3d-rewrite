@@ -6,6 +6,8 @@
 //! emitter under it spawns one camera-facing quad that plays its row of the texture sheet
 //! over its lifetime.
 
+#[allow(unused_imports)]
+use crate::scene::{FixedUpdate, PostStartup, PostUpdate, PreStartup, Startup, Update};
 use bevy::{
     camera::visibility::RenderLayers,
     gltf::GltfExtras,
@@ -16,9 +18,9 @@ use serde::Deserialize;
 
 pub struct ParticlesPlugin;
 
-impl Plugin for ParticlesPlugin {
-    fn build(&self, app: &mut App) {
-        app.add_message::<Burst>().add_systems(Update, (attach_emitters, spawn_bursts, update_particles).chain());
+impl crate::scene::ScenePlugin for ParticlesPlugin {
+    fn build(&self, app: &mut crate::scene::SceneBuilder) {
+        app.add_systems(Update, (attach_emitters, spawn_bursts, update_particles).chain());
     }
 }
 

@@ -5,6 +5,8 @@
 //! Shooting one blows it up, hurting zombies around it; it comes back after `respawn` s.
 
 use avian3d::prelude::*;
+#[allow(unused_imports)]
+use crate::scene::{FixedUpdate, PostStartup, PostUpdate, PreStartup, Startup, Update};
 use bevy::{gltf::GltfExtras, prelude::*};
 use serde::Deserialize;
 
@@ -16,8 +18,8 @@ use crate::{
 
 pub struct ExplosivesPlugin;
 
-impl Plugin for ExplosivesPlugin {
-    fn build(&self, app: &mut App) {
+impl crate::scene::ScenePlugin for ExplosivesPlugin {
+    fn build(&self, app: &mut crate::scene::SceneBuilder) {
         app.add_systems(Update, (tag_explosives, explode, respawn));
     }
 }

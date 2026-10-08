@@ -2,6 +2,8 @@
 //! colliders.json) and markers such as spawn zones (info.json).
 
 use avian3d::prelude::*;
+#[allow(unused_imports)]
+use crate::scene::{FixedUpdate, PostStartup, PostUpdate, PreStartup, Startup, Update};
 use bevy::{asset::RenderAssetUsages, gltf::GltfLoaderSettings, prelude::*};
 use serde::Deserialize;
 
@@ -119,8 +121,8 @@ pub struct Trigger {
     pub name: String,
 }
 
-impl Plugin for MapPlugin {
-    fn build(&self, app: &mut App) {
+impl crate::scene::ScenePlugin for MapPlugin {
+    fn build(&self, app: &mut crate::scene::SceneBuilder) {
         app.insert_resource(ClearColor(Color::srgb(0.45, 0.65, 0.9)))
             .init_resource::<MapMarkers>()
             .init_resource::<MapInfo>()

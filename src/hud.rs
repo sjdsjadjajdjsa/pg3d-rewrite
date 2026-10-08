@@ -7,14 +7,16 @@
 //! The original draws these with NGUI sprites from its in-match atlas; we draw them with
 //! plain Bevy UI shapes (no icons yet).
 
+#[allow(unused_imports)]
+use crate::scene::{FixedUpdate, PostStartup, PostUpdate, PreStartup, Startup, Update};
 use bevy::{asset::RenderAssetUsages, prelude::*, render::render_resource::{Extent3d, TextureDimension, TextureFormat}};
 
 use crate::bots::{PLAYER_MAX_HEALTH, PlayerHit, PlayerStats};
 
 pub struct HudPlugin;
 
-impl Plugin for HudPlugin {
-    fn build(&self, app: &mut App) {
+impl crate::scene::ScenePlugin for HudPlugin {
+    fn build(&self, app: &mut crate::scene::SceneBuilder) {
         app.add_systems(Startup, spawn_hud).add_systems(Update, (damage_flash, hit_arrows, heal_flash));
     }
 }

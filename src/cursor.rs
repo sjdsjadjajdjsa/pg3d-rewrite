@@ -3,6 +3,8 @@
 //! pause, results). It is a real system cursor, so it moves without any delay; the ring
 //! picture is scaled to the window height once and again when the window is resized.
 
+#[allow(unused_imports)]
+use crate::scene::{FixedUpdate, PostStartup, PostUpdate, PreStartup, Startup, Update};
 use bevy::{
     asset::RenderAssetUsages,
     prelude::*,
@@ -12,8 +14,8 @@ use bevy::{
 
 pub struct CursorPlugin;
 
-impl Plugin for CursorPlugin {
-    fn build(&self, app: &mut App) {
+impl crate::scene::ScenePlugin for CursorPlugin {
+    fn build(&self, app: &mut crate::scene::SceneBuilder) {
         app.add_systems(Startup, load).add_systems(Update, (apply, log_fps));
     }
 }

@@ -8,6 +8,8 @@
 //!     (ChangeButtonWindow_Used) and then swaps the two. "Default Settings" resets all.
 //! The other tabs (touch controls, graphics, ...) are hidden, as are options we don't have.
 
+#[allow(unused_imports)]
+use crate::scene::{FixedUpdate, PostStartup, PostUpdate, PreStartup, Startup, Update};
 use bevy::{diagnostic::FrameCount, prelude::*};
 
 use crate::{
@@ -17,8 +19,8 @@ use crate::{
 
 pub struct SettingsUiPlugin;
 
-impl Plugin for SettingsUiPlugin {
-    fn build(&self, app: &mut App) {
+impl crate::scene::ScenePlugin for SettingsUiPlugin {
+    fn build(&self, app: &mut crate::scene::SceneBuilder) {
         app.init_resource::<Rebinding>()
             .add_systems(Update, (settings_sliders, tab_clicks, toggle_clicks, rebind_clicks, capture_key, binding_icons, scroll_rows).chain());
     }

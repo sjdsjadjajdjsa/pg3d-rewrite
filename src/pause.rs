@@ -3,6 +3,8 @@
 //! opens the original pause settings window (SettingsPanel); its back arrow and Esc return
 //! to the Menu. The game world stops while either is open. F10 still leaves to the lobby.
 
+#[allow(unused_imports)]
+use crate::scene::{FixedUpdate, PostStartup, PostUpdate, PreStartup, Startup, Update};
 use bevy::{
     prelude::*,
     window::{CursorGrabMode, CursorOptions},
@@ -19,8 +21,8 @@ pub struct Paused(pub bool);
 #[derive(Resource)]
 struct PauseScreen(Option<Entity>);
 
-impl Plugin for PausePlugin {
-    fn build(&self, app: &mut App) {
+impl crate::scene::ScenePlugin for PausePlugin {
+    fn build(&self, app: &mut crate::scene::SceneBuilder) {
         app.init_resource::<Paused>()
             .add_systems(Startup, spawn_pause_screen)
             .add_plugins(crate::settings_ui::SettingsUiPlugin)
@@ -137,7 +139,7 @@ fn toggle(
     mut screens: Query<&mut NguiScreen>,
     mut current: Local<Option<View>>,
     mut clicks: MessageReader<crate::ngui::NguiClick>,
-    mut exit: MessageWriter<AppExit>,
+
     mut tested: Local<bool>,
 ) {
     let cur = current.get_or_insert(View::Playing);
@@ -168,7 +170,6 @@ fn toggle(
             "BtnSettings" => next = Some(View::Settings),
             "BtnQuit" => {
                 crate::menu::relaunch(None);
-                exit.write(AppExit::Success);
             }
             _ => {}
         }

@@ -12,6 +12,8 @@
 use std::collections::HashMap;
 
 use avian3d::prelude::*;
+#[allow(unused_imports)]
+use crate::scene::{FixedUpdate, PostStartup, PostUpdate, PreStartup, Startup, Update};
 use bevy::{prelude::*, world_serialization::WorldInstanceReady};
 use serde::Deserialize;
 
@@ -49,11 +51,9 @@ const CORPSE_TIME: f32 = 2.0;
 
 pub struct BotsPlugin;
 
-impl Plugin for BotsPlugin {
-    fn build(&self, app: &mut App) {
-        app.add_message::<BotDamage>()
-            .add_message::<PlayerHit>()
-            .init_resource::<Wave>()
+impl crate::scene::ScenePlugin for BotsPlugin {
+    fn build(&self, app: &mut crate::scene::SceneBuilder) {
+        app.init_resource::<Wave>()
             .insert_resource(PlayerStats { health: PLAYER_MAX_HEALTH, protected: SPAWN_PROTECTION, score: 0, kills: 0, respawn_in: 0.0 })
             .add_systems(Startup, load_bot_defs)
             .add_systems(FixedUpdate, (bot_brain, bot_move).chain())

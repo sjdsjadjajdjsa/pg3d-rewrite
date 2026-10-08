@@ -8,8 +8,9 @@
 //! holds several end screens; we switch on what the current game shows (ArenaResults,
 //! BackgroundSurvivalTexture, MiniGameButton = "Again", QuitButton).
 
+#[allow(unused_imports)]
+use crate::scene::{FixedUpdate, PostStartup, PostUpdate, PreStartup, Startup, Update};
 use bevy::{
-    app::AppExit,
     prelude::*,
     window::{CursorGrabMode, CursorOptions},
 };
@@ -43,8 +44,8 @@ struct LoadingLabel;
 /// Parts of the screen that appear only after "Loading".
 const TABLE_PARTS: [&str; 3] = ["ArenaResults", "BottomLine", "BottomLeftCorner"];
 
-impl Plugin for ResultsPlugin {
-    fn build(&self, app: &mut App) {
+impl crate::scene::ScenePlugin for ResultsPlugin {
+    fn build(&self, app: &mut crate::scene::SceneBuilder) {
         app.init_resource::<MatchOver>()
             .init_resource::<Loading>()
             .add_systems(Startup, spawn_screen)
@@ -265,7 +266,7 @@ fn clicks(
     mut clicks: MessageReader<NguiClick>,
     over: Res<MatchOver>,
     map: Res<CurrentMap>,
-    mut exit: MessageWriter<AppExit>,
+
 ) {
     if !over.0 {
         return;
@@ -274,11 +275,9 @@ fn clicks(
         match c.name.as_str() {
             "MiniGameButton" | "RetryImageButton" => {
                 crate::menu::relaunch_with(Some(&map.0), false);
-                exit.write(AppExit::Success);
             }
             "QuitButton" | "MenuImageButton" => {
                 crate::menu::relaunch(None);
-                exit.write(AppExit::Success);
             }
             _ => {}
         }

@@ -3,6 +3,8 @@
 //! for hits with a ray along each frame's movement, and explode or deal direct damage.
 
 use avian3d::prelude::*;
+#[allow(unused_imports)]
+use crate::scene::{FixedUpdate, PostStartup, PostUpdate, PreStartup, Startup, Update};
 use bevy::prelude::*;
 
 use crate::{
@@ -12,10 +14,9 @@ use crate::{
 
 pub struct ProjectilesPlugin;
 
-impl Plugin for ProjectilesPlugin {
-    fn build(&self, app: &mut App) {
-        app.add_message::<SpawnProjectile>()
-            .add_systems(Update, (spawn_projectiles, fly, explosions).chain());
+impl crate::scene::ScenePlugin for ProjectilesPlugin {
+    fn build(&self, app: &mut crate::scene::SceneBuilder) {
+        app.add_systems(Update, (spawn_projectiles, fly, explosions).chain());
     }
 }
 

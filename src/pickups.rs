@@ -3,6 +3,8 @@
 //! Model and sounds: <data>/pickups/ from ../pixel-gun-3d-re/scripts/export_pickups.py
 //! (the original BonusGeneric prefab, which holds one child model per bonus type).
 
+#[allow(unused_imports)]
+use crate::scene::{FixedUpdate, PostStartup, PostUpdate, PreStartup, Startup, Update};
 use bevy::{prelude::*, world_serialization::WorldInstanceReady};
 
 use crate::{
@@ -22,8 +24,8 @@ const PICKUP_RADIUS: f32 = 1.3;
 
 pub struct PickupsPlugin;
 
-impl Plugin for PickupsPlugin {
-    fn build(&self, app: &mut App) {
+impl crate::scene::ScenePlugin for PickupsPlugin {
+    fn build(&self, app: &mut crate::scene::SceneBuilder) {
         app.add_systems(Startup, spawn_pickups)
             .add_systems(Update, (spin, collect, respawn, wave_prize));
     }

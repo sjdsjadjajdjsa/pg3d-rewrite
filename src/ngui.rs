@@ -15,6 +15,8 @@
 
 use std::collections::HashMap;
 
+#[allow(unused_imports)]
+use crate::scene::{FixedUpdate, PostStartup, PostUpdate, PreStartup, Startup, Update};
 use bevy::{
     prelude::*,
     sprite::{BorderRect, SliceScaleMode, TextureSlicer},
@@ -27,13 +29,15 @@ use crate::DataDir;
 
 pub struct NguiPlugin;
 
-impl Plugin for NguiPlugin {
-    fn build(&self, app: &mut App) {
-        bevy::asset::embedded_asset!(app, "glyph.wgsl");
-        app.add_plugins(UiMaterialPlugin::<GlyphMaterial>::default());
-        app.add_message::<NguiClick>()
-            .add_message::<NguiSlider>()
-            .add_systems(Update, (gamma_blend_fix, layout, (test_press, hover, press_feedback, clicks, cover_crop, texture_uv, drag_sliders)).chain());
+/// The App-wide part of NGUI (shader, glyph material, messages).
+pub fn register(app: &mut App) {
+    bevy::asset::embedded_asset!(app, "glyph.wgsl");
+    app.add_plugins(UiMaterialPlugin::<GlyphMaterial>::default()).add_message::<NguiClick>().add_message::<NguiSlider>();
+}
+
+impl crate::scene::ScenePlugin for NguiPlugin {
+    fn build(&self, app: &mut crate::scene::SceneBuilder) {
+        app.add_systems(Update, (gamma_blend_fix, layout, (test_press, hover, press_feedback, clicks, cover_crop, texture_uv, drag_sliders)).chain());
     }
 }
 

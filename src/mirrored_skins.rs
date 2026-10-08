@@ -7,6 +7,8 @@
 //! While a skinned mesh's first bone (times its bind pose) mirrors, it gets a copy of the
 //! mesh with the triangle winding reversed.
 
+#[allow(unused_imports)]
+use crate::scene::{FixedUpdate, PostStartup, PostUpdate, PreStartup, Startup, Update};
 use bevy::{
     mesh::{Indices, skinning::{SkinnedMesh, SkinnedMeshInverseBindposes}},
     prelude::*,
@@ -14,8 +16,8 @@ use bevy::{
 
 pub struct MirroredSkinsPlugin;
 
-impl Plugin for MirroredSkinsPlugin {
-    fn build(&self, app: &mut App) {
+impl crate::scene::ScenePlugin for MirroredSkinsPlugin {
+    fn build(&self, app: &mut crate::scene::SceneBuilder) {
         app.add_systems(PostUpdate, flip_mirrored.after(TransformSystems::Propagate));
     }
 }

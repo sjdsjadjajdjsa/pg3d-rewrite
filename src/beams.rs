@@ -5,6 +5,8 @@
 
 use std::collections::HashMap;
 
+#[allow(unused_imports)]
+use crate::scene::{FixedUpdate, PostStartup, PostUpdate, PreStartup, Startup, Update};
 use bevy::{
     asset::RenderAssetUsages,
     mesh::{Indices, PrimitiveTopology},
@@ -16,9 +18,9 @@ use crate::{camera::PlayerCamera, DataDir};
 
 pub struct BeamsPlugin;
 
-impl Plugin for BeamsPlugin {
-    fn build(&self, app: &mut App) {
-        app.add_message::<SpawnBeam>().add_systems(Startup, load).add_systems(Update, (spawn, update).chain());
+impl crate::scene::ScenePlugin for BeamsPlugin {
+    fn build(&self, app: &mut crate::scene::SceneBuilder) {
+        app.add_systems(Startup, load).add_systems(Update, (spawn, update).chain());
     }
 }
 

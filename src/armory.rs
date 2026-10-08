@@ -6,6 +6,8 @@
 
 use std::collections::HashMap;
 
+#[allow(unused_imports)]
+use crate::scene::{FixedUpdate, PostStartup, PostUpdate, PreStartup, Startup, Update};
 use bevy::prelude::*;
 use serde::{Deserialize, Serialize};
 
@@ -16,8 +18,8 @@ use crate::{
 
 pub struct ArmoryPlugin;
 
-impl Plugin for ArmoryPlugin {
-    fn build(&self, app: &mut App) {
+impl crate::scene::ScenePlugin for ArmoryPlugin {
+    fn build(&self, app: &mut crate::scene::SceneBuilder) {
         app.add_plugins((crate::armory_preview::ArmoryPreviewPlugin, crate::particles::ParticlesPlugin))
             .add_systems(Update, ((setup, clicks, refresh).chain(), preview_on_when_open, fade_toasts));
     }

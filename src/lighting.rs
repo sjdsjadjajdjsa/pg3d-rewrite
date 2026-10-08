@@ -10,6 +10,8 @@
 //!     resampled by ../pixel-gun-3d-re/scripts/export_probes.py into a Bevy irradiance
 //!     volume (probes.json + probes.bin). Like Unity, they then get no flat ambient light.
 
+#[allow(unused_imports)]
+use crate::scene::{FixedUpdate, PostStartup, PostUpdate, PreStartup, Startup, Update};
 use bevy::{
     asset::RenderAssetUsages,
     camera::{Exposure, visibility::RenderLayers},
@@ -29,8 +31,8 @@ use crate::{
 
 pub struct LightingPlugin;
 
-impl Plugin for LightingPlugin {
-    fn build(&self, app: &mut App) {
+impl crate::scene::ScenePlugin for LightingPlugin {
+    fn build(&self, app: &mut crate::scene::SceneBuilder) {
         app.init_resource::<HasProbes>()
             .add_systems(Startup, (setup_lights, setup_camera_look).after(crate::camera::spawn_camera))
             .add_systems(Update, (cubemap_sky, hide_skybox_meshes))

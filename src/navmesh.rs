@@ -11,6 +11,8 @@ use std::{
     collections::{BinaryHeap, HashMap},
 };
 
+#[allow(unused_imports)]
+use crate::scene::{FixedUpdate, PostStartup, PostUpdate, PreStartup, Startup, Update};
 use bevy::prelude::*;
 use serde::Deserialize;
 
@@ -18,8 +20,8 @@ use crate::{DataDir, map::CurrentMap};
 
 pub struct NavMeshPlugin;
 
-impl Plugin for NavMeshPlugin {
-    fn build(&self, app: &mut App) {
+impl crate::scene::ScenePlugin for NavMeshPlugin {
+    fn build(&self, app: &mut crate::scene::SceneBuilder) {
         app.add_systems(PreStartup, load_navmesh);
     }
 }

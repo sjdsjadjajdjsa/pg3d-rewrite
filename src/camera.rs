@@ -5,6 +5,8 @@
 
 use std::f32::consts::FRAC_PI_2;
 
+#[allow(unused_imports)]
+use crate::scene::{FixedUpdate, PostStartup, PostUpdate, PreStartup, Startup, Update};
 use bevy::{
     input::mouse::AccumulatedMouseMotion,
     prelude::*,
@@ -21,8 +23,8 @@ pub enum CameraMode {
     Fly,
 }
 
-impl Plugin for CameraPlugin {
-    fn build(&self, app: &mut App) {
+impl crate::scene::ScenePlugin for CameraPlugin {
+    fn build(&self, app: &mut crate::scene::SceneBuilder) {
         // PG3D_CAM (used for automated screenshots) starts in fly mode.
         let mode = if std::env::var("PG3D_CAM").is_ok() { CameraMode::Fly } else { CameraMode::Walk };
         app.insert_resource(mode)

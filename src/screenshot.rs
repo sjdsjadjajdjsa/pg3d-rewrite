@@ -2,6 +2,8 @@
 //! PG3D_AUTOSHOT=file.png takes one screenshot after the map has loaded, then quits
 //! (used for automated checks). PG3D_AUTOSHOT_TIME=seconds picks a time instead.
 
+#[allow(unused_imports)]
+use crate::scene::{FixedUpdate, PostStartup, PostUpdate, PreStartup, Startup, Update};
 use bevy::{
     app::AppExit,
     diagnostic::FrameCount,
@@ -11,8 +13,8 @@ use bevy::{
 
 pub struct ScreenshotPlugin;
 
-impl Plugin for ScreenshotPlugin {
-    fn build(&self, app: &mut App) {
+impl crate::scene::ScenePlugin for ScreenshotPlugin {
+    fn build(&self, app: &mut crate::scene::SceneBuilder) {
         app.add_systems(Update, (manual_shot, auto_shot));
     }
 }

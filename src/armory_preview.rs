@@ -7,6 +7,8 @@
 //! character's gun point with its own arms, posed by the weapon's profile animation, and
 //! the character's arms are hidden.
 
+#[allow(unused_imports)]
+use crate::scene::{FixedUpdate, PostStartup, PostUpdate, PreStartup, Startup, Update};
 use bevy::{
     camera::{visibility::RenderLayers, RenderTarget},
     core_pipeline::tonemapping::Tonemapping,
@@ -20,8 +22,8 @@ use serde::Deserialize;
 
 pub struct ArmoryPreviewPlugin;
 
-impl Plugin for ArmoryPreviewPlugin {
-    fn build(&self, app: &mut App) {
+impl crate::scene::ScenePlugin for ArmoryPreviewPlugin {
+    fn build(&self, app: &mut crate::scene::SceneBuilder) {
         app.init_resource::<PreviewWeapon>()
             .add_systems(Startup, spawn)
             .init_resource::<PreviewShoot>()

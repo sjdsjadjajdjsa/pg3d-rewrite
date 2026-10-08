@@ -2,6 +2,8 @@
 
 use std::collections::HashMap;
 
+#[allow(unused_imports)]
+use crate::scene::{FixedUpdate, PostStartup, PostUpdate, PreStartup, Startup, Update};
 use bevy::{
     audio::{PlaybackMode, SpatialScale, Volume},
     prelude::*,
@@ -9,8 +11,8 @@ use bevy::{
 
 pub struct SoundPlugin;
 
-impl Plugin for SoundPlugin {
-    fn build(&self, app: &mut App) {
+impl crate::scene::ScenePlugin for SoundPlugin {
+    fn build(&self, app: &mut crate::scene::SceneBuilder) {
         app.add_systems(PostStartup, add_listener).add_systems(Update, player_sounds);
     }
 }

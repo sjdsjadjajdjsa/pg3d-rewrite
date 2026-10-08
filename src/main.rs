@@ -1,6 +1,6 @@
 //! Pixel Gun 3D rewrite in Rust + Bevy.
 //!
-//! Run:  cargo run                   (start menu)
+//! Run:  cargo run                   (start menu; menu and matches share one window)
 //!       cargo run -- arena          (straight into a map = folder in <data>/maps/)
 //! Data: assets are NOT part of this repo. They are exported from your own copy of the
 //!       game by ../pixel-gun-3d-re/scripts/export_map.py. Override the location with
@@ -34,6 +34,7 @@ mod projectiles;
 mod progress;
 mod results;
 mod team_match;
+mod scene;
 mod screenshot;
 mod settings;
 mod settings_ui;
@@ -74,37 +75,19 @@ fn ignore_real_input(
 fn main() {
     sound::set_sfx_volume(settings::Settings::load().sfx_volume());
     let data_dir = std::env::var("PG3D_DATA").unwrap_or_else(|_| DEFAULT_DATA.to_string());
-    let Some(map_name) = std::env::args().nth(1) else {
-        // no map given: show the start menu
-        App::new()
-            // a command on an entity that is already gone (e.g. a zombie despawned the same
-            // frame) logs a warning instead of stopping the game
-            .set_error_handler(bevy::ecs::error::warn)
-            .add_plugins(
-                DefaultPlugins
-                    .set(AssetPlugin { file_path: data_dir.clone(), ..default() })
-                    .set(WindowPlugin {
-                        primary_window: Some(Window {
-                            title: "Pixel Gun 3D (Rust)".into(),
-                            focused: !automated(),
-                            ..default()
-                        }),
-                        ..default()
-                    }),
-            )
-            .insert_resource(DataDir(data_dir.into()))
-            .insert_resource(settings::Settings::load())
-            .insert_resource(controls::Controls::load())
-            .insert_resource(wallet::Wallet::load())
-            .add_plugins((menu::MenuPlugin, screenshot::ScreenshotPlugin, cursor::CursorPlugin, armory::ArmoryPlugin, mirrored_skins::MirroredSkinsPlugin))
-            .add_systems(Startup, sound::load_game_sounds)
-            .add_systems(Update, sound::ui_click_sounds)
-            .run();
-        return;
+    // a map name starts straight in a match, else the menu; both run in this one window
+    // and switch between each other (scene.rs)
+    let first = match std::env::args().nth(1) {
+        Some(map) => scene::Scene::Game {
+            map,
+            mode: std::env::var("PG3D_MODE").ok(),
+            sandbox: std::env::var("PG3D_NOBOTS").is_ok(),
+        },
+        None => scene::Scene::Menu,
     };
-
-    App::new()
-        .set_error_handler(bevy::ecs::error::warn)
+    scene::request(first);
+    let mut app = App::new();
+    app.set_error_handler(bevy::ecs::error::warn)
         .add_plugins(
             DefaultPlugins
                 .set(AssetPlugin {
@@ -114,7 +97,7 @@ fn main() {
                 })
                 .set(WindowPlugin {
                     primary_window: Some(Window {
-                        title: format!("Pixel Gun 3D (Rust) - {map_name}"),
+                        title: "Pixel Gun 3D (Rust)".into(),
                         focused: !automated(),
                         window_level: if automated() {
                             bevy::window::WindowLevel::AlwaysOnBottom
@@ -150,34 +133,44 @@ fn main() {
         .insert_resource(settings::Settings::load())
         .insert_resource(controls::Controls::load())
         .insert_resource(wallet::Wallet::load())
-        .insert_resource(map::CurrentMap(map_name))
-        .add_plugins((
-            map::MapPlugin,
-            navmesh::NavMeshPlugin,
-            particles::ParticlesPlugin,
-            lighting::LightingPlugin,
-            player::PlayerPlugin,
-            camera::CameraPlugin,
-            screenshot::ScreenshotPlugin,
-            sound::SoundPlugin,
-            weapons::WeaponsPlugin,
-            bots::BotsPlugin,
-            projectiles::ProjectilesPlugin,
-            pickups::PickupsPlugin,
-            crate::ngui::NguiPlugin,
-            pause::PausePlugin,
-            results::ResultsPlugin,
-        ))
-        .add_plugins((team_match::TeamMatchPlugin, mirrored_skins::MirroredSkinsPlugin))
+        .insert_resource(map::CurrentMap("lobby".into()))
+        .insert_resource(scene::SceneSets { menu: menu_scene, game: game_scene })
+        // messages every scene shares
+        .add_message::<beams::SpawnBeam>()
+        .add_message::<bots::BotDamage>()
+        .add_message::<bots::PlayerHit>()
+        .add_message::<particles::Burst>()
+        .add_message::<projectiles::SpawnProjectile>()
+        .add_plugins(scene::ScenesPlugin)
         .add_systems(Startup, sound::load_game_sounds)
-        .add_systems(Update, sound::ui_click_sounds)
-        .add_plugins((hud::HudPlugin, ingame_ui::InGameUiPlugin, explosives::ExplosivesPlugin, cursor::CursorPlugin, beams::BeamsPlugin))
-        .add_systems(Update, (menu::back_to_menu, menu::test_click, hide_hud))
+        .add_systems(Update, sound::ui_click_sounds.after(scene::run_update))
         .add_systems(
             PreUpdate,
-            ignore_real_input.after(bevy::input::InputSystems).run_if(|| automated()),
-        )
-        .run();
+            ignore_real_input.after(bevy::input::InputSystems).run_if(automated),
+        );
+    ngui::register(&mut app);
+    app.run();
+}
+
+/// The start menu (lobby, Armory, Settings, mode picker).
+fn menu_scene(app: &mut scene::SceneBuilder) {
+    app.add_plugins((menu::MenuPlugin, screenshot::ScreenshotPlugin, cursor::CursorPlugin, armory::ArmoryPlugin, mirrored_skins::MirroredSkinsPlugin));
+}
+
+/// A match on CurrentMap.
+fn game_scene(app: &mut scene::SceneBuilder) {
+    app.add_plugins((
+        map::MapPlugin,
+        navmesh::NavMeshPlugin,
+        particles::ParticlesPlugin,
+        lighting::LightingPlugin,
+        player::PlayerPlugin,
+    ))
+    .add_plugins((camera::CameraPlugin, screenshot::ScreenshotPlugin, sound::SoundPlugin, weapons::WeaponsPlugin, bots::BotsPlugin))
+    .add_plugins((projectiles::ProjectilesPlugin, pickups::PickupsPlugin, ngui::NguiPlugin, pause::PausePlugin, results::ResultsPlugin))
+    .add_plugins((team_match::TeamMatchPlugin, mirrored_skins::MirroredSkinsPlugin))
+    .add_plugins((hud::HudPlugin, ingame_ui::InGameUiPlugin, explosives::ExplosivesPlugin, cursor::CursorPlugin, beams::BeamsPlugin))
+    .add_systems(scene::Update, (menu::back_to_menu, menu::test_click, hide_hud));
 }
 
 /// PG3D_NOHUD=1 (map pictures for the mode picker): no HUD and no gun in view.

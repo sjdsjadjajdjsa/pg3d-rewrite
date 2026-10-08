@@ -7,6 +7,8 @@
 //! PlayerCoreSettingsStorager "dynamic settings" (probably server config).
 
 use avian3d::prelude::*;
+#[allow(unused_imports)]
+use crate::scene::{FixedUpdate, PostStartup, PostUpdate, PreStartup, Startup, Update};
 use bevy::prelude::*;
 
 use crate::{
@@ -50,8 +52,8 @@ pub const EYE_HEIGHT: f32 = 0.7;
 
 pub struct PlayerPlugin;
 
-impl Plugin for PlayerPlugin {
-    fn build(&self, app: &mut App) {
+impl crate::scene::ScenePlugin for PlayerPlugin {
+    fn build(&self, app: &mut crate::scene::SceneBuilder) {
         app.add_systems(Startup, (spawn_player, face_start.after(spawn_player).after(crate::camera::spawn_camera)))
             .add_systems(FixedUpdate, (read_input, move_player).chain())
             .add_systems(Update, (kill_zones, trace));

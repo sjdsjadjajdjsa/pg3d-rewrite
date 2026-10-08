@@ -10,6 +10,8 @@
 use std::collections::HashMap;
 
 use avian3d::prelude::*;
+#[allow(unused_imports)]
+use crate::scene::{FixedUpdate, PostStartup, PostUpdate, PreStartup, Startup, Update};
 use bevy::{
     camera::{ClearColorConfig, Exposure, visibility::RenderLayers},
     core_pipeline::tonemapping::Tonemapping,
@@ -41,8 +43,8 @@ pub const VIEW_MODEL_LAYER: usize = 1;
 
 pub struct WeaponsPlugin;
 
-impl Plugin for WeaponsPlugin {
-    fn build(&self, app: &mut App) {
+impl crate::scene::ScenePlugin for WeaponsPlugin {
+    fn build(&self, app: &mut crate::scene::SceneBuilder) {
         app.add_systems(Startup, (load_loadout, spawn_hud))
             .add_systems(PostStartup, spawn_view_model_camera)
             .add_systems(

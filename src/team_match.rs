@@ -12,8 +12,9 @@
 //!
 //! UI: <data>/ui/table from `export_ngui.py resources.assets NetworkStartTableNGUI table`.
 
+#[allow(unused_imports)]
+use crate::scene::{FixedUpdate, PostStartup, PostUpdate, PreStartup, Startup, Update};
 use bevy::{
-    app::AppExit,
     prelude::*,
     window::{CursorGrabMode, CursorOptions},
 };
@@ -89,8 +90,8 @@ struct Rewards {
     rewards: std::collections::HashMap<String, ModeReward>,
 }
 
-impl Plugin for TeamMatchPlugin {
-    fn build(&self, app: &mut App) {
+impl crate::scene::ScenePlugin for TeamMatchPlugin {
+    fn build(&self, app: &mut crate::scene::SceneBuilder) {
         if !team_mode() {
             return;
         }
@@ -628,11 +629,10 @@ fn ending(
     }
 }
 
-fn clicks(mut clicks: MessageReader<NguiClick>, m: Res<TeamMatch>, mut exit: MessageWriter<AppExit>) {
+fn clicks(mut clicks: MessageReader<NguiClick>, m: Res<TeamMatch>) {
     for c in clicks.read() {
         if matches!(m.phase, Phase::Table(_)) && matches!(c.name.as_str(), "Ok" | "Background" | "Continue_GoToLobbyButton") {
             crate::menu::relaunch(None);
-            exit.write(AppExit::Success);
         }
     }
 }
