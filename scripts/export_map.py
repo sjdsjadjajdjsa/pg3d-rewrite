@@ -216,6 +216,7 @@ class Exporter:
         self.lightmaps = []      # lightmap index -> png path (or None)
         self.lightmap_scale = 1.0
         self.render = {}
+        self.skybox = None       # Skybox/Cubemap material drawn on a mesh (see export_cubemap)
         self.stats = collections.Counter()
 
     # ---- mesh data
@@ -392,6 +393,8 @@ class Exporter:
                     pbr["baseColorFactor"] = [clamp01(c.r), clamp01(c.g), clamp01(c.b), clamp01(c.a)]
                     break
             floats = dict(as_pairs(props.m_Floats))
+            if shader_name == "Skybox/Cubemap" and self.skybox is None:
+                self.skybox = self.export_cubemap(texenvs.get("_Tex"), colors.get("_Tint"), floats)
             keywords = str(getattr(mat, "m_ShaderKeywords", "") or "").split()
             keywords += [str(k) for k in (getattr(mat, "m_ValidKeywords", None) or [])]
             if keywords:
@@ -507,6 +510,45 @@ class Exporter:
             img.save(self.out / name)
             self.lightmaps.append(name)
         self.stats["lightmaps"] = sum(1 for m in self.lightmaps if m)
+
+    def export_cubemap(self, te, tint, floats):
+        """A Skybox/Cubemap material's cubemap as textures/skybox.png: the six faces stacked
+        top to bottom in wgpu order (+X, -X, +Y, -Y, +Z, -Z).
+
+        Unity is left-handed and the export mirrors X, so the X faces swap places and every
+        face is mirrored left to right. Unity draws tex x _Tint x 2 x _Exposure (gamma space);
+        "brightness" is that factor, still in gamma."""
+        import texture2ddecoder
+        from PIL import Image
+        tex = deref(te.m_Texture) if te is not None else None
+        if tex is None:
+            return None
+        raw = bytes(tex.image_data) or stream_bytes(tex)
+        w, fmt, mips = tex.m_Width, int(tex.m_TextureFormat), max(1, tex.m_MipCount)
+        decoders = {10: (texture2ddecoder.decode_bc1, 8), 12: (texture2ddecoder.decode_bc3, 16)}
+        if fmt not in decoders:
+            print(f"  skybox {tex.m_Name}: format {fmt} not handled", file=sys.stderr)
+            return None
+        dec, block = decoders[fmt]
+        face_bytes = sum(max(1, (w >> i) // 4) ** 2 * block for i in range(mips))
+        if len(raw) < 6 * face_bytes:
+            print(f"  skybox {tex.m_Name}: {len(raw)} bytes, expected {6 * face_bytes}", file=sys.stderr)
+            return None
+        faces = []
+        for k in range(6):
+            d = raw[k * face_bytes:k * face_bytes + (w // 4) ** 2 * block]
+            faces.append(Image.frombytes("RGBA", (w, w), dec(d, w, w), "raw", "BGRA").convert("RGB")
+                         .transpose(Image.FLIP_LEFT_RIGHT))
+        faces[0], faces[1] = faces[1], faces[0]
+        strip = Image.new("RGB", (w, 6 * w))
+        for k, f in enumerate(faces):
+            strip.paste(f, (0, k * w))
+        (self.out / "textures").mkdir(parents=True, exist_ok=True)
+        strip.save(self.out / "textures/skybox.png")
+        t = [tint.r, tint.g, tint.b] if tint is not None else [0.5, 0.5, 0.5]
+        k = 2.0 * float(floats.get("_Exposure", 1.0))
+        return {"png": "textures/skybox.png", "tint": [c * k for c in t],
+                "rotation": float(floats.get("_Rotation", 0.0))}
 
     def render_settings(self, rs):
         def col(c):
@@ -825,7 +867,7 @@ class Exporter:
         self.col.save(self.out)
         (self.out / "colliders.json").write_text(json.dumps(self.colliders))
         info.update(stats=dict(self.stats), lightmap_scale=self.lightmap_scale, render=self.render,
-                    markers=self.markers, lights=self.lights, cameras=self.cameras)
+                    markers=self.markers, lights=self.lights, cameras=self.cameras, skybox=self.skybox)
         (self.out / "info.json").write_text(json.dumps(info, indent=1))
 
 
