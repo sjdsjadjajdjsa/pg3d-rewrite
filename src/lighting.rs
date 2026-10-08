@@ -126,6 +126,10 @@ fn setup_lights(
         brightness: if probes { 0.0 } else { r.ambient_intensity.unwrap_or(1.0) },
         affects_lightmapped_meshes: false,
     });
+    // PG3D_NOSUN=1 (testing): no sun, to see the baked lighting alone
+    if std::env::var("PG3D_NOSUN").is_ok() {
+        return;
+    }
     // Sun: the map's directional light, or a default one.
     let sun = info.lights.iter().find(|l| l.kind == 1);
     let (color, intensity, dir) = sun
@@ -158,9 +162,10 @@ struct LightmapExtras {
 /// Bevy puts node extras on the node entity; its mesh primitives are the entity itself
 /// or its children.
 ///
-/// The Lightmap component goes on only once its image has loaded: meshes that get one
-/// earlier are sometimes drawn with a placeholder lightmap for good (black or untextured
-/// surfaces, about half of the runs).
+/// The Lightmap component goes on only once its image has loaded, and is marked changed
+/// again for a while after: Bevy only picks up a lightmap whose GPU image is ready when
+/// the component is added or changed, so meshes that got one too early were drawn without
+/// it for good (black or untextured surfaces, lit by the sun instead).
 fn attach_lightmaps(
     mut commands: Commands,
     assets: Res<AssetServer>,
@@ -169,7 +174,20 @@ fn attach_lightmaps(
     children: Query<&Children>,
     meshes: Query<(), With<Mesh3d>>,
     mut pending: Local<Vec<(Entity, Lightmap)>>,
+    mut refresh: Local<Vec<(Entity, u32)>>,
+    mut lightmaps: Query<&mut Lightmap>,
 ) {
+    refresh.retain_mut(|(e, n)| {
+        if let Ok(mut lm) = lightmaps.get_mut(*e) {
+            lm.set_changed();
+        }
+        *n -= 1;
+        *n > 0
+    });
+    // PG3D_NOLIGHTMAPS=1 (testing): draw the map without its baked lighting
+    if std::env::var("PG3D_NOLIGHTMAPS").is_ok() {
+        return;
+    }
     for (entity, extras) in &added {
         let Ok(x) = serde_json::from_str::<LightmapExtras>(&extras.value) else { continue };
         let [x0, y0, x1, y1] = x.lightmap_rect;
@@ -191,6 +209,7 @@ fn attach_lightmaps(
         }
         if let Ok(mut e) = commands.get_entity(*t) {
             e.insert(lm.clone());
+            refresh.push((*t, 60));
         }
         false
     });

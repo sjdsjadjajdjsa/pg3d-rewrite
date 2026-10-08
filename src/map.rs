@@ -109,7 +109,8 @@ impl Plugin for MapPlugin {
             .init_resource::<MapMarkers>()
             .init_resource::<MapInfo>()
             .add_systems(PreStartup, load_markers)
-            .add_systems(Startup, (spawn_map, spawn_colliders));
+            .add_systems(Startup, (spawn_map, spawn_colliders))
+            .add_systems(Update, hide_collision_meshes);
     }
 }
 
@@ -160,6 +161,7 @@ fn spawn_colliders(
         ColliderConstructorHierarchy::new(ColliderConstructor::TrimeshFromMesh),
         RigidBody::Static,
         Visibility::Hidden,
+        CollisionMeshes,
     ));
 
     // Simple shapes from colliders.json
@@ -199,6 +201,26 @@ fn spawn_colliders(
         if d.trigger { triggers += 1 } else { solid += 1 }
     }
     info!("colliders: {solid} solid shapes, {triggers} triggers");
+}
+
+/// Root of the collision.gltf copy.
+#[derive(Component)]
+struct CollisionMeshes;
+
+/// The root's Visibility::Hidden doesn't always reach the spawned glTF scene: in some runs
+/// the collision meshes were drawn over the map (plain white walls and floors with black
+/// shadows on Arena Castle, Mine, the ice rink). Hide every collision mesh itself.
+fn hide_collision_meshes(
+    mut commands: Commands,
+    added: Query<Entity, Added<Mesh3d>>,
+    parents: Query<&ChildOf>,
+    roots: Query<(), With<CollisionMeshes>>,
+) {
+    for e in &added {
+        if parents.iter_ancestors(e).any(|a| roots.contains(a)) {
+            commands.entity(e).insert(Visibility::Hidden);
+        }
+    }
 }
 
 fn spawn_shape(commands: &mut Commands, d: &ColliderDef, shape: Collider, rot: Quat) {
