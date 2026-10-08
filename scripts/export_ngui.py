@@ -29,7 +29,8 @@ import find_behaviours as fb  # noqa: E402
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 G = fb.GAME
 WIDGETS = {"UIWidget", "UISprite", "UILabel", "UITexture", "UITextureMasked", "UI2DSprite"}
-KEEP = WIDGETS | {"UIPanel", "UIButton", "UIRoot", "UIToggle", "UIScrollView", "UIGrid", "UITable", "UISlider", "UIProgressBar"}
+KEEP = WIDGETS | {"UIPanel", "UIButton", "UIRoot", "UIToggle", "UIScrollView", "UIGrid", "UITable", "UISlider", "UIProgressBar",
+                  "ButtonPressEffect", "UIPlaySound"}
 
 
 class Ngui:
@@ -83,6 +84,24 @@ class Ngui:
             return None
         o = self.resolve(owner, ptr)
         return None if o is None else ["ref", o.assets_file.name, o.path_id]
+
+    def sound(self, owner, ptr, out):
+        """An AudioClip as sounds/<name>.wav (path relative to the screen folder), or None."""
+        o = self.resolve(owner, ptr) if ptr and ptr.get("m_PathID") else None
+        if o is None:
+            return None
+        try:
+            clip = o.read()
+            rel = f"sounds/{em_safe(clip.m_Name)}.wav"
+            if not (out / rel).exists():
+                for _n, data in clip.samples.items():
+                    (out / "sounds").mkdir(parents=True, exist_ok=True)
+                    (out / rel).write_bytes(data)
+                    break
+            return rel if (out / rel).exists() else None
+        except Exception as e:
+            print(f"  sound: {e!r}"[:160], file=sys.stderr)
+            return None
 
     def tree(self, o):
         self.env.typetree_generator = self.gen
@@ -279,6 +298,27 @@ class Ngui:
                     gobj = self.resolve(tgt.assets_file, g)
                     ti = tr_index.get((gobj.assets_file.name, gobj.path_id)) if gobj else None
             nodes[idx]["widget"]["anchors"][side] = {"target": ti, "rel": a["relative"], "abs": a["absolute"]}
+        def node_of(v):
+            if not isinstance(v, list):
+                return v
+            f = self.by_name.get(v[1])
+            o = f.objects.get(v[2]) if f else None
+            ti = tr_index.get((v[1], v[2]))
+            if ti is None and o is not None and o.type.name == "MonoBehaviour":
+                g = self.resolve(o.assets_file, o.read(check_read=False).m_GameObject)
+                ti = tr_index.get((g.assets_file.name, g.path_id)) if g else None
+            return ti
+        for nd in nodes:
+            b = nd.get("button")
+            if b and "tween" in b:
+                b["tween"] = node_of(b["tween"])
+            pe = nd.get("press")
+            if pe:
+                for m in pe["move"]:
+                    m["target"] = node_of(m["target"])
+                pe["move"] = [m for m in pe["move"] if m["target"] is not None]
+                pe["on_press"] = [x for x in map(node_of, pe["on_press"]) if x is not None]
+                pe["on_release"] = [x for x in map(node_of, pe["on_release"]) if x is not None]
         # other references (slider foreground / thumb) -> node indices
         for nd in nodes:
             sl = nd.get("slider")
@@ -373,8 +413,28 @@ class Ngui:
             node["panel"] = {"alpha": d["mAlpha"], "depth": d["mDepth"], "clipping": d["mClipping"],
                              "clip": [d["mClipRange"]["x"], d["mClipRange"]["y"], d["mClipRange"]["z"], d["mClipRange"]["w"]]}
         elif k == "UIButton":
+            col = lambda c: [c["r"], c["g"], c["b"], c["a"]] if isinstance(c, dict) else None
             node["button"] = {"hover": d.get("hoverSprite", ""), "pressed": d.get("pressedSprite", ""),
-                              "on_click": [e.get("mMethodName", "") for e in d.get("onClick", [])]}
+                              "on_click": [e.get("mMethodName", "") for e in d.get("onClick", [])],
+                              # UIButtonColor: tints its tween target (default: its own widget)
+                              "tween": self.ref(owner, d.get("tweenTarget")),
+                              "hover_color": col(d.get("hover")), "pressed_color": col(d.get("pressed")),
+                              "duration": d.get("duration", 0.2)}
+        elif k == "ButtonPressEffect":
+            # Pixel Gun's own press feedback: objects moved down / shown while held, a sound
+            v3 = lambda v: [v["x"], v["y"]]
+            movers = [{"target": self.ref(owner, m.get("target")), "up": v3(m["notPressedPosition"]),
+                       "down": v3(m["pressedPosition"])} for m in d.get("moveOnPress") or [] if m.get("target")]
+            ap = d.get("audioPlayer") or {}
+            node["press"] = {"move": movers,
+                             "on_press": [self.ref(owner, g) for g in d.get("enableOnPress") or []],
+                             "on_release": [self.ref(owner, g) for g in d.get("enableOnRelease") or []],
+                             "sound": self.sound(owner, ap.get("pressSound"), out),
+                             "release_sound": self.sound(owner, ap.get("releaseSound"), out)}
+        elif k == "UIPlaySound":
+            # trigger: 0 OnClick, 1 OnMouseOver, 2 OnMouseOut, 3 OnPress, 4 OnRelease
+            node["play_sound"] = {"clip": self.sound(owner, d.get("audioClip"), out), "trigger": d.get("trigger", 0),
+                                  "volume": d.get("volume", 1.0)}
         elif k == "UIRoot":
             node["root"] = {"manual_height": d["manualHeight"], "manual_width": d["manualWidth"],
                             "fit_width": bool(d["fitWidth"]), "fit_height": bool(d["fitHeight"])}
