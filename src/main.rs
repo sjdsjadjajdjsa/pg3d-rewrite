@@ -78,6 +78,21 @@ fn ignore_real_input(
 }
 
 fn main() {
+    // a crash leaves its message and backtrace in ~/.config/pixel-gun-3d-rs/crash.log
+    let default_hook = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        let bt = std::backtrace::Backtrace::force_capture();
+        let dir = settings::Settings::config_dir();
+        let _ = std::fs::create_dir_all(&dir);
+        let stamp = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs());
+        let thread = std::thread::current().name().unwrap_or("?").to_string();
+        let text = format!("--- crash at unix {stamp} (thread {thread})\n{info}\n{bt}\n");
+        if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(dir.join("crash.log")) {
+            use std::io::Write;
+            let _ = f.write_all(text.as_bytes());
+        }
+        default_hook(info);
+    }));
     sound::set_sfx_volume(settings::Settings::load().sfx_volume());
     let data_dir = std::env::var("PG3D_DATA").unwrap_or_else(|_| DEFAULT_DATA.to_string());
     // a map name starts straight in a match, else the menu; both run in this one window

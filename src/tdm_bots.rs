@@ -1842,14 +1842,18 @@ fn kill_cam(
     bots: Query<(&Transform, &PlayerBot)>,
     player: Query<(&Transform, &Player), Without<PlayerBot>>,
     mut cam: Query<(&mut Transform, &mut GlobalTransform), (With<crate::camera::PlayerCamera>, Without<PlayerBot>, Without<Player>)>,
-    mut gun_cam: Query<&mut Camera, With<crate::weapons::ViewModelCamera>>,
+    mut guns: Query<&mut Visibility, With<crate::weapons::ViewModel>>,
     spatial: SpatialQuery,
     mut state: Local<Option<(Vec3, f32, Vec3, f32)>>,
 ) {
     let dead = stats.health <= 0.0;
-    for mut c in &mut gun_cam {
-        if c.is_active == dead {
-            c.is_active = !dead;
+    // the gun is hidden, not its camera switched off: re-activating a camera that a
+    // shadow-casting sun lights crashes Bevy's light preparation (no shadow cascades for
+    // it yet), which brought the game down on every respawn on maps with a sun
+    let want = if dead { Visibility::Hidden } else { Visibility::Inherited };
+    for mut v in &mut guns {
+        if *v != want {
+            *v = want;
         }
     }
     if !dead {

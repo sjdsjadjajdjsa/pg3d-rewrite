@@ -184,7 +184,7 @@ fn toggle(
 fn hide_while_paused(
     paused: Res<Paused>,
     mut screens: Query<&mut NguiScreen>,
-    mut cameras: Query<&mut bevy::camera::visibility::RenderLayers, With<crate::weapons::ViewModelCamera>>,
+    mut guns: Query<&mut Visibility, (With<crate::weapons::ViewModel>, Without<crate::weapons::Crosshair>)>,
     mut crosshair: Query<&mut Visibility, With<crate::weapons::Crosshair>>,
 ) {
     if !paused.is_changed() {
@@ -201,9 +201,10 @@ fn hide_while_paused(
             }
         }
     }
-    // (not Camera::is_active: the UI is drawn by this camera, the last one)
-    for mut l in &mut cameras {
-        *l = if on { bevy::camera::visibility::RenderLayers::layer(crate::weapons::VIEW_MODEL_LAYER) } else { bevy::camera::visibility::RenderLayers::none() };
+    // the gun itself is hidden (changing its camera's layers or switching the camera off
+    // can crash Bevy's shadow setup when it comes back)
+    for mut v in &mut guns {
+        *v = if on { Visibility::Inherited } else { Visibility::Hidden };
     }
     for mut v in &mut crosshair {
         *v = if on { Visibility::Inherited } else { Visibility::Hidden };
