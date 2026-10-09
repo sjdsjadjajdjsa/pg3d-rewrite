@@ -523,10 +523,14 @@ fn switch_weapon(
             next = i + 6;
         }
     }
+    // the wheel goes round the six weapons on the bar (your Armory picks); the extra
+    // starter weapons on keys 7-9 stay out of it (PG3D_SOAK tests cycle through all)
+    let ring = if soak { n } else { n.min(6) };
+    let from = loadout.current.min(ring - 1);
     if scroll.delta.y > 0.0 {
-        next = (loadout.current + n - 1) % n;
+        next = (from + ring - 1) % ring;
     } else if scroll.delta.y < 0.0 || soak {
-        next = (loadout.current + 1) % n;
+        next = (from + 1) % ring;
     }
     if next == loadout.current {
         return;
