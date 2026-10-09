@@ -21,7 +21,7 @@ pub struct ArmoryPlugin;
 impl crate::scene::ScenePlugin for ArmoryPlugin {
     fn build(&self, app: &mut crate::scene::SceneBuilder) {
         app.add_plugins((crate::armory_preview::ArmoryPreviewPlugin, crate::particles::ParticlesPlugin))
-            .add_systems(Update, ((setup, clicks, refresh).chain(), preview_on_when_open, fade_toasts));
+            .add_systems(Update, ((setup, clicks, wheel, refresh).chain(), preview_on_when_open, fade_toasts));
     }
 }
 
@@ -46,8 +46,11 @@ const PITCH: Vec2 = Vec2::new(217.3, 192.0);
 /// Centre of the first cell. OBSERVED: (212, 199) px in the screenshots.
 const FIRST: Vec2 = Vec2::new(-327.0, 144.7);
 const CELL_SCALE: f32 = 1.2;
-/// Most weapons one category can show (cells made once and reused).
-const MAX_CELLS: usize = 16;
+/// Rows on screen at once; the mouse wheel scrolls the rest into view a row at a time (the
+/// original's UIScrollView "Scroll ViewItems" is dragged).
+const VISIBLE_ROWS: usize = 4;
+/// Cells (made once and reused): the visible rows.
+const MAX_CELLS: usize = COLUMNS * VISIBLE_ROWS;
 
 /// The weapon chosen in each category (categoryNabor -> weapon name), saved between runs.
 #[derive(Resource, Serialize, Deserialize, Clone, Debug, Default)]
@@ -208,6 +211,8 @@ struct Armory {
     effects: HashMap<i32, EffectDef>,
     /// the Properties popup is open
     popup: bool,
+    /// first row shown (mouse wheel)
+    row: usize,
     /// weapons that have skins (weapons/skins.json)
     skins: std::collections::HashSet<String>,
 }
@@ -413,6 +418,8 @@ fn setup(
                 .filter_map(|(k, v)| Some((k.parse().ok()?, v)))
                 .collect(),
             popup: false,
+            // PG3D_LIST_SCROLL=n (automated screenshots): start n rows down
+            row: std::env::var("PG3D_LIST_SCROLL").ok().and_then(|v| v.parse().ok()).unwrap_or(0),
             skins: std::fs::read_to_string(dir.join("skins.json"))
                 .ok()
                 .and_then(|t| serde_json::from_str::<HashMap<String, Vec<String>>>(&t).ok())
@@ -476,6 +483,7 @@ fn clicks(
         } else if let Some(k) = TABS.iter().position(|t| *t == c.name) {
             a.category = k as i32 + 1;
             a.selected = None;
+            a.row = 0;
             a.dirty = true;
         } else if let Some(k) = a.cells.iter().position(|&n| n == c.node) {
             // a weapon cell selects it (stats, preview); "Equip" then equips it (OBSERVED)
@@ -601,7 +609,12 @@ fn refresh(
         let list: Vec<(String, Item)> = a.items.iter().filter(|(_, i)| i.categoryNabor == cat).cloned().collect();
         let equipped = equipped_in(&a.loadout, cat).map(str::to_string);
         let selected = a.selected.clone().or(equipped.clone()).or_else(|| list.first().map(|(n, _)| n.clone()));
-        a.shown = list.iter().map(|(n, _)| n.clone()).collect();
+        let rows = list.len().div_ceil(COLUMNS);
+        a.row = a.row.min(rows.saturating_sub(VISIBLE_ROWS));
+        let first = a.row * COLUMNS;
+        debug!("armory: category {cat}, {} weapons in {rows} rows, showing from row {}", list.len(), a.row);
+        let list: Vec<(String, Item)> = list.into_iter().skip(first).collect();
+        a.shown = list.iter().take(MAX_CELLS).map(|(n, _)| n.clone()).collect();
         for (k, &c) in a.cells.iter().enumerate() {
             let Some((name, _)) = list.get(k) else {
                 s.set_active(c, false);
@@ -699,6 +712,24 @@ impl SavedLoadout {
     /// Starter weapons (the default loadout) and bought ones.
     pub fn owns(&self, weapon: &str) -> bool {
         self.unlock_all || crate::weapons::DEFAULT_LOADOUT.contains(&weapon) || self.owned.iter().any(|w| w == weapon)
+    }
+}
+
+/// The mouse wheel over the open Armory scrolls the weapon grid a row per notch.
+fn wheel(mut wheel: MessageReader<bevy::input::mouse::MouseWheel>, mut screens: Query<(&mut Armory, &InheritedVisibility)>) {
+    let d: f32 = wheel.read().map(|w| if w.unit == bevy::input::mouse::MouseScrollUnit::Pixel { w.y / 40.0 } else { w.y }).sum();
+    if d == 0.0 {
+        return;
+    }
+    for (mut a, v) in &mut screens {
+        if !v.get() || a.popup {
+            continue;
+        }
+        let rows = if d < 0.0 { a.row + (-d).ceil() as usize } else { a.row.saturating_sub(d.ceil() as usize) };
+        if rows != a.row {
+            a.row = rows;
+            a.dirty = true;
+        }
     }
 }
 
