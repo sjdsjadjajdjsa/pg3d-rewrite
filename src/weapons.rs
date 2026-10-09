@@ -58,7 +58,7 @@ impl crate::scene::ScenePlugin for WeaponsPlugin {
                     zoom,
                     track_muzzle,
                     refill_on_respawn,
-                    crosshair_spread,
+                    crosshair_sprites,
                 ),
             );
     }
@@ -97,6 +97,10 @@ pub struct WeaponDef {
     pub radiusRoundMelee: f32,
     #[serde(default)]
     pub isRoundMelee: i32,
+    /// two guns firing in turn (Player_move_c numShootInDouble: "Shoot1", "Shoot2", and the
+    /// flash of that gun)
+    #[serde(default)]
+    pub isDoubleShot: i32,
     pub shootDistanceIfZoom: f32,
     /// pellets per shot for shotguns
     pub countShots: i32,
@@ -144,6 +148,9 @@ struct WeaponInfo {
     /// glTF animation names, in file order (GltfAssetLabel::Animation(i))
     #[serde(default)]
     clips: Vec<String>,
+    /// two-gun weapons: "Shoot1" / "Shoot2" -> "left" / "right" (export_weapons.py)
+    #[serde(default)]
+    shot_sides: HashMap<String, String>,
     /// original sound field name -> wav file (shoot, reload, empty, ...)
     #[serde(default)]
     sounds: HashMap<String, String>,
@@ -163,6 +170,7 @@ pub struct Weapon {
     pub spread: f32,
     /// animation clips in weapon.gltf (Idle, Walk, Shoot, Reload, ...)
     pub clips: Vec<String>,
+    pub shot_sides: HashMap<String, String>,
     /// rocket launchers: the projectile they fire
     pub rocket: Option<RocketDef>,
     /// damage multiplier for hits on a head (BalanceWeaponsCore "H", default HeadShotCoef 1.4)
@@ -211,6 +219,10 @@ pub struct Loadout {
     /// where the gun's barrel (BulletSpawnPoint) shows on screen, as a point in the main
     /// camera's space: rays start there (track_muzzle)
     muzzle: Option<Vec3>,
+    /// two-gun weapons: the second gun fires next
+    barrel: bool,
+    /// each GunFlash of the gun in hand, in the camera's space (left of the view < 0)
+    flash_x: Vec<f32>,
 }
 
 impl Loadout {
@@ -332,6 +344,7 @@ fn load_loadout(mut commands: Commands, data: Res<DataDir>, assets: Res<AssetSer
             reserve: (def.maxAmmo - clip).max(0),
             spread: 0.0,
             clips: info.clips.clone(),
+            shot_sides: info.shot_sides.clone(),
             rocket: (def.bazooka != 0).then(|| rocket_def(&data.0, def.rocketNum)).flatten(),
             head_coef: heads.get(name),
             sounds: crate::sound::load_sounds(&assets, &format!("weapons/{name}"), &info.sounds),
@@ -640,6 +653,25 @@ fn fire(
         kicks.write(crate::feel::ShotKick(deg));
     }
     if let Some(vm) = loadout.view_model {
+        let double = w.def.isDoubleShot != 0 || (w.clips.iter().any(|c| c == "Shoot1") && !w.clips.iter().any(|c| c == "Shoot"));
+        if double {
+            loadout.barrel = !loadout.barrel;
+            // the clip that plays now (animate_view_model) and the hand it fires
+            let clip = if loadout.barrel { "Shoot2" } else { "Shoot1" };
+            let sides = (w.shot_sides.get("Shoot1"), w.shot_sides.get("Shoot2"));
+            let side = if sides.0.is_some() && sides.1.is_some() && sides.0 != sides.1 { w.shot_sides.get(clip).cloned() } else { None };
+            let xs = &loadout.flash_x;
+            let pick = |left: bool| {
+                xs.iter().enumerate().min_by(|a, b| if left { a.1.total_cmp(b.1) } else { b.1.total_cmp(a.1) }).map(|(i, _)| i)
+            };
+            let k = match side.as_deref() {
+                Some("left") => pick(true),
+                Some("right") => pick(false),
+                _ => None,
+            }
+            .unwrap_or(loadout.barrel as usize);
+            commands.entity(vm).insert(crate::particles::Barrel(k));
+        }
         flashes.write(crate::particles::Burst(vm));
     }
 
@@ -765,19 +797,100 @@ fn refill_on_respawn(stats: Res<crate::bots::PlayerStats>, mut loadout: ResMut<L
     *was_dead = dead;
 }
 
-/// The "+" grows with the gun's current scatter (tekKoof + what firing has built up), so
-/// you can see when a burst has started to spray.
-fn crosshair_spread(loadout: Res<Loadout>, cross: Query<&Children, With<Crosshair>>, mut fonts: Query<&mut TextFont>) {
-    let s = loadout.current().map_or(1.0, |w| w.def.tekKoof + w.spread);
-    let px = 24.0 + s * 8.0;
-    for kids in &cross {
-        for k in kids.iter() {
-            if let Ok(mut f) = fonts.get_mut(k)
-                && !matches!(f.font_size, FontSize::Px(v) if (v - px).abs() < 0.5)
-            {
-                f.font_size = FontSize::Px(px);
+/// The weapon's own crosshair (WeaponCustomCrosshair._dataId -> CrosshairsSo entry,
+/// export_crosshairs.py): atlas sprites for the centre, the top / bottom / left arms (the
+/// right one is the left mirrored) and corners, each at its offset from the centre; the arms
+/// move out with the gun's current scatter (AimCrosshairController). Sizes are NGUI pixels
+/// of a 768 high screen.
+#[derive(Deserialize, Default)]
+struct CrosshairFile {
+    crosshairs: HashMap<String, HashMap<String, CrosshairPart>>,
+    weapons: HashMap<String, i32>,
+}
+
+#[derive(Deserialize, Clone)]
+struct CrosshairPart {
+    sprite: String,
+    offset: [f32; 2],
+    size: [f32; 2],
+}
+
+/// The screen-centre point the crosshair's sprites hang off.
+#[derive(Component)]
+struct CrosshairCenter;
+
+/// One sprite of the crosshair: its part ("up", "left", ...), mirrored copy or not.
+#[derive(Component)]
+struct CrosshairSprite {
+    part: String,
+    mirrored: bool,
+    offset: Vec2,
+    size: Vec2,
+}
+
+#[allow(clippy::too_many_arguments)]
+fn crosshair_sprites(
+    mut commands: Commands,
+    loadout: Res<Loadout>,
+    data: Res<DataDir>,
+    assets: Res<AssetServer>,
+    cross: Query<(Entity, Option<&Children>), With<CrosshairCenter>>,
+    mut parts: Query<(&CrosshairSprite, &mut Node)>,
+    window: Query<&Window, With<bevy::window::PrimaryWindow>>,
+    mut file: Local<Option<CrosshairFile>>,
+    mut shown: Local<Option<String>>,
+) {
+    let Some(w) = loadout.current() else { return };
+    let defs = file.get_or_insert_with(|| {
+        std::fs::read_to_string(data.0.join("ui/crosshairs/crosshairs.json")).ok().and_then(|t| serde_json::from_str(&t).ok()).unwrap_or_default()
+    });
+    let scale = window.single().map_or(1.0, |w| w.height() / 768.0);
+    let Ok((root, kids)) = cross.single() else { return };
+    if shown.as_deref() != Some(w.name.as_str()) {
+        *shown = Some(w.name.clone());
+        if let Some(k) = kids {
+            for c in k.iter() {
+                commands.entity(c).despawn();
             }
         }
+        let id = defs.weapons.get(&w.name).copied().unwrap_or(1).to_string();
+        let Some(set) = defs.crosshairs.get(&id).or_else(|| defs.crosshairs.get("1")) else { return };
+        commands.entity(root).with_children(|c| {
+            for (part, p) in set {
+                let mirrors: &[bool] = if matches!(part.as_str(), "left" | "leftUp" | "leftDown") { &[false, true] } else { &[false] };
+                for &m in mirrors {
+                    c.spawn((
+                        CrosshairSprite { part: part.clone(), mirrored: m, offset: Vec2::from(p.offset), size: Vec2::from(p.size) },
+                        ImageNode { image: assets.load(format!("ui/crosshairs/{}.png", p.sprite)), flip_x: m, flip_y: part == "down" || part == "leftDown", ..default() },
+                        Node { position_type: PositionType::Absolute, ..default() },
+                    ));
+                }
+            }
+        });
+    }
+    // arms out by 6 NGUI px per unit of scatter beyond the weapon's resting tekKoof
+    let push = (w.spread * 6.0).min(30.0);
+    for (sp, mut node) in &mut parts {
+        let o = sp.offset + if sp.part == "center" { Vec2::ZERO } else { Vec2::splat(push) };
+        // centre of the sprite from the screen centre, NGUI y up
+        let (dx, dy) = match sp.part.as_str() {
+            "up" => (0.0, o.y + sp.size.y / 2.0),
+            "down" => (0.0, -(o.y + sp.size.y / 2.0)),
+            "left" => (-(o.x + sp.size.x / 2.0), 0.0),
+            "leftUp" => (-(o.x + sp.size.x / 2.0), o.y + sp.size.y / 2.0),
+            "leftDown" => (-(o.x + sp.size.x / 2.0), -(o.y + sp.size.y / 2.0)),
+            _ => (0.0, 0.0),
+        };
+        let dx = if sp.mirrored { -dx } else { dx };
+        let (cx, cy) = (dx * scale, -dy * scale);
+        let (w, h) = (sp.size.x * scale, sp.size.y * scale);
+        if std::env::var("PG3D_TRACE_FX").is_ok() {
+            debug!("crosshair {} {}: centre {cx:.0},{cy:.0} size {w:.0}x{h:.0}", sp.part, sp.mirrored);
+        }
+        node.left = px(cx - w / 2.0);
+        node.top = px(cy - h / 2.0);
+        node.width = px(w);
+        node.height = px(h);
     }
 }
 
@@ -828,7 +941,6 @@ fn animate_view_model(
     mut roots: Query<(Entity, &ViewModelAnims, &mut Transform), With<ViewModel>>,
     mut players: Query<&mut AnimationPlayer>,
     time: Res<Time>,
-    mut barrel: Local<bool>,
 ) {
     let request = loadout.play.take();
     loadout.lower = (loadout.lower - RAISE_SPEED * time.delta_secs()).max(0.0);
@@ -838,6 +950,8 @@ fn animate_view_model(
     let dip = Quat::from_rotation_x(-loadout.lower.to_radians());
     let base = Transform { translation: dip * base.translation, rotation: dip * base.rotation, ..base };
     let reload_speed = w.reload_speed;
+    let double = w.def.isDoubleShot != 0;
+    let barrel = loadout.barrel;
     // a clip asked for before the new model has loaded is kept for when it has
     let mut waiting = request.is_some();
     let current_model = loadout.view_model;
@@ -862,9 +976,8 @@ fn animate_view_model(
         let node = |n: &str| anims.nodes.get(n).copied();
         if let Some(mut name) = request {
             // Shoot1 / Shoot2 in turn for two-barrelled weapons (dual pistols, shotguns)
-            if name == "Shoot" && node("Shoot").is_none() {
-                *barrel = !*barrel;
-                name = if *barrel || node("Shoot2").is_none() { "Shoot1" } else { "Shoot2" };
+            if name == "Shoot" && node("Shoot1").is_some() && (double || node("Shoot").is_none()) {
+                name = if barrel && node("Shoot2").is_some() { "Shoot2" } else { "Shoot1" };
             }
             if let Some(n) = node(name) {
                 ap.stop_all();
@@ -909,6 +1022,15 @@ fn track_muzzle(
 ) {
     let Some(vm) = loadout.view_model else { return };
     let find = |want: &str| children.iter_descendants(vm).find_map(|d| names.get(d).ok().filter(|(n, _)| n.as_str() == want).map(|(_, g)| g.translation()));
+    let flashes: Vec<f32> = children
+        .iter_descendants(vm)
+        .filter_map(|d| names.get(d).ok().filter(|(n, _)| n.as_str() == "GunFlash").map(|(_, g)| g.translation()))
+        .map(|p| main.0.affine().inverse().transform_point3(p).x)
+        .collect();
+    if std::env::var("PG3D_TRACE_FX").is_ok() && flashes.len() > 1 {
+        debug!("gun flashes at x {flashes:.2?}");
+    }
+    loadout.flash_x = flashes;
     let Some(p) = find("BulletSpawnPoint").or_else(|| find("GunFlash")) else {
         loadout.muzzle = None;
         return;
@@ -943,7 +1065,8 @@ fn spawn_hud(mut commands: Commands) {
     commands.spawn((
         Crosshair,
         Node { position_type: PositionType::Absolute, width: percent(100.0), height: percent(100.0), justify_content: JustifyContent::Center, align_items: AlignItems::Center, ..default() },
-        children![(Text::new("+"), TextFont { font_size: FontSize::Px(28.0), ..default() }, TextColor(Color::WHITE))],
+        // a zero-size point at the screen centre; crosshair_sprites hangs the parts off it
+        children![(CrosshairCenter, Node { width: px(0.0), height: px(0.0), ..default() })],
     ));
 }
 

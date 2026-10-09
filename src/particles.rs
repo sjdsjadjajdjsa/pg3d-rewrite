@@ -41,6 +41,11 @@ pub struct AssetDir(pub String);
 #[derive(Message)]
 pub struct Burst(pub Entity);
 
+/// On a two-gun weapon's root: which gun fired (0 first, 1 second); only that gun's flash
+/// (the k-th FlashFire under the weapon) goes off.
+#[derive(Component, Clone, Copy)]
+pub struct Barrel(pub usize);
+
 /// Most particles alive at once (all systems together).
 const MAX_PARTICLES: usize = 600;
 
@@ -305,11 +310,20 @@ fn shots(
     names: Query<&Name>,
     mut flashes: Query<&mut FlashFire>,
     mut emitters: Query<&mut ParticleEmitter>,
+    barrels: Query<&Barrel>,
 ) {
     for Burst(root) in bursts.read() {
         let all: Vec<Entity> = children.iter_descendants(*root).collect();
         let mut in_flash: Vec<Entity> = vec![];
+        let barrel = barrels.get(*root).ok().map(|b| b.0);
+        let flash_list: Vec<Entity> = all.iter().copied().filter(|e| flashes.contains(*e)).collect();
         for &f in &all {
+            if let Some(k) = barrel
+                && flash_list.len() >= 2
+                && flash_list.get(k % flash_list.len()) != Some(&f)
+            {
+                continue;
+            }
             let Ok(mut ff) = flashes.get_mut(f) else { continue };
             // gunFlashObj, or (when empty) the FlashFire's own object
             let target = ff.target.or_else(|| {
