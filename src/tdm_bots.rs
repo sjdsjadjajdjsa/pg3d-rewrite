@@ -69,6 +69,11 @@ const STRAFE_MAX: f32 = 0.65;
 /// How far a melee weapon reaches: WeaponContainer.Range -> the weapon's balance "_range",
 /// default 3 m (T_2003C6A .cctor; no weapon overrides it in the shipped data).
 pub const MELEE_RANGE: f32 = 3.0;
+/// How close a bot must be to knife you: AIBotController.meleeSqrRange 6 (squared metres,
+/// between the two players' centres), about 2.45 m, and level with you (GUESS: within 1.2 m
+/// up or down, so a bot below a ledge can't stab through it).
+const BOT_MELEE_SQR: f32 = 6.0;
+const BOT_MELEE_UP: f32 = 1.2;
 
 /// The Player prefab's hit colliders, from the feet (its origin is 1 m up: CharacterController
 /// centre -0.1, height 1.8): BodyCollider capsule r 0.45 h 1.54 at -0.28, HeadCollider box
@@ -304,6 +309,8 @@ pub struct PlayerBot {
     pellets: u32,
     /// shots left in the current burst (automatic weapons)
     burst_left: u32,
+    /// the skin it wears (a 64x32 body texture, like a player's chosen skin)
+    skin: Option<Handle<Image>>,
 }
 
 impl PlayerBot {
@@ -424,6 +431,7 @@ fn spawn_bots(
         .and_then(|t| serde_json::from_str(&t).ok())
         .unwrap_or_default();
     let pool = bot_weapon_pool(&data.0, &stats);
+    let skins = bot_skins(&data.0, &assets);
     let mut k = 0usize;
     let mut taken: Vec<Vec3> = player.iter().map(|(t, _)| t.translation).collect();
     for (team, n) in [(Team::Blue, TEAM_SIZE - 1), (Team::Red, TEAM_SIZE)] {
@@ -489,6 +497,7 @@ fn spawn_bots(
                 fall_side: 0.0,
                 pellets: pellets as u32,
                 burst_left: 0,
+                skin: (!skins.is_empty()).then(|| skins[k % skins.len()].clone()),
             };
             bot.turn_speed = tc.rotation_speed_min + (tc.rotation_speed_max - tc.rotation_speed_min) * bot.rand();
             // GUESS (for fun): mixed skill, each bot with its own favourite range
@@ -548,6 +557,42 @@ fn spawn_bots(
     commands.insert_resource(setup);
 }
 
+/// The skins bots wear (export_skins.py: the game's stock player skins), shuffled anew each
+/// match so every bot looks different, as in a lobby where everyone picked their own
+/// (OUR CHOICE: the original's bots, AIBotController, wear the default skin).
+/// PG3D_BOT_SKIN=name (tests): everyone in that one.
+fn bot_skins(data: &std::path::Path, assets: &AssetServer) -> Vec<Handle<Image>> {
+    let mut names: Vec<String> = std::fs::read_to_string(data.join("characters/skins/skins.json"))
+        .ok()
+        .and_then(|t| serde_json::from_str(&t).ok())
+        .unwrap_or_default();
+    if let Ok(n) = std::env::var("PG3D_BOT_SKIN") {
+        names = vec![n];
+    }
+    if names.is_empty() {
+        warn!("bots: no skins (run export_skins.py)");
+    }
+    let mut rng = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(1, |d| d.as_nanos() as u64) | 1;
+    for i in (1..names.len()).rev() {
+        rng ^= rng << 13;
+        rng ^= rng >> 7;
+        rng ^= rng << 17;
+        names.swap(i, (rng % (i as u64 + 1)) as usize);
+    }
+    names
+        .iter()
+        .map(|n| {
+            // pixel art: nearest-pixel sampling, like the body's own texture
+            assets
+                .load_builder()
+                .with_settings(|s: &mut bevy::image::ImageLoaderSettings| {
+                    s.sampler = bevy::image::ImageSampler::nearest();
+                })
+                .load(format!("characters/skins/{n}.png"))
+        })
+        .collect()
+}
+
 /// Once a bot's body has loaded: its bones by path, the weapon (with its own arms) at the
 /// body's WeaponPoint (the original's weaponPointNotMine).
 #[allow(clippy::too_many_arguments)]
@@ -601,7 +646,25 @@ fn hook_up(
             if arm_meshes.contains(&d) {
                 mat.unlit = false;
             }
+            // the skin goes on the body and the weapon's arms (SkinsController sets the skin
+            // texture on every part of the player that shows it), at the body's colour
+            let n = names.get(d).map(|n| n.as_str()).unwrap_or_default();
+            if let Some(skin) = b.skin.as_ref().filter(|_| n.starts_with("PLAYER_") || n.starts_with("Arms_Mesh")) {
+                mat.base_color_texture = Some(skin.clone());
+                mat.base_color = Color::WHITE;
+            }
             if mat.unlit {
+                continue;
+            }
+            // PG3D_BOT_MASK=albedo|parts (tests): unlit texture, or one flat colour per part
+            if let Ok(mode) = std::env::var("PG3D_BOT_MASK") {
+                mat.unlit = true;
+                if mode == "parts" {
+                    let n = names.get(d).map(|n| n.as_str().to_string()).unwrap_or_default();
+                    mat.base_color_texture = None;
+                    mat.base_color = if n.starts_with("Arms_Mesh") { Color::srgb(1.0, 0.0, 0.0) } else if n.starts_with("PLAYER_Head") { Color::srgb(0.0, 1.0, 0.0) } else if n.starts_with("PLAYER_Body") { Color::srgb(0.0, 0.0, 1.0) } else if n.starts_with("PLAYER_Legs") { Color::srgb(1.0, 1.0, 0.0) } else { Color::srgb(1.0, 0.0, 1.0) };
+                }
+                commands.entity(d).insert(MeshMaterial3d(materials.add(mat)));
                 continue;
             }
             // PG3D_BOT_GLOW=x (tests): another floor
@@ -964,7 +1027,7 @@ fn brain(
                 b.yaw += diff.clamp(-b.turn_speed * dt, b.turn_speed * dt);
                 b.next_shot -= dt;
                 b.react -= dt;
-                let in_reach = !b.melee || to.length() <= MELEE_RANGE;
+                let in_reach = !b.melee || (Vec2::new(to.x, to.z).length_squared() <= BOT_MELEE_SQR && to.y.abs() <= BOT_MELEE_UP);
                 if diff.abs() < 0.15 && b.next_shot <= 0.0 && b.react <= 0.0 && in_reach {
                     b.next_shot = b.interval;
                     // automatic weapons in bursts of 3-7 with a short pause, like players
