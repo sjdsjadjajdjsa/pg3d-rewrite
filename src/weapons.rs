@@ -98,6 +98,10 @@ pub struct WeaponDef {
     /// rocket launchers: which "Rocket_<n>" prefab they fire and its blast radius
     pub rocketNum: i32,
     pub bazookaExplosionRadius: f32,
+    /// rocket jumps: the blast pushes its own shooter within this radius (0: never) with
+    /// impulseForceSelf (Player_move_c.m_600289E)
+    pub bazookaImpulseRadius: f32,
+    pub impulseForceSelf: f32,
     /// damage per bullet; index = weapon upgrade tier (we use tier 0)
     pub damageByTier: Vec<f32>,
     /// random damage variation in percent (x = min, y = max)
@@ -598,6 +602,7 @@ fn fire(
             gravity: r.useGravity != 0,
             damage: base_damage,
             explosion_radius: w.def.bazookaExplosionRadius.max(1.0),
+            self_impulse: (w.def.bazookaImpulseRadius, w.def.impulseForceSelf),
             look: Look::Model(r.model.clone()),
         });
         return;

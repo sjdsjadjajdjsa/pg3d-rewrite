@@ -69,7 +69,23 @@ pub struct Player {
     /// Camera yaw (radians), set by the camera system; WASD is relative to it.
     pub yaw: f32,
     jump_requested: bool,
+    /// ImpactReceiver's impact: a push (rocket jumps) that moves the player on top of
+    /// walking and falling and dies away (projectiles.rs adds it)
+    pub impact: Vec3,
 }
+
+/// PlayerCoreSettingsStorager.dynamicSettings +0x74 (constructor default 0.7): scales the
+/// self-push of your own blast.
+pub const IMPULSE_SETTING: f32 = 0.7;
+/// ImpactReceiver.maxImpactMagnitude on the Player prefab.
+pub const MAX_IMPACT: f32 = 100.0;
+/// ImpactReceiver.impulsePerFrameMultiplier on the Player prefab (the "new scheme" that
+/// prefab uses): the push moves you impact x 0.7 metres per second...
+const IMPACT_PER_FRAME: f32 = 0.7;
+/// ...and dies away by Lerp(impact, 0, dt x 5 x 0.7) a frame (AddImpact's default 5).
+const IMPACT_FADE: f32 = 5.0;
+/// Below this the push is over (AddImpact's default 0.2).
+const IMPACT_MIN: f32 = 0.2;
 
 /// Where the player starts: a player spawn marker (multiplayer "MultyPlayerCreateZone…"),
 /// else, on the Arena maps that have none (the original places you by code), the bonus
@@ -96,13 +112,15 @@ fn start_point(markers: &MapMarkers) -> Option<Vec3> {
 /// axis flip), i.e. the player object's default rotation. OBSERVED in 1920x1080 screenshots
 /// of the original: the ice rink (goal ahead, ice machine left), castle (door with the red
 /// emblem ahead) and space arena (tower ahead) all start this way.
-/// PG3D_YAW=degrees (testing) turns the start view.
+/// PG3D_YAW=degrees (testing) turns the start view, PG3D_PITCH tilts it.
 fn face_start(mut camera: Single<&mut Transform, With<crate::camera::PlayerCamera>>) {
     if std::env::var("PG3D_CAM").is_ok() {
         return;
     }
     let yaw = std::env::var("PG3D_YAW").ok().and_then(|v| v.parse::<f32>().ok()).unwrap_or(0.0);
-    camera.rotation = Quat::from_rotation_y(yaw.to_radians());
+    // PG3D_PITCH=degrees (testing): look up (+) or down (-)
+    let pitch = std::env::var("PG3D_PITCH").ok().and_then(|v| v.parse::<f32>().ok()).unwrap_or(0.0);
+    camera.rotation = Quat::from_euler(EulerRot::YXZ, yaw.to_radians(), pitch.to_radians(), 0.0);
 }
 
 pub fn spawn_player(mut commands: Commands, markers: Res<MapMarkers>) {
@@ -119,7 +137,7 @@ pub fn spawn_player(mut commands: Commands, markers: Res<MapMarkers>) {
     commands
         .spawn((
             Name::new("player"),
-            Player { velocity: Vec3::ZERO, grounded: false, spawn, yaw: 0.0, jump_requested: false },
+            Player { velocity: Vec3::ZERO, grounded: false, spawn, yaw: 0.0, jump_requested: false, impact: Vec3::ZERO },
             Transform::from_translation(spawn),
             RigidBody::Kinematic,
             CustomPositionIntegration,
@@ -200,11 +218,27 @@ fn move_player(
         p.velocity.y = (p.velocity.y - g * dt).clamp(-MAX_FALL_SPEED, MAX_RISE_SPEED);
     }
 
+    // ImpactReceiver (new scheme): the push fades, then moves the player this frame
+    let mut push = Vec3::ZERO;
+    if p.impact.length() > IMPACT_MIN {
+        let fade = (dt * IMPACT_FADE * IMPACT_PER_FRAME).clamp(0.0, 1.0);
+        p.impact = p.impact.lerp(Vec3::ZERO, fade);
+        push = p.impact * IMPACT_PER_FRAME;
+    } else {
+        p.impact = Vec3::ZERO;
+    }
+    let pushing_up = push.y > 0.5;
+    if pushing_up && p.grounded {
+        // pushed off the ground: falling starts from here, not from the -2 m/s that keeps
+        // you on slopes
+        p.velocity.y = p.velocity.y.max(0.0);
+        p.grounded = false;
+    }
     // --- move and slide along whatever we hit
     let filter = SpatialQueryFilter::from_mask(Layer::World).with_excluded_entities([entity, collider_entity]);
     let min_ground_normal_y = SLOPE_LIMIT_DEG.to_radians().cos();
     // while moving up (jumping) we can't be standing on anything
-    let rising = p.velocity.y > 0.0;
+    let rising = p.velocity.y > 0.0 || pushing_up;
     let start = transform.translation + Vec3::Y * CENTER_Y;
     let slide = |from: Vec3, velocity: Vec3, grounded: &mut bool| {
         move_and_slide.move_and_slide(
@@ -225,7 +259,7 @@ fn move_player(
         )
     };
     let mut grounded = false;
-    let out = slide(start, p.velocity, &mut grounded);
+    let out = slide(start, p.velocity + push, &mut grounded);
     let mut end = out.position;
     let mut projected = out.projected_velocity;
 
@@ -261,8 +295,15 @@ fn move_player(
 
     transform.translation = end - Vec3::Y * CENTER_Y;
     if !grounded || p.velocity.y > 0.0 {
-        // keep vertical speed from the slide result (e.g. stop when hitting a ceiling)
-        p.velocity.y = projected.y;
+        // keep vertical speed from the slide result (e.g. stop when hitting a ceiling); the
+        // push is not part of the velocity
+        let wanted_y = p.velocity.y + push.y;
+        if projected.y + 1e-3 < wanted_y {
+            p.velocity.y = (projected.y - push.y).min(p.velocity.y).min(0.0).max(p.velocity.y.min(0.0));
+            if push.y > 0.0 {
+                p.impact.y = 0.0;
+            }
+        }
     }
     p.grounded = grounded;
 }

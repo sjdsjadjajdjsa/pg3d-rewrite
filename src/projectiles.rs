@@ -46,6 +46,9 @@ pub struct SpawnProjectile {
     pub damage: f32,
     /// > 0: explodes, damaging everything within this radius
     pub explosion_radius: f32,
+    /// your own rockets push you away (rocket jumps): (radius, force) from the weapon's
+    /// bazookaImpulseRadius / impulseForceSelf; radius 0: no push
+    pub self_impulse: (f32, f32),
     pub look: Look,
 }
 
@@ -110,7 +113,7 @@ fn fly(
     mut q: Query<(Entity, &mut Transform, &mut Projectile)>,
     bot_parts: Query<&BotPart>,
     bots: Query<(Entity, &GlobalTransform), With<crate::bots::BotMarker>>,
-    player: Single<&Transform, (With<crate::player::Player>, Without<Projectile>)>,
+    mut player: Single<(&Transform, &mut crate::player::Player), Without<Projectile>>,
     mut stats: ResMut<PlayerStats>,
     mut hits: MessageWriter<BotDamage>,
     mut player_hits: MessageWriter<crate::bots::PlayerHit>,
@@ -141,7 +144,7 @@ fn fly(
                         }
                     }
                     Owner::Enemy => {
-                        if h.entity != Entity::PLACEHOLDER && point.distance(player.translation) < 1.5 {
+                        if h.entity != Entity::PLACEHOLDER && point.distance(player.0.translation) < 1.5 {
                             hurt_player(&mut stats, p.spec.damage, point - *dir * 10.0, &mut player_hits);
                         }
                     }
@@ -163,6 +166,8 @@ fn fly(
             let falloff = |d: f32| if d > r { 0.0 } else { 1.0 - 0.7 * d / r };
             match p.spec.owner {
                 Owner::Player => {
+                    let feet = player.0.translation;
+                    rocket_jump(&mut player.1, feet, point, p.spec.self_impulse);
                     for (bot, gt) in &bots {
                         let d = gt.translation().distance(point).min((gt.translation() + Vec3::Y).distance(point));
                         let k = falloff(d);
@@ -172,7 +177,7 @@ fn fly(
                     }
                 }
                 Owner::Enemy => {
-                    let k = falloff(player.translation.distance(point));
+                    let k = falloff(player.0.translation.distance(point));
                     if k > 0.0 {
                         hurt_player(&mut stats, p.spec.damage * k, point, &mut player_hits);
                     }
@@ -182,6 +187,28 @@ fn fly(
         }
         commands.entity(e).despawn();
     }
+}
+
+/// Player_move_c.m_600289E (the shooter's own blast) -> ImpactReceiver.AddImpact: within
+/// the impulse radius the push is impulseForceSelf x dynamicSettings 0.7 x (1 - distance /
+/// radius), away from the blast with the upward part always up (|y|), added to the
+/// player's impact (max 100: maxImpactMagnitude of the Player prefab). player.rs plays it.
+fn rocket_jump(p: &mut crate::player::Player, feet: Vec3, blast: Vec3, (radius, force): (f32, f32)) {
+    if radius <= 0.0 || force <= 0.0 {
+        return;
+    }
+    // Player_move_c's transform: the CharacterController's origin, 1 m above the feet
+    let body = feet + Vec3::Y * 1.0;
+    let d = body.distance(blast);
+    if d >= radius {
+        return;
+    }
+    let k = (1.0 - d / radius).max(0.0);
+    let mut dir = (body - blast).normalize_or(Vec3::Y);
+    dir.y = dir.y.abs();
+    p.impact += dir * force * crate::player::IMPULSE_SETTING * k;
+    p.impact = p.impact.clamp_length_max(crate::player::MAX_IMPACT);
+    info!("rocket jump: {:.1} m from the blast, push {:.1}", d, p.impact.length());
 }
 
 fn hurt_player(stats: &mut PlayerStats, amount: f32, from: Vec3, hits: &mut MessageWriter<crate::bots::PlayerHit>) {
