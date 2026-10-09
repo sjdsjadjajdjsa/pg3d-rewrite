@@ -151,6 +151,8 @@ pub struct Weapon {
     pub def: WeaponDef,
     /// seconds between shots (length of the original "Shoot" animation)
     pub fire_interval: f32,
+    /// its "Loading" (draw) clip, played when it is taken out; no shooting until it ends
+    pub draw_time: Option<f32>,
     /// seconds (length of the original "Reload" animation)
     pub reload_time: f32,
     pub clip: i32,
@@ -200,6 +202,9 @@ pub struct Loadout {
     view_model: Option<Entity>,
     /// one-shot animation the view model should play next ("Shoot", "Reload")
     play: Option<&'static str>,
+    /// degrees the weapon is dipped below the view: a freshly drawn weapon comes up from
+    /// 40 (Player_move_c's weapon change coroutine, field 0x62c)
+    pub lower: f32,
 }
 
 impl Loadout {
@@ -312,7 +317,9 @@ fn load_loadout(mut commands: Commands, data: Res<DataDir>, assets: Res<AssetSer
         loadout.weapons.push(Weapon {
             name: name.to_string(),
             def: def.clone(),
-            fire_interval: anim("Shoot", 0.3),
+            // two-barrelled weapons have Shoot1 / Shoot2 instead of Shoot
+            fire_interval: anim("Shoot", anim("Shoot1", 0.3)),
+            draw_time: info.animations.get("Loading").copied().filter(|v| *v > 0.05),
             reload_time: anim("Reload", 1.5) / heads.reload_speed(name),
             reload_speed: heads.reload_speed(name),
             clip,
@@ -433,6 +440,9 @@ fn hook_up_animation_player(
 /// glTF meshes are spawned later as children; move them onto the view model layer.
 /// The weapon is lit like the zombies: by the sun and the map's light probes. Maps
 /// without probes draw it unlit so it is never pitch black.
+/// How much the first-person gun lights itself on maps with light probes (x its texture).
+const GUN_GLOW: f32 = 0.6;
+
 fn tag_view_model_meshes(
     mut commands: Commands,
     added: Query<(Entity, Option<&MeshMaterial3d<StandardMaterial>>), (Added<Mesh3d>, Without<RenderLayers>)>,
@@ -448,6 +458,14 @@ fn tag_view_model_meshes(
         let mut ec = commands.entity(e);
         ec.insert(RenderLayers::layer(VIEW_MODEL_LAYER));
         if probes.0 {
+            // lit by the map's light probes (the gun's Optimized/MultiShader has
+            // LIGHTING_ENABLE; the arms' Cubic/Universal is UNLIT and stays so), with a glow
+            // of its own colours so it never sinks into a dark corner (OUR CHOICE)
+            if let Some(m) = mat.and_then(|m| materials.get(&m.0)).filter(|m| !m.unlit && m.alpha_mode == AlphaMode::Opaque).cloned() {
+                let f = std::env::var("PG3D_GUN_GLOW").ok().and_then(|v| v.parse().ok()).unwrap_or(GUN_GLOW);
+                let emissive_texture = m.base_color_texture.clone();
+                ec.insert(MeshMaterial3d(materials.add(StandardMaterial { emissive: LinearRgba::rgb(f, f, f), emissive_texture, ..m })));
+            }
             continue;
         }
         if let Some(m) = mat.and_then(|m| materials.get(&m.0)).cloned() {
@@ -466,6 +484,7 @@ fn switch_weapon(
     assets: Res<AssetServer>,
     mut graphs: ResMut<Assets<AnimationGraph>>,
     time: Res<Time>,
+    game_sounds: Option<Res<crate::sound::GameSounds>>,
 ) {
     let n = loadout.weapons.len();
     if n == 0 {
@@ -494,8 +513,30 @@ fn switch_weapon(
         return;
     }
     loadout.current = next;
-    loadout.cooldown = 0.3; // draw time (GUESS)
     loadout.reloading = 0.0;
+    // Player_move_c's weapon change: the category's ChangeWeaponClip, then the weapon's
+    // "Loading" (draw) clip if it has one (no shooting while it plays), otherwise it rises
+    // from 40 degrees down at 200 a second
+    let w = &loadout.weapons[next];
+    let sound = match w.def.categoryNabor {
+        1 => "Primary",
+        2 => "Backup",
+        3 => "Melee",
+        4 => "Special",
+        5 => "Sniper",
+        6 => "Heavy",
+        _ => "",
+    };
+    let clip = game_sounds.as_ref().and_then(|g| g.get(&format!("player/ChangeWeaponClip_{sound}"), 0).or_else(|| g.get("player/ChangeWeaponClip", 0)));
+    crate::sound::play(&mut commands, clip, None, 0.8);
+    if let Some(t) = w.draw_time {
+        loadout.cooldown = t;
+        loadout.lower = 0.0;
+        loadout.play = Some("Loading");
+    } else {
+        loadout.cooldown = RAISE_FROM / RAISE_SPEED;
+        loadout.lower = RAISE_FROM;
+    }
     if let Some(old) = loadout.view_model.take() {
         commands.entity(old).despawn();
     }
@@ -717,18 +758,38 @@ fn reload(mut commands: Commands, input: crate::controls::Input, time: Res<Time>
 /// Drives the original weapon animations: one-shot Shoot/Reload when requested, Walk
 /// while moving on the ground, Idle otherwise. Weapons without clips get a small
 /// procedural kick instead.
+const RAISE_FROM: f32 = 40.0;
+const RAISE_SPEED: f32 = 200.0;
+
 fn animate_view_model(
     mut loadout: ResMut<Loadout>,
     player: Single<&Player>,
-    mut roots: Query<(&ViewModelAnims, &mut Transform), With<ViewModel>>,
+    mut roots: Query<(Entity, &ViewModelAnims, &mut Transform), With<ViewModel>>,
     mut players: Query<&mut AnimationPlayer>,
+    time: Res<Time>,
+    mut barrel: Local<bool>,
 ) {
     let request = loadout.play.take();
+    loadout.lower = (loadout.lower - RAISE_SPEED * time.delta_secs()).max(0.0);
     let Some(w) = loadout.current() else { return };
     let base = view_model_transform(w.def.gunPosition.to_bevy());
+    // a weapon being drawn turns up into view about the camera
+    let dip = Quat::from_rotation_x(-loadout.lower.to_radians());
+    let base = Transform { translation: dip * base.translation, rotation: dip * base.rotation, ..base };
+    let reload_speed = w.reload_speed;
+    // a clip asked for before the new model has loaded is kept for when it has
+    let mut waiting = request.is_some();
+    let current_model = loadout.view_model;
     let moving = player.grounded && Vec2::new(player.velocity.x, player.velocity.z).length() > 0.5;
-    for (anims, mut t) in &mut roots {
+    for (e, anims, mut t) in &mut roots {
+        // (the model just switched away from is still here this frame)
+        if current_model != Some(e) {
+            continue;
+        }
         let animated = anims.player.and_then(|p| players.get_mut(p).ok());
+        if animated.is_some() {
+            waiting = false;
+        }
         let Some(mut ap) = animated else {
             // no clips (yet): procedural kick / reload dip
             let dip = if loadout.reloading > 0.0 { 0.15 } else { 0.0 };
@@ -738,12 +799,17 @@ fn animate_view_model(
         };
         *t = base;
         let node = |n: &str| anims.nodes.get(n).copied();
-        if let Some(name) = request {
+        if let Some(mut name) = request {
+            // Shoot1 / Shoot2 in turn for two-barrelled weapons (dual pistols, shotguns)
+            if name == "Shoot" && node("Shoot").is_none() {
+                *barrel = !*barrel;
+                name = if *barrel || node("Shoot2").is_none() { "Shoot1" } else { "Shoot2" };
+            }
             if let Some(n) = node(name) {
                 ap.stop_all();
                 // the Shoot clip's length is the fire interval; Reload plays at the weapon's
                 // balance reload speed (so it lasts reload_time)
-                let speed = if name == "Reload" { w.reload_speed } else { 1.0 };
+                let speed = if name == "Reload" { reload_speed } else { 1.0 };
                 ap.play(n).replay();
                 if let Some(a) = ap.animation_mut(n) {
                     a.set_speed(speed);
@@ -751,7 +817,7 @@ fn animate_view_model(
                 continue;
             }
         }
-        let busy = ["Shoot", "Reload"].iter().filter_map(|n| node(n)).any(|n| {
+        let busy = ["Shoot", "Shoot1", "Shoot2", "Reload", "Loading"].iter().filter_map(|n| node(n)).any(|n| {
             ap.animation(n).is_some_and(|a| !a.is_finished())
         });
         if busy {
@@ -764,6 +830,9 @@ fn animate_view_model(
                 ap.play(n).repeat();
             }
         }
+    }
+    if waiting {
+        loadout.play = request;
     }
 }
 

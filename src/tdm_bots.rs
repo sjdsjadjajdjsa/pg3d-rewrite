@@ -440,7 +440,7 @@ fn spawn_bots(
             let ws = stats.get(wname);
             let pellets = ws.filter(|w| w.isShotGun != 0).map_or(1, |w| w.countShots.max(1)) as f32;
             let damage = ws.and_then(|w| w.damageByTier.first().copied()).unwrap_or(1.0) * pellets;
-            let interval = info.animations.get("Shoot").copied().filter(|v| *v > 0.05).unwrap_or(0.3).max(0.08);
+            let interval = info.animations.get("Shoot").or(info.animations.get("Shoot1")).copied().filter(|v| *v > 0.05).unwrap_or(0.3).max(0.08);
             let spawns = if team == Team::Blue { &setup.blue_spawns } else { &setup.red_spawns };
             let r = ((k as u32).wrapping_mul(2_654_435_761) % 1000) as f32 / 1000.0;
             let at = free_spawn(spawns, &taken, r, (k as f32 * 0.37).fract()).unwrap_or(Vec3::ZERO);
