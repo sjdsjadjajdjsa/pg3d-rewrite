@@ -122,7 +122,9 @@ fn damage_flash(
     } else {
         0.0
     };
-    let alpha = (lost * 0.55 + flash.0 * 0.35 + beat).min(0.85);
+    // kept faint and at the corners so dark maps (Sky Islands' caves) stay readable
+    let steady = ((lost - 0.5) / 0.5).clamp(0.0, 1.0) * 0.3;
+    let alpha = (steady + flash.0 * 0.3 + beat * 0.6).min(0.45);
     **edges = vignette(alpha);
 }
 
@@ -132,7 +134,7 @@ fn vignette(alpha: f32) -> BackgroundGradient {
     BackgroundGradient::from(RadialGradient::new(
         UiPosition::CENTER,
         RadialGradientShape::FarthestCorner,
-        vec![ColorStop::new(red(0.0), percent(60.0)), ColorStop::new(red(alpha * 0.4), percent(82.0)), ColorStop::new(red(alpha), percent(100.0))],
+        vec![ColorStop::new(red(0.0), percent(78.0)), ColorStop::new(red(alpha * 0.4), percent(90.0)), ColorStop::new(red(alpha), percent(100.0))],
     ))
 }
 
