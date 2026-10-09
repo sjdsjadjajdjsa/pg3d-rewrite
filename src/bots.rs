@@ -647,6 +647,7 @@ fn apply_damage(
     mut bots: Query<(&mut Bot, &GlobalTransform)>,
     mut hurt_sound_cooldown: Local<f32>,
     time: Res<Time>,
+    mut marks: MessageWriter<crate::feel::HitMark>,
 ) {
     *hurt_sound_cooldown -= time.delta_secs();
     for hit in hits.read() {
@@ -659,6 +660,7 @@ fn apply_damage(
             b.slow = (k, secs);
         }
         b.state = BotState::Chase; // shot bots always come for you
+        marks.write(if b.health <= 0.0 { crate::feel::HitMark::Kill } else { crate::feel::HitMark::Hit });
         let snd = &types.0[b.kind].sounds;
         if b.health > 0.0 && *hurt_sound_cooldown <= 0.0 {
             // shotguns hit 15 times at once: one hurt sound is enough

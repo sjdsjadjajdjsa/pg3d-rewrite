@@ -510,7 +510,12 @@ fn fire(
     mut rockets: MessageWriter<SpawnProjectile>,
     mut flashes: MessageWriter<crate::particles::Burst>,
     (alive, game_sounds): (Res<crate::bots::PlayerStats>, Option<Res<crate::sound::GameSounds>>),
-    mut beams: MessageWriter<crate::beams::SpawnBeam>,
+    (mut beams, mut kicks, mut marks, mut impacts): (
+        MessageWriter<crate::beams::SpawnBeam>,
+        MessageWriter<crate::feel::ShotKick>,
+        MessageWriter<crate::feel::HitMark>,
+        MessageWriter<crate::feel::ShotImpact>,
+    ),
 ) {
     let dt = time.delta_secs();
     if alive.health <= 0.0 {
@@ -557,6 +562,17 @@ fn fire(
     loadout.cooldown = interval;
     loadout.kick = 1.0;
     loadout.play = Some("Shoot");
+    // camera kick (GUESS, by feel): slow, heavy guns kick more; shotguns and launchers most
+    if !melee {
+        let mut deg = (0.45 + interval * 1.6).clamp(0.45, 2.5);
+        if pellets > 1 {
+            deg = deg.max(2.2);
+        }
+        if w.rocket.is_some() {
+            deg = deg.max(2.8);
+        }
+        kicks.write(crate::feel::ShotKick(deg));
+    }
     if let Some(vm) = loadout.view_model {
         flashes.write(crate::particles::Burst(vm));
     }
@@ -634,10 +650,14 @@ fn fire(
                 debug!("headshot: {} x{}", w.name, w.head_coef);
                 // Player_move_c.headShotSound
                 crate::sound::play(&mut commands, game_sounds.as_ref().and_then(|g| g.get("player/headShotSound", 0)), None, 0.8);
+                marks.write(crate::feel::HitMark::Head);
             }
             hits.write(BotDamage { bot: part.0, amount, slow });
         } else {
             let p = origin + dir * hit.distance + hit.normal * 0.01;
+            if i < 3 {
+                impacts.write(crate::feel::ShotImpact { point: p, normal: hit.normal });
+            }
             commands.spawn((Mesh3d(mesh.clone()), MeshMaterial3d(mat.clone()), Transform::from_translation(p), Impact(8.0)));
         }
     }

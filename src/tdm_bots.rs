@@ -984,11 +984,16 @@ fn take_damage(
     mut bots: Query<(Entity, &Transform, &mut PlayerBot)>,
     mut scores: ResMut<TdmScores>,
     mut stats: ResMut<PlayerStats>,
+    mut marks: MessageWriter<crate::feel::HitMark>,
 ) {
     for h in hits.read() {
-        if bots.contains(h.bot) {
-            apply_bot_damage(&mut commands, &mut bots, &mut scores, h.bot, None, h.amount, &mut stats);
+        let Ok((_, _, b)) = bots.get(h.bot) else { continue };
+        if !b.alive() {
+            continue;
         }
+        apply_bot_damage(&mut commands, &mut bots, &mut scores, h.bot, None, h.amount, &mut stats);
+        let killed = bots.get(h.bot).is_ok_and(|(_, _, b)| !b.alive());
+        marks.write(if killed { crate::feel::HitMark::Kill } else { crate::feel::HitMark::Hit });
     }
 }
 

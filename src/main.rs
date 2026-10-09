@@ -10,6 +10,8 @@
 //!           left mouse = fire, R = reload, 1-6 / wheel = switch weapon,
 //!           V = toggle walk / fly camera, F12 = screenshot, F10 = back to menu.
 
+mod feel;
+mod graphics;
 mod animator;
 mod armory;
 mod armory_preview;
@@ -143,9 +145,12 @@ fn main() {
         .add_message::<bots::PlayerHit>()
         .add_message::<particles::Burst>()
         .add_message::<projectiles::SpawnProjectile>()
+        .add_message::<feel::ShotKick>()
+        .add_message::<feel::HitMark>()
+        .add_message::<feel::ShotImpact>()
         .add_plugins(scene::ScenesPlugin)
         .add_systems(Startup, sound::load_game_sounds)
-        .add_systems(Update, sound::ui_click_sounds.after(scene::run_update))
+        .add_systems(Update, (sound::ui_click_sounds, graphics::apply).after(scene::run_update))
         .add_systems(
             PreUpdate,
             ignore_real_input.after(bevy::input::InputSystems).run_if(automated),
@@ -172,6 +177,7 @@ fn game_scene(app: &mut scene::SceneBuilder) {
     .add_plugins((projectiles::ProjectilesPlugin, pickups::PickupsPlugin, ngui::NguiPlugin, pause::PausePlugin, results::ResultsPlugin))
     .add_plugins((team_match::TeamMatchPlugin, tdm_bots::TdmBotsPlugin, mirrored_skins::MirroredSkinsPlugin))
     .add_plugins((hud::HudPlugin, ingame_ui::InGameUiPlugin, explosives::ExplosivesPlugin, cursor::CursorPlugin, beams::BeamsPlugin))
+    .add_plugins(feel::FeelPlugin)
     .add_systems(scene::Update, (menu::back_to_menu, menu::test_click, hide_hud));
 }
 

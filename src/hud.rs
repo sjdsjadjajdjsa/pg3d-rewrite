@@ -115,7 +115,14 @@ fn damage_flash(
     }
     flash.0 = (flash.0 - time.delta_secs() / HIT_FADE).max(0.0);
     let lost = 1.0 - (stats.health / PLAYER_MAX_HEALTH).clamp(0.0, 1.0);
-    let alpha = (lost * 0.55 + flash.0 * 0.35).min(0.8);
+    // low health: the edges beat like a heart (GUESS, by feel)
+    let beat = if stats.health > 0.0 && lost > 0.6 {
+        let t = time.elapsed_secs() * 1.4;
+        ((t * std::f32::consts::TAU).sin().max(0.0).powi(3)) * 0.25 * ((lost - 0.6) / 0.4)
+    } else {
+        0.0
+    };
+    let alpha = (lost * 0.55 + flash.0 * 0.35 + beat).min(0.85);
     **edges = vignette(alpha);
 }
 

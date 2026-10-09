@@ -57,7 +57,7 @@ struct Projectile {
 }
 
 #[derive(Component)]
-struct Explosion {
+pub struct Explosion {
     age: f32,
     radius: f32,
 }

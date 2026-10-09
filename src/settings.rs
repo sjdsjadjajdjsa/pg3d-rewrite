@@ -21,12 +21,59 @@ pub struct Settings {
     /// the check boxes next to the Music / Sound FX sliders (off = muted)
     pub music_on: bool,
     pub sfx_on: bool,
+    /// Settings > Graphics (the PC version's SettingsGraphics): the map's post-processing
+    /// effects (graphics.rs) and the anti-aliasing mode
+    pub bloom: bool,
+    pub motion_blur: bool,
+    pub chromatic_aberration: bool,
+    /// ambient occlusion (the profiles have it; the original has no switch of its own)
+    pub ambient_occlusion: bool,
+    pub anti_aliasing: AntiAliasing,
+    pub vsync: bool,
+}
+
+/// Settings > Graphics > Anti-Aliasing (PPv2 PostProcessLayer.Antialiasing, plus MSAA).
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum AntiAliasing {
+    Off,
+    Msaa,
+    Fxaa,
+    #[default]
+    Smaa,
+    Taa,
+}
+
+impl AntiAliasing {
+    pub const ALL: [AntiAliasing; 5] = [AntiAliasing::Off, AntiAliasing::Msaa, AntiAliasing::Fxaa, AntiAliasing::Smaa, AntiAliasing::Taa];
+    pub fn label(self) -> &'static str {
+        match self {
+            AntiAliasing::Off => "Off",
+            AntiAliasing::Msaa => "MSAA",
+            AntiAliasing::Fxaa => "FXAA",
+            AntiAliasing::Smaa => "SMAA",
+            AntiAliasing::Taa => "TAA",
+        }
+    }
 }
 
 impl Default for Settings {
     fn default() -> Self {
         // 80: the value in the original's settings in our reference screenshots
-        Self { music: 0.8, sfx: 0.8, sensitivity: 0.5, fov: 80.0, invert_y: false, music_on: true, sfx_on: true }
+        Self {
+            music: 0.8,
+            sfx: 0.8,
+            sensitivity: 0.5,
+            fov: 80.0,
+            invert_y: false,
+            music_on: true,
+            sfx_on: true,
+            bloom: true,
+            motion_blur: false,
+            chromatic_aberration: true,
+            ambient_occlusion: true,
+            anti_aliasing: AntiAliasing::Smaa,
+            vsync: true,
+        }
     }
 }
 
@@ -45,7 +92,20 @@ impl Settings {
     }
 
     pub fn load() -> Self {
-        std::fs::read_to_string(Self::path()).ok().and_then(|s| serde_json::from_str(&s).ok()).unwrap_or_default()
+        let mut s: Self = std::fs::read_to_string(Self::path()).ok().and_then(|s| serde_json::from_str(&s).ok()).unwrap_or_default();
+        // PG3D_GFX=off|on (before/after screenshots): every post effect off / on
+        match std::env::var("PG3D_GFX").as_deref() {
+            Ok("off") => {
+                (s.bloom, s.motion_blur, s.chromatic_aberration, s.ambient_occlusion) = (false, false, false, false);
+                s.anti_aliasing = AntiAliasing::Msaa;
+            }
+            Ok("on") => {
+                (s.bloom, s.chromatic_aberration, s.ambient_occlusion) = (true, true, true);
+                s.anti_aliasing = AntiAliasing::Smaa;
+            }
+            _ => {}
+        }
+        s
     }
 
     pub fn save(&self) {

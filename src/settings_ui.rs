@@ -22,7 +22,7 @@ pub struct SettingsUiPlugin;
 impl crate::scene::ScenePlugin for SettingsUiPlugin {
     fn build(&self, app: &mut crate::scene::SceneBuilder) {
         app.init_resource::<Rebinding>()
-            .add_systems(Update, (settings_sliders, tab_clicks, toggle_clicks, rebind_clicks, capture_key, binding_icons, scroll_rows).chain());
+            .add_systems(Update, (settings_sliders, tab_clicks, toggle_clicks, anti_aliasing_clicks, rebind_clicks, capture_key, binding_icons, scroll_rows).chain());
     }
 }
 
@@ -85,7 +85,7 @@ impl Row {
     }
 }
 
-const TABS: [&str; 3] = ["TabSetting", "TabMultimedia", "TabRebind"];
+const TABS: [&str; 4] = ["TabSetting", "TabMultimedia", "TabGraphics", "TabRebind"];
 
 /// Field of view range of the original's slider (SettingsTabSetting: UISliderCont 60..90).
 const FOV_RANGE: (f32, f32) = (60.0, 90.0);
@@ -412,12 +412,13 @@ pub fn setup_settings(s: &mut crate::ngui::NguiScreen, settings: &crate::setting
             continue;
         }
         match s.nodes[i].name.as_str() {
-            "TabControls" | "TabGraphics" => s.set_active(i, false),
-            "TabSetting" | "TabMultimedia" | "TabRebind" => {
+            "TabControls" => s.set_active(i, false),
+            "TabSetting" | "TabMultimedia" | "TabGraphics" | "TabRebind" => {
                 let k = match s.nodes[i].name.as_str() {
                     "TabSetting" => 1.0,
                     "TabMultimedia" => 2.0,
-                    _ => 3.0,
+                    "TabGraphics" => 3.0,
+                    _ => 4.0,
                 };
                 s.set_pos(i, Vec2::new(94.0 * k, s.nodes[i].pos[1]));
                 s.make_button(i);
@@ -465,6 +466,7 @@ pub fn setup_settings(s: &mut crate::ngui::NguiScreen, settings: &crate::setting
             }
         }
     }
+    setup_graphics(s, settings);
     for (cont, value) in [("MusicCont", settings.music), ("SoundFXCont", settings.sfx)] {
         let Some(c) = s.nodes.iter().position(|n| n.name == cont) else { continue };
         let prefix = s.path(c);
@@ -508,6 +510,95 @@ fn apply_volumes(settings: &crate::settings::Settings, music: &mut Query<&mut Au
     }
 }
 
+/// The Graphics tab (the PC version's SettingsGraphics): Anti-Aliasing, Motion Blur, Bloom,
+/// V-Sync on the left, Chromatic Aberration and (ours) Ambient Occlusion on the right.
+/// Resolution, frame rate and screen mode are left out.
+fn setup_graphics(s: &mut NguiScreen, settings: &crate::settings::Settings) {
+    let Some(page) = (0..s.nodes.len()).find(|&i| s.nodes[i].name == "TabGraphics" && !is_tab_button(s, i)) else { return };
+    for name in ["ToggleGroup_Resolution", "ToggleGroup_FPS", "Toggle_ScreenMode", "PopupList_Cont"] {
+        if let Some(i) = s.find_in(page, name) {
+            s.set_active(i, false);
+        }
+    }
+    for (k, name) in ["ToggleGroup_AntiAlising", "Toggle_Blur", "Toggle_Bloom", "Toggle_VSync"].iter().enumerate() {
+        if let Some(i) = s.find_in(page, name) {
+            s.set_pos(i, Vec2::new(0.0, -100.0 * k as f32));
+        }
+    }
+    if let Some(ab) = s.find_in(page, "Toggle_Aberration") {
+        s.set_pos(ab, Vec2::new(0.0, 0.0));
+        let ao = s.clone_subtree(ab);
+        s.nodes[ao].name = "Toggle_AmbientOcclusion".into();
+        s.set_pos(ao, Vec2::new(0.0, -100.0));
+        if let Some(l) = s.find_in(ao, "AberrationCheckBox_Label") {
+            s.set_text(l, "Ambient Occlusion");
+        }
+    }
+    if let Some(g) = s.find_in(page, "ToggleGroup_AntiAlising") {
+        for n in ["Classic", "Modern", "Ambient"] {
+            if let Some(i) = s.find_in(g, n) {
+                s.set_active(i, false);
+            }
+        }
+        for n in ["PrevAudioButton", "NextAudioButton"] {
+            if let Some(i) = s.find_in(g, n) {
+                s.make_button(i);
+            }
+        }
+        if let Some(l) = s.find_in(g, "MusicName_Label") {
+            s.set_text(l, settings.anti_aliasing.label());
+        }
+    }
+    show_graphics_checks(s, settings);
+}
+
+fn show_graphics_checks(s: &mut NguiScreen, settings: &crate::settings::Settings) {
+    for (cont, on) in [
+        ("Toggle_Blur", settings.motion_blur),
+        ("Toggle_Bloom", settings.bloom),
+        ("Toggle_VSync", settings.vsync),
+        ("Toggle_Aberration", settings.chromatic_aberration),
+        ("Toggle_AmbientOcclusion", settings.ambient_occlusion),
+    ] {
+        if let Some(c) = s.find(cont).and_then(|c| s.find_in(c, "CheckBox")) {
+            s.set_active(c, true);
+            if let Some(k) = s.find_in(c, "check") {
+                s.set_active(k, on);
+            }
+        }
+    }
+}
+
+/// The Graphics tab's anti-aliasing arrows: cycle Off / MSAA / FXAA / SMAA / TAA.
+fn anti_aliasing_clicks(
+    mut clicks: MessageReader<NguiClick>,
+    mut screens: Query<&mut NguiScreen>,
+    mut settings: ResMut<crate::settings::Settings>,
+) {
+    use crate::settings::AntiAliasing;
+    for c in clicks.read() {
+        let step: i32 = match c.name.as_str() {
+            "PrevAudioButton" => -1,
+            "NextAudioButton" => 1,
+            _ => continue,
+        };
+        let Ok(mut s) = screens.get_mut(c.screen) else { continue };
+        let path = s.path(c.node);
+        if !path.contains("ToggleGroup_AntiAlising") {
+            continue;
+        }
+        let all = AntiAliasing::ALL;
+        let i = all.iter().position(|a| *a == settings.anti_aliasing).unwrap_or(0) as i32;
+        settings.anti_aliasing = all[(i + step).rem_euclid(all.len() as i32) as usize];
+        settings.save();
+        if let Some(g) = (0..s.nodes.len()).find(|&j| s.nodes[j].name == "ToggleGroup_AntiAlising")
+            && let Some(l) = s.find_in(g, "MusicName_Label")
+        {
+            s.set_text(l, settings.anti_aliasing.label());
+        }
+    }
+}
+
 /// Check boxes: "Invert cam", and Music / Sound FX on-off.
 fn toggle_clicks(
     mut clicks: MessageReader<NguiClick>,
@@ -530,6 +621,21 @@ fn toggle_clicks(
         } else if path.contains("SoundFXCont") {
             settings.sfx_on = !settings.sfx_on;
             settings.sfx_on
+        } else if path.contains("Toggle_Bloom") {
+            settings.bloom = !settings.bloom;
+            settings.bloom
+        } else if path.contains("Toggle_Blur") {
+            settings.motion_blur = !settings.motion_blur;
+            settings.motion_blur
+        } else if path.contains("Toggle_VSync") {
+            settings.vsync = !settings.vsync;
+            settings.vsync
+        } else if path.contains("Toggle_Aberration") {
+            settings.chromatic_aberration = !settings.chromatic_aberration;
+            settings.chromatic_aberration
+        } else if path.contains("Toggle_AmbientOcclusion") {
+            settings.ambient_occlusion = !settings.ambient_occlusion;
+            settings.ambient_occlusion
         } else {
             continue;
         };

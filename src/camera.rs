@@ -38,10 +38,15 @@ impl crate::scene::ScenePlugin for CameraPlugin {
                     fly.run_if(resource_equals(CameraMode::Fly)),
                     follow_player.run_if(resource_equals(CameraMode::Walk)),
                 )
-                    .chain(),
+                    .chain()
+                    .in_set(CameraSet),
             );
     }
 }
+
+/// The mouse look and camera follow (feel.rs adds its kick after them).
+#[derive(SystemSet, Clone, Debug, PartialEq, Eq, Hash)]
+pub struct CameraSet;
 
 #[derive(Component)]
 pub struct PlayerCamera {
