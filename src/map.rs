@@ -331,8 +331,10 @@ fn spawn_shape(commands: &mut Commands, d: &ColliderDef, shape: Collider, rot: Q
 fn hide_campaign_teleports(mut commands: Commands, added: Query<(Entity, &bevy::gltf::GltfExtras), Added<bevy::gltf::GltfExtras>>) {
     for (e, x) in &added {
         if x.value.contains("\"got_to_next_level\"") {
-            commands.entity(e).insert(Visibility::Hidden);
-            info!("campaign teleporter hidden");
+            // gone altogether: hiding it left its blue particles (an emitter child spawns
+            // its particles into the world, where the hidden parent does not reach)
+            commands.entity(e).despawn();
+            info!("campaign teleporter removed");
         }
     }
 }
