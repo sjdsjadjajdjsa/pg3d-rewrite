@@ -49,6 +49,10 @@ pub struct SpawnProjectile {
     /// your own rockets push you away (rocket jumps): (radius, force) from the weapon's
     /// bazookaImpulseRadius / impulseForceSelf; radius 0: no push
     pub self_impulse: (f32, f32),
+    /// your own rocket (Rocket.m_60040E2): damage falls off as 1 - (d / r)^2, and hurts you
+    /// within this radius (bazookaExplosionRadiusSelf; 0: never, or the rocket's
+    /// dontDoSelfDamage). None: not a rocket of yours (barrels, enemy bullets)
+    pub self_damage_radius: Option<f32>,
     pub look: Look,
 }
 
@@ -168,9 +172,20 @@ fn fly(
                 Owner::Player => {
                     let feet = player.0.translation;
                     rocket_jump(&mut player.1, feet, point, p.spec.self_impulse);
+                    // Rocket.m_60040E0: 1 - d^2 / r^2 inside the radius
+                    let rocket_falloff = |d: f32, r: f32| if r <= 0.0 || d >= r { 0.0 } else { 1.0 - (d * d) / (r * r) };
+                    if let Some(rs) = p.spec.self_damage_radius {
+                        // self damage: the self radius, x dynamicSettings+0x68 (0.7)
+                        let d = (feet + Vec3::Y * 1.0).distance(point);
+                        let k = rocket_falloff(d, rs) * SELF_DAMAGE;
+                        if k > 0.0 {
+                            hurt_player(&mut stats, p.spec.damage * k, point, &mut player_hits);
+                            info!("rocket self damage: {:.1} m, {:.2} (health {:.2})", d, p.spec.damage * k, stats.health);
+                        }
+                    }
                     for (bot, gt) in &bots {
                         let d = gt.translation().distance(point).min((gt.translation() + Vec3::Y).distance(point));
-                        let k = falloff(d);
+                        let k = if p.spec.self_damage_radius.is_some() { rocket_falloff(d, r) } else { falloff(d) };
                         if k > 0.0 {
                             hits.write(BotDamage { bot, amount: p.spec.damage * k, slow: None });
                         }
@@ -210,6 +225,10 @@ fn rocket_jump(p: &mut crate::player::Player, feet: Vec3, blast: Vec3, (radius, 
     p.impact = p.impact.clamp_length_max(crate::player::MAX_IMPACT);
     info!("rocket jump: {:.1} m from the blast, push {:.1}", d, p.impact.length());
 }
+
+/// PlayerCoreSettingsStorager.dynamicSettings +0x68 (constructor default 0.7): your own
+/// rocket's damage to you (Rocket.m_60040E2; x +0x70, 1.0, in one more case).
+const SELF_DAMAGE: f32 = 0.7;
 
 fn hurt_player(stats: &mut PlayerStats, amount: f32, from: Vec3, hits: &mut MessageWriter<crate::bots::PlayerHit>) {
     if stats.protected <= 0.0 && stats.health > 0.0 {

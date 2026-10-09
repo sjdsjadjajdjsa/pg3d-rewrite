@@ -98,6 +98,8 @@ pub struct WeaponDef {
     /// rocket launchers: which "Rocket_<n>" prefab they fire and its blast radius
     pub rocketNum: i32,
     pub bazookaExplosionRadius: f32,
+    /// your own rocket hurts you within this radius (0: never)
+    pub bazookaExplosionRadiusSelf: f32,
     /// rocket jumps: the blast pushes its own shooter within this radius (0: never) with
     /// impulseForceSelf (Player_move_c.m_600289E)
     pub bazookaImpulseRadius: f32,
@@ -229,6 +231,8 @@ pub struct RocketDef {
     pub lifeTime: f32,
     pub startForce: f32,
     pub useGravity: i32,
+    /// RocketSettings.dontDoSelfDamage
+    pub dontDoSelfDamage: i32,
     #[serde(skip)]
     pub model: String,
 }
@@ -603,6 +607,7 @@ fn fire(
             damage: base_damage,
             explosion_radius: w.def.bazookaExplosionRadius.max(1.0),
             self_impulse: (w.def.bazookaImpulseRadius, w.def.impulseForceSelf),
+            self_damage_radius: Some(if r.dontDoSelfDamage != 0 { 0.0 } else { w.def.bazookaExplosionRadiusSelf }),
             look: Look::Model(r.model.clone()),
         });
         return;

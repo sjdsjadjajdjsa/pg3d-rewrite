@@ -103,6 +103,7 @@ fn explode(
             damage: x.def.damage_percent.max(30.0) * DAMAGE_PER_PERCENT,
             explosion_radius: x.def.radius.clamp(1.0, 10.0),
             self_impulse: (0.0, 0.0),
+            self_damage_radius: None,
             look: Look::Ball { color: Color::srgb(1.0, 0.6, 0.1), radius: 0.05 },
         });
         // the blast hurts the player too: damagePercent of max health within radiusMax,

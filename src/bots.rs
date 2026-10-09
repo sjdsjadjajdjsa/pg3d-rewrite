@@ -498,6 +498,7 @@ fn bot_brain(
                             damage: def.damagePerHit,
                             explosion_radius: if def.isProjectileExplosion != 0 { def.radiusExplosion.max(1.0) } else { 0.0 },
                             self_impulse: (0.0, 0.0),
+                            self_damage_radius: None,
                             look: Look::Ball {
                                 color: Color::srgba(c[0], c[1], c[2], 1.0),
                                 // particle size 1 looks like a ~0.25 m glowing ball in game (GUESS)
