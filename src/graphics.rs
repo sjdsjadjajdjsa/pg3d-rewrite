@@ -208,3 +208,32 @@ pub fn apply(
         }
     }
 }
+
+/// Settings > Graphics "frame rate": hold each frame to the chosen rate. Sleeps for most of
+/// the wait, then spins the last stretch (sleeping alone overshoots by a millisecond or so,
+/// which shows as uneven frames).
+pub fn limit_fps(settings: Res<Settings>, mut last: Local<Option<std::time::Instant>>) {
+    let now = std::time::Instant::now();
+    if settings.fps_limit == 0 {
+        *last = Some(now);
+        return;
+    }
+    let budget = std::time::Duration::from_secs_f64(1.0 / settings.fps_limit as f64);
+    if let Some(prev) = *last {
+        let target = prev + budget;
+        if target > now {
+            let wait = target - now;
+            if wait > std::time::Duration::from_micros(1500) {
+                std::thread::sleep(wait - std::time::Duration::from_micros(1000));
+            }
+            while std::time::Instant::now() < target {
+                std::hint::spin_loop();
+            }
+        }
+        // a frame that ran long starts the next budget now (no catching up in bursts)
+        let after = std::time::Instant::now();
+        *last = Some(if after > target + budget { after } else { target });
+    } else {
+        *last = Some(now);
+    }
+}

@@ -30,6 +30,8 @@ pub struct Settings {
     pub ambient_occlusion: bool,
     pub anti_aliasing: AntiAliasing,
     pub vsync: bool,
+    /// most frames a second (0: no limit), on top of V-Sync; the original offers 30 / 60
+    pub fps_limit: u32,
 }
 
 /// Settings > Graphics > Anti-Aliasing (PPv2 PostProcessLayer.Antialiasing, plus MSAA).
@@ -73,8 +75,16 @@ impl Default for Settings {
             ambient_occlusion: true,
             anti_aliasing: AntiAliasing::Smaa,
             vsync: true,
+            fps_limit: 0,
         }
     }
+}
+
+/// The frame rate choices in Settings > Graphics (0: unlimited).
+pub const FPS_LIMITS: [u32; 8] = [0, 30, 60, 120, 144, 165, 240, 360];
+
+pub fn fps_label(limit: u32) -> String {
+    if limit == 0 { "Unlimited".into() } else { format!("FPS {limit}") }
 }
 
 impl Settings {

@@ -515,7 +515,7 @@ fn apply_volumes(settings: &crate::settings::Settings, music: &mut Query<&mut Au
 /// Resolution, frame rate and screen mode are left out.
 fn setup_graphics(s: &mut NguiScreen, settings: &crate::settings::Settings) {
     let Some(page) = (0..s.nodes.len()).find(|&i| s.nodes[i].name == "TabGraphics" && !is_tab_button(s, i)) else { return };
-    for name in ["ToggleGroup_Resolution", "ToggleGroup_FPS", "Toggle_ScreenMode", "PopupList_Cont"] {
+    for name in ["ToggleGroup_Resolution", "Toggle_ScreenMode", "PopupList_Cont"] {
         if let Some(i) = s.find_in(page, name) {
             s.set_active(i, false);
         }
@@ -532,6 +532,24 @@ fn setup_graphics(s: &mut NguiScreen, settings: &crate::settings::Settings) {
         s.set_pos(ao, Vec2::new(0.0, -100.0));
         if let Some(l) = s.find_in(ao, "AberrationCheckBox_Label") {
             s.set_text(l, "Ambient Occlusion");
+        }
+    }
+    // the original's "Game frame rate" (FPS 30 / 60); ours goes to unlimited
+    if let Some(g) = s.find_in(page, "ToggleGroup_FPS") {
+        // right column, under Chromatic Aberration and Ambient Occlusion
+        s.set_pos(g, Vec2::new(0.0, -200.0));
+        for n in ["Classic", "Modern", "Ambient"] {
+            if let Some(i) = s.find_in(g, n) {
+                s.set_active(i, false);
+            }
+        }
+        for n in ["PrevAudioButton", "NextAudioButton"] {
+            if let Some(i) = s.find_in(g, n) {
+                s.make_button(i);
+            }
+        }
+        if let Some(l) = s.find_in(g, "MusicName_Label") {
+            s.set_text(l, crate::settings::fps_label(settings.fps_limit));
         }
     }
     if let Some(g) = s.find_in(page, "ToggleGroup_AntiAlising") {
@@ -584,6 +602,18 @@ fn anti_aliasing_clicks(
         };
         let Ok(mut s) = screens.get_mut(c.screen) else { continue };
         let path = s.path(c.node);
+        if path.contains("ToggleGroup_FPS") {
+            let all = crate::settings::FPS_LIMITS;
+            let i = all.iter().position(|a| *a == settings.fps_limit).unwrap_or(0) as i32;
+            settings.fps_limit = all[(i + step).rem_euclid(all.len() as i32) as usize];
+            settings.save();
+            if let Some(g) = (0..s.nodes.len()).find(|&j| s.nodes[j].name == "ToggleGroup_FPS")
+                && let Some(l) = s.find_in(g, "MusicName_Label")
+            {
+                s.set_text(l, crate::settings::fps_label(settings.fps_limit));
+            }
+            continue;
+        }
         if !path.contains("ToggleGroup_AntiAlising") {
             continue;
         }

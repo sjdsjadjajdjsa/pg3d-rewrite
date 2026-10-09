@@ -107,6 +107,11 @@ fn main() {
     };
     scene::request(first);
     let mut app = App::new();
+    // automated runs sit unfocused behind other windows, where Bevy would throttle to 60 Hz:
+    // keep them running flat out so frame rates measured in tests are real
+    if automated() {
+        app.insert_resource(bevy::winit::WinitSettings::continuous());
+    }
     app.set_error_handler(bevy::ecs::error::warn)
         .add_plugins(
             DefaultPlugins
@@ -168,6 +173,7 @@ fn main() {
         .add_plugins(scene::ScenesPlugin)
         .add_systems(Startup, sound::load_game_sounds)
         .add_systems(Update, (sound::ui_click_sounds, graphics::apply).after(scene::run_update))
+        .add_systems(Last, graphics::limit_fps)
         .add_systems(
             PreUpdate,
             ignore_real_input.after(bevy::input::InputSystems).run_if(automated),
