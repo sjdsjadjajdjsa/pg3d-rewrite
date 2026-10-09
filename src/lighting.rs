@@ -230,6 +230,9 @@ fn attach_lightmaps(
     mut pending: Local<Vec<(Entity, Lightmap)>>,
     mut refresh: Local<Vec<(Entity, u32)>>,
     mut lightmaps: Query<&mut Lightmap>,
+    mats: Query<&MeshMaterial3d<StandardMaterial>>,
+    mut materials: ResMut<Assets<StandardMaterial>>,
+    mut lit_copies: Local<std::collections::HashMap<AssetId<StandardMaterial>, Handle<StandardMaterial>>>,
 ) {
     refresh.retain_mut(|(e, n)| {
         if let Ok(mut lm) = lightmaps.get_mut(*e) {
@@ -264,6 +267,27 @@ fn attach_lightmaps(
         if let Ok(mut e) = commands.get_entity(*t) {
             e.insert(lm.clone());
             refresh.push((*t, 60));
+            // Unlit surfaces with baked light (Cubic/Universal with UNLIT: all of Sky
+            // Islands) are texture x lightmap in Unity; Bevy's unlit path skips lightmaps,
+            // so they drew at full brightness, caves included. A lit copy shows only the
+            // lightmap: no lamp, ambient or probe reaches lightmapped meshes here.
+            if let Ok(m) = mats.get(*t)
+                && let Some(src) = materials.get(&m.0)
+                && src.unlit
+                && !matches!(src.alpha_mode, AlphaMode::Blend | AlphaMode::Add | AlphaMode::Premultiplied)
+            {
+                let id = m.0.id();
+                let lit = match lit_copies.get(&id) {
+                    Some(h) => h.clone(),
+                    None => {
+                        let copy = StandardMaterial { unlit: false, reflectance: 0.0, ..src.clone() };
+                        let h = materials.add(copy);
+                        lit_copies.insert(id, h.clone());
+                        h
+                    }
+                };
+                e.insert(MeshMaterial3d(lit));
+            }
         }
         false
     });
