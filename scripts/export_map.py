@@ -634,6 +634,8 @@ class Exporter:
         second UV set (its UVs already equal the rect), so those use the whole lightmap.
         """
         idx = getattr(mr, "m_LightmapIndex", 0xFFFF)
+        if idx < 0xFFFE and (idx >= len(self.lightmaps) or not self.lightmaps[idx]):
+            self.stats[f"lightmap_missing_{idx}"] += 1
         if idx >= 0xFFFE or idx >= len(self.lightmaps) or not self.lightmaps[idx]:
             return None
         so = getattr(mr, "m_LightmapTilingOffset", None) or mr.m_LightmapScaleOffset
