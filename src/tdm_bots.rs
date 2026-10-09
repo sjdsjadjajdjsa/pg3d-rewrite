@@ -744,6 +744,9 @@ fn spawn_spot(spatial: &SpatialQuery, nav: &crate::navmesh::NavMesh, at: Vec3) -
     floor_below(spatial, at).or_else(|| nav.walkable_point(at).and_then(|p| floor_below(spatial, p).or(Some(p)))).unwrap_or(at)
 }
 
+/// The longest drop a bot walks off on purpose, metres (GUESS: a little over a storey).
+const MAX_DROP: f32 = 4.0;
+
 /// Seconds a (re)spawned bot keeps trying to find the floor under it (the physics scene
 /// may not be queryable in its first frames).
 const SETTLE: f32 = 1.0;
@@ -912,14 +915,20 @@ fn brain(
                         .map(|o| o.1)
                         .chain(if b.team == Team::Red && player_alive { player_pos } else { None })
                         .collect();
-                    let base = if !enemies.is_empty() && b.rand() < 0.7 {
-                        enemies[(b.rand() * enemies.len() as f32) as usize % enemies.len()]
-                    } else {
-                        let i = (b.rand() * setup.roam.len() as f32) as usize;
-                        setup.roam.get(i).copied().unwrap_or(pos)
-                    };
-                    let off = Vec3::new(b.rand() - 0.5, 0.0, b.rand() - 0.5) * tu.controller.max_move_distance;
-                    b.goal = nav.walkable_point(base + off).unwrap_or(base);
+                    // a few tries for a goal it can actually get to (maps of separate parts)
+                    for attempt in 0..6 {
+                        let base = if !enemies.is_empty() && b.rand() < 0.7 {
+                            enemies[(b.rand() * enemies.len() as f32) as usize % enemies.len()]
+                        } else {
+                            let i = (b.rand() * setup.roam.len() as f32) as usize;
+                            setup.roam.get(i).copied().unwrap_or(pos)
+                        };
+                        let off = Vec3::new(b.rand() - 0.5, 0.0, b.rand() - 0.5) * tu.controller.max_move_distance;
+                        b.goal = nav.walkable_point(base + off).unwrap_or(base);
+                        if nav.is_empty() || attempt == 5 || nav.find_path(pos, b.goal).is_some() {
+                            break;
+                        }
+                    }
                     b.repath = 0.0;
                 }
             }
@@ -1118,7 +1127,16 @@ fn movement(
             let below = spatial
                 .cast_ray(t.translation + Vec3::Y * 3.0, Dir3::NEG_Y, 10.0, false, &SpatialQueryFilter::from_mask(Layer::World))
                 .map(|h| t.translation.y - (t.translation.y + 3.0 - h.distance));
-            info!("ground bot {}: feet {:.2} above floor {:?} grounded={}", b.row, t.translation, below, b.grounded);
+            info!(
+                "ground bot {}: feet {:.2} above floor {:?} grounded={} path={} goal={:.1} target={}",
+                b.row,
+                t.translation,
+                below,
+                b.grounded,
+                b.path.len(),
+                b.goal.distance(t.translation),
+                b.target.is_some()
+            );
         }
         let fighting = b.target.is_some();
         // path to the goal, recomputed twice a second
@@ -1128,15 +1146,18 @@ fn movement(
             b.path = nav.find_path(t.translation, b.goal).unwrap_or_default();
         }
         while let Some(&wp) = b.path.first() {
-            if Vec2::new(wp.x - t.translation.x, wp.z - t.translation.z).length() < 0.6 && b.path.len() > 1 {
+            if Vec2::new(wp.x - t.translation.x, wp.z - t.translation.z).length() < 1.0 && b.path.len() > 1 {
                 b.path.remove(0);
             } else {
                 break;
             }
         }
+        // (on trampoline maps the way there is down onto the trampoline and up again)
+        let no_route = !nav.is_empty() && b.path.is_empty();
         let aim = b.path.first().copied().unwrap_or(b.goal);
         let mut dir = Vec3::new(aim.x - t.translation.x, 0.0, aim.z - t.translation.z);
-        let close = dir.length() < 1.0;
+        // only the end of the route counts as arrived (not a waypoint on the way)
+        let close = dir.length() < 1.0 && b.path.len() <= 1;
         dir = dir.normalize_or_zero();
         // roam a little slower than full speed (players don't sprint everywhere)
         let mut speed = RUN_SPEED * 0.85;
@@ -1167,6 +1188,44 @@ fn movement(
             }
             if close {
                 dir = Vec3::ZERO;
+            }
+        }
+        // trampoline maps (Matrix): never walk off a block onto the trampoline floor (or
+        // into a long fall) unless there is no other way to the goal or it is a jump in
+        // the route; otherwise stop,
+        // drop the strafe / route and let the brain pick another way
+        if nav.bouncy && b.grounded && dir != Vec3::ZERO {
+            let floor_filter = SpatialQueryFilter::from_mask(Layer::World).with_excluded_entities([e, ce]);
+            let ahead = t.translation + dir * 0.9 + Vec3::Y * 0.5;
+            let hit = spatial.cast_ray(ahead, Dir3::NEG_Y, MAX_DROP + 0.5, true, &floor_filter);
+            let unsafe_drop = hit.is_none_or(|h| surfaces.get(h.entity).is_ok_and(|s| *s == crate::map::Surface::Trampoline));
+            // ...unless the route jumps the gap here (navmesh jump link): the next waypoint
+            // is across it, in reach and on solid ground
+            let gap_jump = unsafe_drop
+                && b.path.first().is_some_and(|w| {
+                    let d = Vec2::new(w.x - t.translation.x, w.z - t.translation.z).length();
+                    let landing = spatial.cast_ray(*w + Vec3::Y * 1.0, Dir3::NEG_Y, 2.5, true, &floor_filter);
+                    crate::navmesh::jump_reach(w.y - t.translation.y, crate::player::gravity()).is_some_and(|r| d <= r)
+                        && landing.is_some_and(|h| !surfaces.get(h.entity).is_ok_and(|s| *s == crate::map::Surface::Trampoline))
+                });
+            if gap_jump {
+                b.velocity.y = mv.jump_speed;
+                b.velocity.x = dir.x * crate::navmesh::BOT_RUN_SPEED;
+                b.velocity.z = dir.z * crate::navmesh::BOT_RUN_SPEED;
+                b.grounded = false;
+                if std::env::var("PG3D_TRACE_JUMP").is_ok() {
+                    info!("bot jump: gap");
+                }
+            } else if unsafe_drop && !(nav.bouncy && no_route && !fighting && hit.is_some()) {
+                dir = Vec3::ZERO;
+                if b.strafe > 0.0 {
+                    b.strafe = 0.0;
+                    b.dodge_dir = -b.dodge_dir;
+                }
+                if !fighting {
+                    b.path.clear();
+                    b.goal = t.translation;
+                }
             }
         }
         // look ahead (the maps are made of blocks: steps, crates and walls): a block at the
@@ -1233,7 +1292,8 @@ fn movement(
         // speed up and slow down like a player (no instant direction flips)
         let want_v = Vec2::new(dir.x, dir.z) * speed;
         let cur_v = Vec2::new(b.velocity.x, b.velocity.z);
-        let accel = if b.grounded { ACCEL } else { ACCEL * 0.3 };
+        // in the air between trampoline bounces it steers like a player does
+        let accel = if b.grounded || (nav.bouncy && b.impact.y > 1.0) { ACCEL } else { ACCEL * 0.3 };
         let new_v = cur_v + (want_v - cur_v).clamp_length_max(accel * dt);
         b.velocity.x = new_v.x;
         b.velocity.z = new_v.y;

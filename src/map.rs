@@ -160,13 +160,18 @@ pub fn map_dir(data: &DataDir, map: &CurrentMap) -> std::path::PathBuf {
     data.0.join("maps").join(&map.0)
 }
 
-fn load_markers(mut commands: Commands, data: Res<DataDir>, map: Res<CurrentMap>) {
-    // SceneInfo.gravity (export_scene_info.py -> maps/scenes.json)
-    let g = std::fs::read_to_string(data.0.join("maps/scenes.json"))
+/// The map's gravity (m/s^2, positive): SceneInfo.gravity (export_scene_info.py ->
+/// maps/scenes.json), 9.81 when unknown.
+pub fn scene_gravity(data: &std::path::Path, map: &str) -> f32 {
+    std::fs::read_to_string(data.join("maps/scenes.json"))
         .ok()
         .and_then(|t| serde_json::from_str::<serde_json::Value>(&t).ok())
-        .and_then(|v| v.get(map.0.to_lowercase())?.get("gravity")?.as_f64())
-        .map_or(crate::player::GRAVITY, |g| (-g as f32).abs().max(0.1));
+        .and_then(|v| v.get(map.to_lowercase())?.get("gravity")?.as_f64())
+        .map_or(crate::player::GRAVITY, |g| (-g as f32).abs().max(0.1))
+}
+
+fn load_markers(mut commands: Commands, data: Res<DataDir>, map: Res<CurrentMap>) {
+    let g = scene_gravity(&data.0, &map.0);
     crate::player::set_gravity(g);
     if (g - crate::player::GRAVITY).abs() > 0.01 {
         info!("map gravity {g:.2} m/s^2");

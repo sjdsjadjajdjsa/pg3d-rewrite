@@ -40,6 +40,17 @@ struct Link {
     b: Vec3,
 }
 
+/// A bot's jump: take-off speed (PlayerBot jumpSpeed 5) and run speed, m/s.
+pub const BOT_JUMP_SPEED: f32 = 5.0;
+pub const BOT_RUN_SPEED: f32 = crate::player::WALK_SPEED * 0.85;
+
+/// Horizontal distance a jump at BOT_JUMP_SPEED covers landing `dy` higher (None: too high).
+pub fn jump_reach(dy: f32, g: f32) -> Option<f32> {
+    let v = BOT_JUMP_SPEED;
+    let disc = v * v - 2.0 * g * dy;
+    (disc >= 0.0).then(|| BOT_RUN_SPEED * (v + disc.sqrt()) / g)
+}
+
 struct Poly {
     verts: Vec<Vec3>,
     center: Vec3,
@@ -49,6 +60,9 @@ struct Poly {
 #[derive(Resource, Default)]
 pub struct NavMesh {
     polys: Vec<Poly>,
+    /// the map has trampoline floors (left out of the mesh): the way between parts the
+    /// mesh doesn't join is down onto the trampoline and up again
+    pub bouncy: bool,
 }
 
 fn load_navmesh(mut commands: Commands, data: Res<DataDir>, map: Res<CurrentMap>) {
@@ -73,8 +87,51 @@ fn load_navmesh(mut commands: Commands, data: Res<DataDir>, map: Res<CurrentMap>
             Poly { verts, center, links }
         })
         .collect();
-    info!("navmesh: {} polygons", polys.len());
-    commands.insert_resource(NavMesh { polys });
+    let mut nav = NavMesh { polys, bouncy: false };
+    // trampoline floors (Matrix): standing there throws you up, so they are no place to walk
+    let pads = trampolines(&data.0.join("maps").join(&map.0).join("colliders.json"));
+    if !pads.is_empty() {
+        let before = nav.polys.len();
+        nav.remove_where(|c| pads.iter().any(|(lo, hi)| c.x >= lo.x && c.x <= hi.x && c.z >= lo.z && c.z <= hi.z && c.y >= lo.y - 1.0 && c.y <= hi.y + 1.5));
+        info!("navmesh: {} polygons on trampolines left out", before - nav.polys.len());
+        nav.bouncy = true;
+    }
+    let jumps = if nav.bouncy { nav.add_gap_jumps(crate::map::scene_gravity(&data.0, &map.0)) } else { 0 };
+    if jumps > 0 {
+        info!("navmesh: {jumps} jumps between separate parts");
+    }
+    info!("navmesh: {} polygons", nav.polys.len());
+    commands.insert_resource(nav);
+}
+
+/// World-space boxes (min, max) of the colliders tagged "Trampoline".
+fn trampolines(path: &std::path::Path) -> Vec<(Vec3, Vec3)> {
+    #[derive(Deserialize)]
+    struct C {
+        kind: String,
+        world: [f32; 16],
+        #[serde(default)]
+        center: [f32; 3],
+        size: Option<[f32; 3]>,
+        tag: Option<String>,
+    }
+    let Ok(all) = std::fs::read_to_string(path).map(|s| serde_json::from_str::<Vec<C>>(&s).unwrap_or_default()) else { return vec![] };
+    all.into_iter()
+        .filter(|c| c.kind == "box" && c.tag.as_deref() == Some("Trampoline"))
+        .map(|c| {
+            let m = Mat4::from_cols_array(&c.world);
+            let h = Vec3::from(c.size.unwrap_or([1.0; 3])) * 0.5;
+            let mut lo = Vec3::splat(f32::MAX);
+            let mut hi = Vec3::splat(f32::MIN);
+            for k in 0..8 {
+                let s = Vec3::new(if k & 1 == 0 { -1.0 } else { 1.0 }, if k & 2 == 0 { -1.0 } else { 1.0 }, if k & 4 == 0 { -1.0 } else { 1.0 });
+                let p = m.transform_point3(Vec3::from(c.center) + h * s);
+                lo = lo.min(p);
+                hi = hi.max(p);
+            }
+            (lo, hi)
+        })
+        .collect()
 }
 
 fn cross2(a: Vec2, b: Vec2) -> f32 {
@@ -115,6 +172,121 @@ impl PartialOrd for Open {
 impl NavMesh {
     pub fn is_empty(&self) -> bool {
         self.polys.is_empty()
+    }
+
+    /// Maps made of separate floating parts (Matrix's blocks once the trampoline floor is
+    /// left out) get jump links: from every open edge, across the gap to a polygon of
+    /// another part that a running jump reaches under this gravity. The link's portal is
+    /// the landing point; bots jump when the ground ends before it (tdm_bots.rs).
+    fn add_gap_jumps(&mut self, g: f32) -> usize {
+        let n = self.polys.len();
+        let mut comp = vec![usize::MAX; n];
+        let mut parts = 0;
+        for s in 0..n {
+            if comp[s] != usize::MAX {
+                continue;
+            }
+            let mut stack = vec![s];
+            comp[s] = parts;
+            while let Some(p) = stack.pop() {
+                for l in &self.polys[p].links {
+                    if comp[l.to] == usize::MAX {
+                        comp[l.to] = parts;
+                        stack.push(l.to);
+                    }
+                }
+            }
+            parts += 1;
+        }
+        if parts < 2 {
+            return 0;
+        }
+        let inside = |poly: &Poly, q: Vec2| {
+            let k = poly.verts.len();
+            let mut sign = 0.0f32;
+            (0..k).all(|i| {
+                let c = cross2(xz(poly.verts[(i + 1) % k]) - xz(poly.verts[i]), q - xz(poly.verts[i]));
+                if c.abs() < 1e-6 {
+                    return true;
+                }
+                if sign == 0.0 {
+                    sign = c.signum();
+                }
+                c.signum() == sign
+            })
+        };
+        let mut added = Vec::new();
+        for p in 0..n {
+            let poly = &self.polys[p];
+            let k = poly.verts.len();
+            for i in 0..k {
+                let (a, b) = (poly.verts[i], poly.verts[(i + 1) % k]);
+                let m = (a + b) * 0.5;
+                // an edge shared with a neighbour is no edge of the part
+                let shared = poly.links.iter().any(|l| {
+                    let mid = (l.a + l.b) * 0.5;
+                    let ab = xz(b) - xz(a);
+                    let t = ((xz(mid) - xz(a)).dot(ab) / ab.length_squared().max(1e-6)).clamp(0.0, 1.0);
+                    (xz(a) + ab * t).distance(xz(mid)) < 0.15
+                });
+                if shared || (b - a).length() < 0.5 {
+                    continue;
+                }
+                let edge = xz(b) - xz(a);
+                let mut out = Vec2::new(edge.y, -edge.x).normalize_or_zero();
+                if out.dot(xz(m) - xz(poly.center)) < 0.0 {
+                    out = -out;
+                }
+                let mut best: Option<(usize, Vec3)> = None;
+                for step in 1..=12 {
+                    let d = step as f32 * 0.75;
+                    let q = xz(m) + out * d;
+                    let hit = (0..n)
+                        .filter(|&j| comp[j] != comp[p])
+                        .filter(|&j| {
+                            let dy = self.polys[j].center.y - m.y;
+                            dy > -8.0 && jump_reach(dy, g).is_some_and(|r| d + 0.6 <= r * 0.8)
+                        })
+                        .find(|&j| inside(&self.polys[j], q));
+                    if let Some(j) = hit {
+                        best = Some((j, Vec3::new(q.x, self.polys[j].center.y, q.y) + Vec3::new(out.x, 0.0, out.y) * 0.6));
+                        break;
+                    }
+                }
+                if let Some((j, land)) = best {
+                    added.push((p, j, land));
+                }
+            }
+        }
+        let count = added.len();
+        for (p, j, land) in added {
+            self.polys[p].links.push(Link { to: j, a: land, b: land });
+        }
+        count
+    }
+
+    /// Drop the polygons whose centre matches `f` (and every link to them).
+    fn remove_where(&mut self, f: impl Fn(Vec3) -> bool) {
+        let keep: Vec<bool> = self.polys.iter().map(|p| !f(p.center)).collect();
+        let mut new_index = vec![usize::MAX; keep.len()];
+        let mut n = 0;
+        for (i, k) in keep.iter().enumerate() {
+            if *k {
+                new_index[i] = n;
+                n += 1;
+            }
+        }
+        let old = std::mem::take(&mut self.polys);
+        for (i, mut p) in old.into_iter().enumerate() {
+            if !keep[i] {
+                continue;
+            }
+            p.links.retain(|l| keep[l.to]);
+            for l in &mut p.links {
+                l.to = new_index[l.to];
+            }
+            self.polys.push(p);
+        }
     }
 
     /// Polygon under `p`: contains it when seen from above and is the closest in height.
