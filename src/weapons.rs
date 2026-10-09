@@ -1086,8 +1086,12 @@ fn zoom(
     mut zoomed: Local<bool>,
     time: Res<Time>,
     settings: Res<crate::settings::Settings>,
+    (stats, paused): (Option<Res<crate::bots::PlayerStats>>, Option<Res<crate::pause::Paused>>),
 ) {
     let Some(w) = loadout.current() else { return };
+    // the one place that shows or hides the gun in your hands: hidden while scoped, dead
+    // (the kill cam) or paused
+    let gone = stats.is_some_and(|s| s.health <= 0.0) || paused.is_some_and(|p| p.0);
     let want = w.def.isZooming != 0 && input.pressed(Action::Aim) && loadout.reloading <= 0.0;
     let target = if want { w.def.fieldOfViewZomm } else { settings.fov };
     if want != *zoomed {
@@ -1099,8 +1103,11 @@ fn zoom(
         let cur = p.fov.to_degrees();
         p.fov = (cur + (target - cur) * (time.delta_secs() * 15.0).min(1.0)).to_radians();
     }
+    let show = if want || gone { Visibility::Hidden } else { Visibility::Inherited };
     for mut v in &mut view_models {
-        *v = if want { Visibility::Hidden } else { Visibility::Inherited };
+        if *v != show {
+            *v = show;
+        }
     }
     // scoped shots are accurate: no spread while zoomed (sniper behaviour)
     let cur = loadout.current;
