@@ -44,9 +44,9 @@ impl crate::scene::ScenePlugin for TdmBotsPlugin {
         }
         app.init_resource::<TdmScores>()
             .add_systems(Startup, (spawn_bots.after(crate::player::spawn_player), spawn_respawn_screen))
-            .add_systems(FixedUpdate, (brain, movement).chain())
+            .add_systems(FixedUpdate, (brain, movement, corpses).chain())
             .add_systems(Update, (hook_up, animate_bodies, trace_visibility, take_damage, player_killed, respawn, name_tags, death_view))
-            .add_systems(PostUpdate, bot_view);
+            .add_systems(PostUpdate, (bot_view, kill_cam));
     }
 }
 
@@ -257,6 +257,9 @@ pub struct PlayerBot {
     weapon_name: &'static str,
     /// a knife and the like: only hits within MELEE_RANGE
     melee: bool,
+    /// where it died, and which way the body tips sideways (-0.5 .. 0.5)
+    fell_at: Vec3,
+    fall_side: f32,
 }
 
 impl PlayerBot {
@@ -422,6 +425,8 @@ fn spawn_bots(
                 weapon: None,
                 weapon_name: wname,
                 melee: ws.is_some_and(|w| w.isMelee != 0),
+                fell_at: Vec3::ZERO,
+                fall_side: 0.0,
             };
             bot.turn_speed = tc.rotation_speed_min + (tc.rotation_speed_max - tc.rotation_speed_min) * bot.rand();
             // GUESS (for fun): mixed skill, each bot with its own favourite range
@@ -961,13 +966,12 @@ fn brain(
     }
     let _ = damage_bots.len();
     for (victim, shooter, amount) in damage_bots {
-        apply_bot_damage(&mut commands, &mut bots, &mut scores, victim, Some(shooter), amount, &mut stats);
+        apply_bot_damage(&mut bots, &mut scores, victim, Some(shooter), amount, &mut stats);
     }
 }
 
 /// Damage to a bot; on death, the kill counts for the shooter's team.
 fn apply_bot_damage(
-    commands: &mut Commands,
     bots: &mut Query<(Entity, &Transform, &mut PlayerBot)>,
     scores: &mut TdmScores,
     victim: Entity,
@@ -993,8 +997,9 @@ fn apply_bot_damage(
     }
     b.respawn_in = RESPAWN;
     let (team, row, pos) = (b.team, b.row, t.translation);
-    commands.entity(victim).insert(Visibility::Hidden);
-    let _ = pos;
+    // the body stays and falls over (`corpses`), like the original's dead ragdoll
+    b.fell_at = pos;
+    b.fall_side = b.rand() - 0.5;
     if let Some(r) = scores.rows.get_mut(row) {
         r.deaths += 1;
     }
@@ -1020,7 +1025,6 @@ fn apply_bot_damage(
 
 /// Your bullets on red bots (BotDamage from weapons.rs).
 fn take_damage(
-    mut commands: Commands,
     mut hits: MessageReader<BotDamage>,
     mut bots: Query<(Entity, &Transform, &mut PlayerBot)>,
     mut scores: ResMut<TdmScores>,
@@ -1032,7 +1036,7 @@ fn take_damage(
         if !b.alive() {
             continue;
         }
-        apply_bot_damage(&mut commands, &mut bots, &mut scores, h.bot, None, h.amount, &mut stats);
+        apply_bot_damage(&mut bots, &mut scores, h.bot, None, h.amount, &mut stats);
         let killed = bots.get(h.bot).is_ok_and(|(_, _, b)| !b.alive());
         marks.write(if killed { crate::feel::HitMark::Kill } else { crate::feel::HitMark::Hit });
     }
@@ -1105,6 +1109,7 @@ fn respawn(
         b.target = None;
         b.path.clear();
         b.next_shot = SPAWN_PROTECTION;
+        t.rotation = Quat::from_rotation_y(b.yaw);
         commands.entity(e).insert(Visibility::Inherited);
     }
 }
@@ -1652,6 +1657,94 @@ fn death_view(
     if can && pressed && stats.respawn_in > 0.0 {
         stats.respawn_in = 0.0001;
     }
+}
+
+/// Dead bots: the original swaps in a ragdoll (Player_Dead_RagDall: DeadRagdollController,
+/// impulse x1.5, dissolve over DissolveTime 5.3 s). We have no ragdoll physics: the body
+/// keeps the pose it died in, tips over backwards (a little to one side) in 0.45 s, lies
+/// there, then sinks into the floor until it comes back (RESPAWN). Its hit colliders are off
+/// while dead so shots pass through.
+#[allow(clippy::type_complexity)]
+fn corpses(
+    mut commands: Commands,
+    mut bots: Query<(&mut Transform, &PlayerBot)>,
+    parts: Query<(Entity, &BotPart, Has<ColliderDisabled>)>,
+) {
+    for (e, part, off) in &parts {
+        let dead = bots.get(part.0).is_ok_and(|(_, b)| !b.alive());
+        if dead && !off {
+            commands.entity(e).insert(ColliderDisabled);
+        } else if !dead && off {
+            commands.entity(e).remove::<ColliderDisabled>();
+        }
+    }
+    for (mut t, b) in &mut bots {
+        if b.alive() {
+            continue;
+        }
+        let since = RESPAWN - b.respawn_in;
+        let x = (since / 0.45).clamp(0.0, 1.0);
+        let fall = x * x;
+        let tilt = fall * 86f32.to_radians();
+        t.rotation = Quat::from_rotation_y(b.yaw) * Quat::from_rotation_z(b.fall_side * 0.5 * fall) * Quat::from_rotation_x(-tilt);
+        let sink = ((since - 1.4) / (RESPAWN - 1.4)).clamp(0.0, 1.0) * 0.7;
+        t.translation = b.fell_at + Vec3::Y * (0.12 * fall - sink);
+    }
+}
+
+/// While you are dead: the original's kill cam (CameraSceneController.killCamController, an
+/// RPG_Camera on the killer): orbit distance clamped to distanceMin 1.5 .. distanceMax 5
+/// (starts at 8 -> 5), pitch 15 degrees (Start), yaw = the killer's + 150 (UpdateMouseX: in
+/// front of it, a little to the side), pulled in when a wall is between (Linecast on
+/// collisionLayer), LookAt the killer then 2 degrees up. Your gun and arms are not drawn.
+/// No killer (your own rocket): the same view around where you died.
+#[allow(clippy::type_complexity)]
+fn kill_cam(
+    time: Res<Time>,
+    stats: Res<PlayerStats>,
+    scores: Res<TdmScores>,
+    bots: Query<(&Transform, &PlayerBot)>,
+    player: Query<(&Transform, &Player), Without<PlayerBot>>,
+    mut cam: Query<(&mut Transform, &mut GlobalTransform), (With<crate::camera::PlayerCamera>, Without<PlayerBot>, Without<Player>)>,
+    mut gun_cam: Query<&mut Camera, With<crate::weapons::ViewModelCamera>>,
+    spatial: SpatialQuery,
+    mut state: Local<Option<(Vec3, f32, Vec3, f32)>>,
+) {
+    let dead = stats.health <= 0.0;
+    for mut c in &mut gun_cam {
+        if c.is_active == dead {
+            c.is_active = !dead;
+        }
+    }
+    if !dead {
+        *state = None;
+        return;
+    }
+    let Ok((mut c, mut g)) = cam.single_mut() else { return };
+    let you = player.single().ok().map(|(t, p)| (t.translation, p.yaw));
+    // where it all happened, fixed at the moment of death for the no-killer case
+    let st = state.get_or_insert_with(|| (c.translation, 0.0, you.map_or(c.translation, |y| y.0 + Vec3::Y * 0.5), you.map_or(0.0, |y| y.1)));
+    st.1 += time.delta_secs();
+    // follow the killer while it lives; once it dies (and comes back elsewhere) stay put
+    if let Some((t, b)) = scores.last_hit_player.and_then(|k| bots.get(k).ok()).filter(|(_, b)| b.alive()) {
+        (st.2, st.3) = (t.translation + Vec3::Y * 1.0, b.yaw);
+    }
+    let (pivot, yaw) = (st.2, st.3);
+    let pitch = 15f32.to_radians();
+    let dir = Quat::from_rotation_y(yaw + 150f32.to_radians()) * Vec3::new(0.0, pitch.sin(), -pitch.cos());
+    let d = Dir3::new(dir)
+        .ok()
+        .and_then(|d| spatial.cast_ray(pivot, d, 5.0, true, &SpatialQueryFilter::from_mask(Layer::World)))
+        .map_or(5.0, |h| (h.distance - 0.2).max(1.5));
+    let want = pivot + dir * d;
+    // fly there from where you died (camDistanceSpeed 0.7 s smoothing)
+    let k = (st.1 / 0.7).clamp(0.0, 1.0);
+    let k = k * k * (3.0 - 2.0 * k);
+    c.translation = st.0.lerp(want, k);
+    c.look_at(pivot, Vec3::Y);
+    c.rotate_local_x(2f32.to_radians());
+    *g = GlobalTransform::from(*c);
+    debug!("kill cam: t {:.2} pivot {:.1} cam {:.1} dist {:.1}", st.1, pivot, c.translation, d);
 }
 
 #[allow(clippy::type_complexity)]
