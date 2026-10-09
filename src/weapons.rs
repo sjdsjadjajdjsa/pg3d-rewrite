@@ -57,6 +57,8 @@ impl crate::scene::ScenePlugin for WeaponsPlugin {
                     fade_impacts,
                     zoom,
                     track_muzzle,
+                    refill_on_respawn,
+                    crosshair_spread,
                 ),
             );
     }
@@ -564,7 +566,7 @@ fn fire(
     mut hits: MessageWriter<BotDamage>,
     mut rockets: MessageWriter<SpawnProjectile>,
     mut flashes: MessageWriter<crate::particles::Burst>,
-    (alive, game_sounds): (Res<crate::bots::PlayerStats>, Option<Res<crate::sound::GameSounds>>),
+    (alive, game_sounds, part_globals): (Res<crate::bots::PlayerStats>, Option<Res<crate::sound::GameSounds>>, Query<(&GlobalTransform, &CollisionLayers, Has<ColliderDisabled>), With<crate::bots::BotPart>>),
     (mut beams, mut kicks, mut marks, mut impacts): (
         MessageWriter<crate::beams::SpawnBeam>,
         MessageWriter<crate::feel::ShotKick>,
@@ -618,7 +620,10 @@ fn fire(
     };
     // spread in degrees: base + accumulated recoil (GUESS: unit of tekKoof/upKoofFire)
     let spread_deg = w.def.tekKoof + w.spread + if pellets > 1 { 4.0 } else { 0.0 };
-    w.spread += w.def.upKoofFire;
+    // the scatter grows by upKoofFire a shot up to the weapon balance's _maxCoef (default 4,
+    // T_2003C6A .cctor); before, holding the trigger on an automatic grew it without end
+    // and long bursts sprayed far off the crosshair
+    w.spread = (w.spread + w.def.upKoofFire).min((MAX_SCATTER - w.def.tekKoof).max(0.0));
     let interval = w.fire_interval;
     loadout.cooldown = interval;
     loadout.kick = 1.0;
@@ -709,7 +714,18 @@ fn fire(
     }
     for i in 0..pellets {
         let dir = spread_dir(camera.rotation(), spread_deg, time.elapsed_secs(), i);
-        let Some(hit) = spatial.cast_ray(origin, dir, range, true, &filter) else { continue };
+        let hit = spatial.cast_ray(origin, dir, range, true, &filter);
+        if std::env::var("PG3D_TRACE_SHOTS").is_ok() {
+            // a miss that passed within 0.5 m of a bot part's centre before stopping
+            let reach = hit.map_or(range, |h| h.distance);
+            let near = part_globals.iter().filter(|(_, l, off)| !off && l.memberships.has_all(Layer::Enemy)).filter_map(|(g, _, _)| {
+                let c = g.translation() - origin;
+                let along = c.dot(*dir);
+                (along > 0.0 && along < reach).then(|| (c - *dir * along).length())
+            }).fold(f32::MAX, f32::min);
+            debug!("shot {}: {} near {:.2}", w.name, match hit { Some(h) if bot_parts.contains(h.entity) => "bot", Some(_) => "world", None => "nothing" }, near);
+        }
+        let Some(hit) = hit else { continue };
         if let Ok((part, head)) = bot_parts.get(hit.entity) {
             // random variation of +-damageRange percent, like the original
             let r = (time.elapsed_secs() * 91.7 + i as f32 * 3.3).sin() * 0.5 + 0.5;
@@ -733,6 +749,41 @@ fn fire(
 }
 
 /// Random direction inside a cone of `deg` degrees around the camera's forward.
+/// Coming back to life: every weapon full again (clip and reserve), no reload under way.
+fn refill_on_respawn(stats: Res<crate::bots::PlayerStats>, mut loadout: ResMut<Loadout>, mut was_dead: Local<bool>) {
+    let dead = stats.health <= 0.0;
+    if *was_dead && !dead {
+        for w in &mut loadout.weapons {
+            w.clip = if w.def.isMelee != 0 { 0 } else { w.def.ammoInClip };
+            w.reserve = (w.def.maxAmmo - w.clip).max(0);
+            w.spread = 0.0;
+        }
+        loadout.reloading = 0.0;
+        loadout.cooldown = 0.0;
+        info!("respawn: weapons refilled");
+    }
+    *was_dead = dead;
+}
+
+/// The "+" grows with the gun's current scatter (tekKoof + what firing has built up), so
+/// you can see when a burst has started to spray.
+fn crosshair_spread(loadout: Res<Loadout>, cross: Query<&Children, With<Crosshair>>, mut fonts: Query<&mut TextFont>) {
+    let s = loadout.current().map_or(1.0, |w| w.def.tekKoof + w.spread);
+    let px = 24.0 + s * 8.0;
+    for kids in &cross {
+        for k in kids.iter() {
+            if let Ok(mut f) = fonts.get_mut(k)
+                && !matches!(f.font_size, FontSize::Px(v) if (v - px).abs() < 0.5)
+            {
+                f.font_size = FontSize::Px(px);
+            }
+        }
+    }
+}
+
+/// Most scatter a weapon builds up (weapon balance _maxCoef default).
+const MAX_SCATTER: f32 = 4.0;
+
 fn spread_dir(rot: Quat, deg: f32, t: f32, i: u32) -> Dir3 {
     // cheap deterministic noise; good enough for spread
     let h = |x: f32| (x.sin() * 43758.547).fract();
