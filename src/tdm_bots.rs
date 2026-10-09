@@ -54,7 +54,6 @@ impl crate::scene::ScenePlugin for TdmBotsPlugin {
 const TEAM_SIZE: usize = 5;
 /// Seconds dead before respawning (as the player).
 const RESPAWN: f32 = 3.0;
-const GRAVITY: f32 = 9.81;
 /// Bots run at the player's speed.
 const RUN_SPEED: f32 = crate::player::WALK_SPEED;
 /// Turn rate while roaming, rad/s (aiming uses the bot's own rotationSpeed).
@@ -232,6 +231,9 @@ pub struct PlayerBot {
     detour: (Vec3, f32),
     /// seconds left to put it on the floor below once the colliders are there (spawning)
     settle: f32,
+    /// a push that moves it on top of walking (trampolines; like the player's ImpactReceiver)
+    impact: Vec3,
+    impact_fade: f32,
     // weapon
     damage: f32,
     interval: f32,
@@ -382,6 +384,8 @@ fn spawn_bots(
                 next_shot: 1.0,
                 respawn_in: 0.0,
                 settle: SETTLE,
+                impact: Vec3::ZERO,
+                impact_fade: crate::player::IMPACT_FADE,
                 air: 0.0,
                 hurt: 0.0,
                 strafe: 0.0,
@@ -1076,6 +1080,7 @@ fn movement(
     move_and_slide: MoveAndSlide,
     nav: Res<crate::navmesh::NavMesh>,
     collision: Res<crate::map::CollisionReady>,
+    surfaces: Query<&crate::map::Surface>,
 ) {
     let Some(setup) = setup else { return };
     let mv = &setup.tuning.movement;
@@ -1229,25 +1234,48 @@ fn movement(
         if b.grounded && b.velocity.y <= 0.0 {
             b.velocity.y = -2.0;
         } else {
-            b.velocity.y = (b.velocity.y - GRAVITY * dt).max(-17.0);
+            b.velocity.y = (b.velocity.y - crate::player::gravity() * dt).max(-17.0);
+        }
+        // the push (trampolines), as the player's (player.rs)
+        let mut push = Vec3::ZERO;
+        if b.impact.length() > crate::player::IMPACT_MIN {
+            let fade = (dt * b.impact_fade * crate::player::IMPACT_PER_FRAME).clamp(0.0, 1.0);
+            b.impact = b.impact.lerp(Vec3::ZERO, fade);
+            push = b.impact * crate::player::IMPACT_PER_FRAME;
+        } else {
+            b.impact = Vec3::ZERO;
         }
         let mut grounded = false;
+        let mut bounce = None;
         let rot = Quat::from_rotation_y(b.yaw);
         let out = move_and_slide.move_and_slide(
             col,
             t.translation + off,
             Quat::IDENTITY,
-            b.velocity,
+            b.velocity + push,
             time.delta(),
             &MoveAndSlideConfig::default(),
             &SpatialQueryFilter::from_mask(Layer::World).with_excluded_entities([e, ce]),
             |hit| {
                 if hit.normal.y > 0.5 {
                     grounded = true;
+                    if surfaces.get(hit.entity).is_ok_and(|s| *s == crate::map::Surface::Trampoline) {
+                        bounce = Some(**hit.normal);
+                    }
                 }
                 MoveAndSlideHitResponse::Accept
             },
         );
+        if let Some(n) = bounce
+            && b.impact.y < crate::player::TRAMPOLINE_FORCE * 0.5
+        {
+            b.impact = (b.impact + n * crate::player::TRAMPOLINE_FORCE).clamp_length_max(crate::player::MAX_IMPACT);
+            b.impact_fade = crate::player::TRAMPOLINE_FADE;
+            b.velocity.y = 0.0;
+        }
+        if push.y > 0.5 {
+            grounded = false;
+        }
         let before = t.translation;
         t.translation = out.position - off;
         // move-and-slide only reports the floor on frames it pushes into it: also count a

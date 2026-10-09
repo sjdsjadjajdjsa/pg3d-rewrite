@@ -112,6 +112,18 @@ struct ColliderDef {
     height: Option<f32>,
     /// 0 = X, 1 = Y, 2 = Z axis
     direction: Option<u32>,
+    /// the GameObject's Unity tag ("Trampoline", ...)
+    #[serde(default)]
+    tag: Option<String>,
+}
+
+/// What a solid collider does to whoever touches it (the player's / bots' movement checks).
+#[derive(Component, Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Surface {
+    /// tag "Trampoline": SkinName.OnControllerColliderHit throws you up along its normal
+    Trampoline,
+    /// a solid "DeadCollider" box (Matrix has them under the map): touching it kills
+    Dead,
 }
 
 /// Physics layers: triggers live on their own layer so movement ignores them.
@@ -149,6 +161,16 @@ pub fn map_dir(data: &DataDir, map: &CurrentMap) -> std::path::PathBuf {
 }
 
 fn load_markers(mut commands: Commands, data: Res<DataDir>, map: Res<CurrentMap>) {
+    // SceneInfo.gravity (export_scene_info.py -> maps/scenes.json)
+    let g = std::fs::read_to_string(data.0.join("maps/scenes.json"))
+        .ok()
+        .and_then(|t| serde_json::from_str::<serde_json::Value>(&t).ok())
+        .and_then(|v| v.get(map.0.to_lowercase())?.get("gravity")?.as_f64())
+        .map_or(crate::player::GRAVITY, |g| (-g as f32).abs().max(0.1));
+    crate::player::set_gravity(g);
+    if (g - crate::player::GRAVITY).abs() > 0.01 {
+        info!("map gravity {g:.2} m/s^2");
+    }
     let path = map_dir(&data, &map).join("info.json");
     match std::fs::read_to_string(&path).map(|s| serde_json::from_str::<MapInfo>(&s)) {
         Ok(Ok(info)) => {
@@ -279,6 +301,11 @@ fn spawn_shape(commands: &mut Commands, d: &ColliderDef, shape: Collider, rot: Q
     let mut e = commands.spawn((Name::new(d.name.clone()), world, RigidBody::Static));
     e.with_children(|c| {
         let mut child = c.spawn((shape, Transform::from_translation(d.center).with_rotation(rot)));
+        if d.tag.as_deref() == Some("Trampoline") {
+            child.insert(Surface::Trampoline);
+        } else if !d.trigger && d.name.to_lowercase().contains("deadcoll") {
+            child.insert(Surface::Dead);
+        }
         if d.trigger {
             child.insert((
                 Sensor,

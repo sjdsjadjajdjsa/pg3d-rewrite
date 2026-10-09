@@ -126,7 +126,7 @@ fn fly(
     for (e, mut t, mut p) in &mut q {
         p.age += dt;
         if p.spec.gravity {
-            p.velocity.y -= crate::player::GRAVITY * dt;
+            p.velocity.y -= crate::player::gravity() * dt;
         }
         let step = p.velocity * dt;
         let Ok(dir) = Dir3::new(step) else { continue };

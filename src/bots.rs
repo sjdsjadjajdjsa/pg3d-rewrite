@@ -21,7 +21,7 @@ use crate::{
     DataDir,
     projectiles::{Look, Owner, SpawnProjectile},
     map::{Layer, MapMarkers},
-    player::{GRAVITY, Player},
+    player::{Player, gravity},
 };
 
 /// Bot types we spawn are every exported bot folder in <data>/bots/ (picked at random).
@@ -593,7 +593,7 @@ fn bot_move(
         }
         b.velocity.x = dir.x * speed;
         b.velocity.z = dir.z * speed;
-        b.velocity.y = if b.grounded { -2.0 } else { (b.velocity.y - GRAVITY * dt).max(-17.0) };
+        b.velocity.y = if b.grounded { -2.0 } else { (b.velocity.y - gravity() * dt).max(-17.0) };
         let mut grounded = false;
         let out = move_and_slide.move_and_slide(
             col,

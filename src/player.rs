@@ -31,6 +31,19 @@ pub const STEP_OFFSET: f32 = 0.6;
 // --- RECOVERED: physics settings + FirstPersonControlSharp fields ----------------
 /// Physics.gravity (globalgamemanagers PhysicsManager).
 pub const GRAVITY: f32 = 9.81;
+
+/// This map's gravity (m/s^2, positive down): SceneInfo.gravity, which the game puts into
+/// Physics.gravity when the map loads (-9.81 on most maps; Matrix -4.905, the Space maps
+/// -6.54). Set by map.rs; players, bots and falling rockets use it.
+static MAP_GRAVITY: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0x411c_f5c3); // 9.81
+
+pub fn gravity() -> f32 {
+    f32::from_bits(MAP_GRAVITY.load(std::sync::atomic::Ordering::Relaxed))
+}
+
+pub fn set_gravity(g: f32) {
+    MAP_GRAVITY.store(g.to_bits(), std::sync::atomic::Ordering::Relaxed);
+}
 /// FirstPersonControlSharp.velocityDownFallMultiplier: gravity is stronger when falling.
 pub const FALL_MULTIPLIER: f32 = 1.2;
 /// FirstPersonControlSharp.maxNegativeVelocityYPerFrame: terminal fall speed.
@@ -72,7 +85,17 @@ pub struct Player {
     /// ImpactReceiver's impact: a push (rocket jumps) that moves the player on top of
     /// walking and falling and dies away (projectiles.rs adds it)
     pub impact: Vec3,
+    /// how fast the impact dies away (AddImpact's 5; trampolines 3)
+    pub impact_fade: f32,
+    /// touched a solid DeadCollider this frame (kill_zones)
+    pub hit_dead: bool,
 }
+
+/// SkinName.OnControllerColliderHit, tag "Trampoline": ImpactReceiver.AddImpact(up of the
+/// trampoline, 110 x dynamicSettings.m_600CC0E (1.15), fade 3) with the Player prefab's new
+/// impact scheme (45 and fade 1 in the old one).
+pub const TRAMPOLINE_FORCE: f32 = 110.0 * 1.15;
+pub const TRAMPOLINE_FADE: f32 = 3.0;
 
 /// PlayerCoreSettingsStorager.dynamicSettings +0x74 (constructor default 0.7): scales the
 /// self-push of your own blast.
@@ -81,11 +104,11 @@ pub const IMPULSE_SETTING: f32 = 0.7;
 pub const MAX_IMPACT: f32 = 100.0;
 /// ImpactReceiver.impulsePerFrameMultiplier on the Player prefab (the "new scheme" that
 /// prefab uses): the push moves you impact x 0.7 metres per second...
-const IMPACT_PER_FRAME: f32 = 0.7;
+pub const IMPACT_PER_FRAME: f32 = 0.7;
 /// ...and dies away by Lerp(impact, 0, dt x 5 x 0.7) a frame (AddImpact's default 5).
-const IMPACT_FADE: f32 = 5.0;
+pub const IMPACT_FADE: f32 = 5.0;
 /// Below this the push is over (AddImpact's default 0.2).
-const IMPACT_MIN: f32 = 0.2;
+pub const IMPACT_MIN: f32 = 0.2;
 
 /// Where the player starts: a player spawn marker (multiplayer "MultyPlayerCreateZone…"),
 /// else, on the Arena maps that have none (the original places you by code), the bonus
@@ -137,7 +160,7 @@ pub fn spawn_player(mut commands: Commands, markers: Res<MapMarkers>) {
     commands
         .spawn((
             Name::new("player"),
-            Player { velocity: Vec3::ZERO, grounded: false, spawn, yaw: 0.0, jump_requested: false, impact: Vec3::ZERO },
+            Player { velocity: Vec3::ZERO, grounded: false, spawn, yaw: 0.0, jump_requested: false, impact: Vec3::ZERO, impact_fade: IMPACT_FADE, hit_dead: false },
             Transform::from_translation(spawn),
             RigidBody::Kinematic,
             CustomPositionIntegration,
@@ -170,6 +193,7 @@ fn move_player(
     colliders: Query<&Collider>,
     move_and_slide: MoveAndSlide,
     spatial: SpatialQuery,
+    surfaces: Query<&crate::map::Surface>,
 ) {
     let (entity, mut transform, mut p, children) = player.into_inner();
     let Some((collider_entity, collider)) =
@@ -214,18 +238,19 @@ fn move_player(
         }
     } else {
         p.jump_requested = false;
-        let g = if p.velocity.y < 0.0 { GRAVITY * FALL_MULTIPLIER } else { GRAVITY };
+        let g = if p.velocity.y < 0.0 { gravity() * FALL_MULTIPLIER } else { gravity() };
         p.velocity.y = (p.velocity.y - g * dt).clamp(-MAX_FALL_SPEED, MAX_RISE_SPEED);
     }
 
     // ImpactReceiver (new scheme): the push fades, then moves the player this frame
     let mut push = Vec3::ZERO;
     if p.impact.length() > IMPACT_MIN {
-        let fade = (dt * IMPACT_FADE * IMPACT_PER_FRAME).clamp(0.0, 1.0);
+        let fade = (dt * p.impact_fade * IMPACT_PER_FRAME).clamp(0.0, 1.0);
         p.impact = p.impact.lerp(Vec3::ZERO, fade);
         push = p.impact * IMPACT_PER_FRAME;
     } else {
         p.impact = Vec3::ZERO;
+        p.impact_fade = IMPACT_FADE;
     }
     let pushing_up = push.y > 0.5;
     if pushing_up && p.grounded {
@@ -240,6 +265,7 @@ fn move_player(
     // while moving up (jumping) we can't be standing on anything
     let rising = p.velocity.y > 0.0 || pushing_up;
     let start = transform.translation + Vec3::Y * CENTER_Y;
+    let touched = std::cell::RefCell::new(Vec::<(Entity, Vec3)>::new());
     let slide = |from: Vec3, velocity: Vec3, grounded: &mut bool| {
         move_and_slide.move_and_slide(
             collider,
@@ -254,6 +280,7 @@ fn move_player(
                 if !rising && hit.normal.y >= min_ground_normal_y {
                     *grounded = true;
                 }
+                touched.borrow_mut().push((hit.entity, **hit.normal));
                 MoveAndSlideHitResponse::Accept
             },
         )
@@ -294,6 +321,19 @@ fn move_player(
     }
 
     transform.translation = end - Vec3::Y * CENTER_Y;
+    for (e, normal) in touched.borrow().iter() {
+        match surfaces.get(*e) {
+            Ok(crate::map::Surface::Trampoline) if normal.y > 0.5 && p.impact.y < TRAMPOLINE_FORCE * 0.5 => {
+                // thrown up along the trampoline's up (its surface normal)
+                p.impact = (p.impact + *normal * TRAMPOLINE_FORCE).clamp_length_max(MAX_IMPACT);
+                p.impact_fade = TRAMPOLINE_FADE;
+                p.velocity.y = 0.0;
+                grounded = false;
+            }
+            Ok(crate::map::Surface::Dead) => p.hit_dead = true,
+            _ => {}
+        }
+    }
     if !grounded || p.velocity.y > 0.0 {
         // keep vertical speed from the slide result (e.g. stop when hitting a ceiling); the
         // push is not part of the velocity
@@ -324,12 +364,20 @@ fn kill_zones(
     player: Single<(&mut Transform, &mut Player, &Children)>,
     colliding: Query<&CollidingEntities>,
     triggers: Query<&Trigger>,
+    mut stats: Option<ResMut<crate::bots::PlayerStats>>,
 ) {
     let (mut transform, mut p, children) = player.into_inner();
     let touching_dead = children.iter().filter_map(|c| colliding.get(c).ok()).flat_map(|c| c.iter()).any(
         |e| triggers.get(*e).is_ok_and(|t| t.name.to_lowercase().contains("dead")),
-    );
+    ) || std::mem::take(&mut p.hit_dead);
     if touching_dead || transform.translation.y < -200.0 {
+        // in a match you die (the respawn screen brings you back)
+        if let Some(stats) = stats.as_mut()
+            && stats.health > 0.0
+        {
+            stats.health = 0.0;
+            return;
+        }
         transform.translation = p.spawn;
         p.velocity = Vec3::ZERO;
     }
