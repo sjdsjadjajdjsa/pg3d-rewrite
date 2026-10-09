@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Export the game's SceneInfo assets (one per map: display names, description, size) as
-private/export/maps/scenes.json: {map (lower case): {"name", "short", "description"}} with
+private/export/maps/scenes.json: {map (lower case): {"name", "short", "description", "gravity"}} with
 the en-gb strings filled in. The mode picker shows "short" (keyTranslateShortName).
 
     tools/venv/bin/python scripts/export_scene_info.py
@@ -25,7 +25,11 @@ def main():
         subprocess.run([PY, ROOT / "scripts/dump_behaviour.py", idx, dump], capture_output=True)
         raw = json.loads(dump.read_text())
     out = {k.lower(): {"name": tr(v.get("keyTranslateName", "")), "short": tr(v.get("keyTranslateShortName", "")),
-                       "description": tr(v.get("keyTranslateDescription", ""))}
+                       "description": tr(v.get("keyTranslateDescription", "")),
+                       # Physics.gravity.y on this map (-9.81 normally; Matrix -4.9, Space -6.5)
+                       "gravity": float(v.get("gravity", -9.81) or -9.81),
+                       "slope_limit": float(v.get("playerSlopeLimit", 0) or 0),
+                       "sliding": bool(v.get("playerSurfacesSlidingEnabled", 0))}
            for k, v in raw.items() if isinstance(v, dict)}
     # The Arena-mode maps' SceneInfos carry copied placeholder keys ("Cupid" on the ice
     # rink, "Winter" on the mine): the game never shows their names (Arena picks the map

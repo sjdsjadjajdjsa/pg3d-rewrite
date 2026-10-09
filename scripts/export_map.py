@@ -704,7 +704,7 @@ class Exporter:
             self.vis.doc["nodes"][idx].setdefault("extras", {})["got_to_next_level"] = {
                 "next_scene": getattr(teleport, "nextSceneName", "") or ""}
         if not self.in_explosive:
-            self.collect_colliders(go.m_Name, comps, world)
+            self.collect_colliders(go.m_Name, comps, world, self.tag_name(getattr(go, "m_Tag", 0)))
         explosive = self.explosive_prefab(comps)
         if explosive is not None:
             # ExplosionObjectRespawnController: the game spawns an explosive barrel/TNT here
@@ -891,7 +891,27 @@ class Exporter:
             g["nodes"][node_idx]["skin"] = len(g["skins"]) - 1
 
     # ---- colliders / lights
-    def collect_colliders(self, name, comps, world):
+    def tag_name(self, tag):
+        """A GameObject's tag (m_Tag: built-in 0..7, custom 20000 + index into the
+        TagManager's list in globalgamemanagers), e.g. "Trampoline" (20069)."""
+        if not tag:
+            return None
+        if not hasattr(self, "_tags"):
+            builtin = ["Untagged", "Respawn", "Finish", "EditorOnly", None, "MainCamera", "Player", "GameController"]
+            custom = []
+            try:
+                for o in UnityPy.load(str(GAME_DATA / "globalgamemanagers")).objects:
+                    if o.type.name == "TagManager":
+                        custom = list(o.read_typetree()["tags"])
+            except Exception as e:
+                print(f"  tags: {e!r}"[:160], file=sys.stderr)
+            self._tags = (builtin, custom)
+        builtin, custom = self._tags
+        if tag >= 20000:
+            return custom[tag - 20000] if tag - 20000 < len(custom) else None
+        return builtin[tag] if tag < len(builtin) else None
+
+    def collect_colliders(self, name, comps, world, tag=None):
         W = world.T.flatten().tolist()  # column-major like glTF
         for kind in ("BoxCollider", "SphereCollider", "CapsuleCollider", "MeshCollider"):
             for ptr in comps.get(kind, []):
@@ -900,6 +920,8 @@ class Exporter:
                     continue
                 trig = bool(getattr(c, "m_IsTrigger", False))
                 rec = {"name": name, "kind": kind.replace("Collider", "").lower(), "trigger": trig, "world": W}
+                if tag:
+                    rec["tag"] = tag
                 if kind == "BoxCollider":
                     rec.update(center=v3(c.m_Center), size=[c.m_Size.x, c.m_Size.y, c.m_Size.z])
                 elif kind == "SphereCollider":
