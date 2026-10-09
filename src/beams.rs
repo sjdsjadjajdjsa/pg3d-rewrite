@@ -49,6 +49,10 @@ pub struct SpawnBeam {
     pub to: Vec3,
     /// seconds to show it (None: the ray's own life)
     pub life: Option<f32>,
+    /// your own continuous ray (freeze / laser rays): drawn from this point in the camera's
+    /// space, `.1` metres along where you aim, every frame, so it stays on the gun and on
+    /// the crosshair while you turn
+    pub follow: Option<(Vec3, f32)>,
 }
 
 #[derive(Component)]
@@ -57,6 +61,7 @@ struct Beam {
     life: f32,
     from: Vec3,
     to: Vec3,
+    follow: Option<(Vec3, f32)>,
     material: Handle<StandardMaterial>,
 }
 
@@ -130,6 +135,7 @@ fn spawn(
                 life: std::env::var("PG3D_BEAM_LIFE").ok().and_then(|v| v.parse().ok()).unwrap_or(m.life.unwrap_or(def.life)).max(0.05),
                 from: m.from,
                 to: m.to,
+                follow: m.follow,
                 material: material.clone(),
             },
             Mesh3d(mesh),
@@ -155,6 +161,10 @@ fn update(
             materials.remove(&b.material);
             commands.entity(e).despawn();
             continue;
+        }
+        if let Some((local, dist)) = b.follow {
+            b.from = cam.transform_point(local);
+            b.to = eye + *cam.forward() * dist;
         }
         let d = b.to - b.from;
         let len = d.length();

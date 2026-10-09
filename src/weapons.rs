@@ -56,6 +56,7 @@ impl crate::scene::ScenePlugin for WeaponsPlugin {
                     animate_view_model,
                     fade_impacts,
                     zoom,
+                    track_muzzle,
                 ),
             );
     }
@@ -205,6 +206,9 @@ pub struct Loadout {
     /// degrees the weapon is dipped below the view: a freshly drawn weapon comes up from
     /// 40 (Player_move_c's weapon change coroutine, field 0x62c)
     pub lower: f32,
+    /// where the gun's barrel (BulletSpawnPoint) shows on screen, as a point in the main
+    /// camera's space: rays start there (track_muzzle)
+    muzzle: Option<Vec3>,
 }
 
 impl Loadout {
@@ -644,11 +648,15 @@ fn fire(
         .clone();
     let origin = camera.translation();
     if let Some(r) = &w.rocket {
-        let dir = spread_dir(camera.rotation(), spread_deg * 0.3, time.elapsed_secs(), 0);
+        let aim = spread_dir(camera.rotation(), spread_deg * 0.3, time.elapsed_secs(), 0);
+        // out of the launcher's barrel, towards what the crosshair is on
+        let from = camera.transform_point(loadout.muzzle.unwrap_or(Vec3::new(0.0, -0.15, -0.8)));
+        let world = SpatialQueryFilter::from_mask([Layer::World, Layer::Enemy]);
+        let target = origin + *aim * spatial.cast_ray(origin, aim, 200.0, true, &world).map_or(200.0, |h| h.distance);
+        let dir = Dir3::new(target - from).unwrap_or(aim);
         rockets.write(SpawnProjectile {
             owner: Owner::Player,
-            // start a little in front and below the eye, like from the launcher
-            from: origin + *dir * 0.8 - camera.up() * 0.15,
+            from,
             dir,
             speed: r.speed(),
             life: if r.lifeTime > 0.0 { r.lifeTime } else { 5.0 },
@@ -662,7 +670,8 @@ fn fire(
         return;
     }
     // ray weapons draw their beam from the gun (a little right of and below the eye)
-    let muzzle = origin + *camera.forward() * 0.6 + *camera.right() * 0.14 - *camera.up() * 0.12;
+    let muzzle_local = loadout.muzzle.unwrap_or(Vec3::new(0.14, -0.12, -0.6));
+    let muzzle = camera.transform_point(muzzle_local);
     if w.def.railgun != 0 {
         // the railgun's shot goes through walls and hits every enemy on its line, once each
         let dir = spread_dir(camera.rotation(), spread_deg, time.elapsed_secs(), 0);
@@ -681,7 +690,7 @@ fn fire(
             let amount = base_damage * if head { w.head_coef } else { 1.0 };
             hits.write(BotDamage { bot, amount, slow: None });
         }
-        beams.write(crate::beams::SpawnBeam { weapon: w.name.clone(), from: muzzle, to: origin + *dir * 150.0, life: None });
+        beams.write(crate::beams::SpawnBeam { weapon: w.name.clone(), from: muzzle, to: origin + *dir * 150.0, life: None, follow: None });
         return;
     }
     let filter = SpatialQueryFilter::from_mask([Layer::World, Layer::Enemy]);
@@ -695,6 +704,7 @@ fn fire(
             from: muzzle,
             to: origin + *dir * end,
             life: Some(interval * 1.6),
+            follow: Some((muzzle_local, end)),
         });
     }
     for i in 0..pellets {
@@ -833,6 +843,38 @@ fn animate_view_model(
     }
     if waiting {
         loadout.play = request;
+    }
+}
+
+/// The barrel of the gun in your hands: its BulletSpawnPoint (or GunFlash). The gun is drawn
+/// by its own camera with a 60 degree view; the world camera's is wider, so the point is
+/// moved out to where it shows on screen at the same depth.
+fn track_muzzle(
+    mut loadout: ResMut<Loadout>,
+    main: Single<(&GlobalTransform, &Projection), With<PlayerCamera>>,
+    gun_cam: Query<&Projection, With<ViewModelCamera>>,
+    children: Query<&Children>,
+    names: Query<(&Name, &GlobalTransform)>,
+) {
+    let Some(vm) = loadout.view_model else { return };
+    let find = |want: &str| children.iter_descendants(vm).find_map(|d| names.get(d).ok().filter(|(n, _)| n.as_str() == want).map(|(_, g)| g.translation()));
+    let Some(p) = find("BulletSpawnPoint").or_else(|| find("GunFlash")) else {
+        loadout.muzzle = None;
+        return;
+    };
+    let (cam, proj) = *main;
+    let local = cam.affine().inverse().transform_point3(p);
+    let fov = |p: &Projection| match p {
+        Projection::Perspective(p) => Some(p.fov),
+        _ => None,
+    };
+    let k = match (fov(proj), gun_cam.single().ok().and_then(fov)) {
+        (Some(world), Some(gun)) => (world / 2.0).tan() / (gun / 2.0).tan(),
+        _ => 1.0,
+    };
+    loadout.muzzle = Some(Vec3::new(local.x * k, local.y * k, local.z));
+    if std::env::var("PG3D_TRACE_FX").is_ok() {
+        debug!("muzzle: local {local:.2}, k {k:.2}");
     }
 }
 
