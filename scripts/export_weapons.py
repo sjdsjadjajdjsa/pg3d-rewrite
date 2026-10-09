@@ -129,7 +129,22 @@ def export_model(row, idx):
     ex, assets, clips = export_prefab(row, idx, OUT / name, "weapon", None)
     ex.save({"weapon": name, "animations": animation_lengths(assets, ex.anim_holder), "clips": clips,
              "sounds": ex.sounds})
+    fill_lengths(OUT / name)
     print(f"model {name}: {json.dumps(dict(ex.stats))}")
+
+
+def fill_lengths(out):
+    """Clips missing from info.json's lengths (Weapon90: a second Animation on an object of
+    the same name hid the real one) get the length of their exported glTF animation."""
+    info_p, gltf_p = out / "info.json", out / "weapon.gltf"
+    info, g = json.loads(info_p.read_text()), json.loads(gltf_p.read_text())
+    lengths = info.setdefault("animations", {})
+    for a in g.get("animations", []):
+        if a["name"] not in lengths:
+            t = max((g["accessors"][a["samplers"][c["sampler"]]["input"]].get("max", 0) for c in a["channels"]), default=0)
+            t = t[0] if isinstance(t, list) else t
+            lengths[a["name"]] = round(float(t), 4)
+    info_p.write_text(json.dumps(info, indent=1))
 
 
 def export_sounds(assets, go, out):
