@@ -38,6 +38,12 @@ def clip_tracks(clip):
             q = ew.sample_curve(cv.curve.m_Curve, times, 4)
             q /= np.maximum(np.linalg.norm(q, axis=1, keepdims=True), 1e-9)
             t(cv.path)["rotation"] = np.round(q * np.array([1, -1, -1, 1]), 5).tolist()
+    for cv in getattr(clip, "m_CompressedRotationCurves", None) or []:
+        keys = ew.compressed_rotation_keys(cv)
+        if keys:
+            q = ew.sample_curve(keys, times, 4)
+            q /= np.maximum(np.linalg.norm(q, axis=1, keepdims=True), 1e-9)
+            t(cv.m_Path)["rotation"] = np.round(q * np.array([1, -1, -1, 1]), 5).tolist()
     for cv in getattr(clip, "m_EulerCurves", None) or []:
         if cv.curve.m_Curve:
             q = ew.euler_to_quat(ew.sample_curve(cv.curve.m_Curve, times, 3))

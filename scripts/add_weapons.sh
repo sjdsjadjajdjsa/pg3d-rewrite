@@ -23,4 +23,5 @@ $PY scripts/export_profiles.py "${ok[@]}" 2>/dev/null | grep -E '^profiles'
 python3 scripts/export_weapon_clips.py "${ok[@]}" | grep -E '^weapon clips'
 python3 scripts/export_weapon_skins.py >/dev/null 2>&1
 $PY scripts/export_rockets.py 2>/dev/null | grep -E '^model'
+$PY scripts/export_crosshairs.py 2>/dev/null | grep -E '^crosshairs'
 echo "added: ${ok[*]}"

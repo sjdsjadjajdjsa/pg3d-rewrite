@@ -144,6 +144,29 @@ def fill_lengths(out):
             t = max((g["accessors"][a["samplers"][c["sampler"]]["input"]].get("max", 0) for c in a["channels"]), default=0)
             t = t[0] if isinstance(t, list) else t
             lengths[a["name"]] = round(float(t), 4)
+    # two-gun weapons: which hand each of Shoot1 / Shoot2 fires (the side whose bones move
+    # most), so the flash goes off on that gun
+    sides = {}
+    buf = (out / "weapon.bin").read_bytes()
+    for a in g.get("animations", []):
+        if a["name"] not in ("Shoot1", "Shoot2"):
+            continue
+        move = {"left": 0.0, "right": 0.0}
+        for c in a["channels"]:
+            nm = g["nodes"][c["target"]["node"]].get("name", "")
+            side = "left" if ("Left" in nm or nm.endswith("_L") or "_L_" in nm) else "right" if ("Right" in nm or nm.endswith("_R") or "_R_" in nm) else None
+            if side is None:
+                continue
+            acc = g["accessors"][a["samplers"][c["sampler"]]["output"]]
+            view = g["bufferViews"][acc["bufferView"]]
+            n = {"SCALAR": 1, "VEC3": 3, "VEC4": 4}[acc["type"]]
+            v = np.frombuffer(buf, dtype="<f4", count=acc["count"] * n,
+                              offset=view.get("byteOffset", 0) + acc.get("byteOffset", 0)).reshape(-1, n)
+            move[side] += float(np.abs(v - v[0]).max())
+        if move["left"] != move["right"]:
+            sides[a["name"]] = max(move, key=move.get)
+    if sides:
+        info["shot_sides"] = sides
     info_p.write_text(json.dumps(info, indent=1))
 
 
@@ -247,6 +270,57 @@ def sample_curve(keys, times, n):
     return out
 
 
+def _bits(data, state, n):
+    """Read n bits, least significant first (Unity's PackedBitVector)."""
+    value, bits = 0, 0
+    while bits < n:
+        idx, pos = state
+        value |= (data[idx] >> pos) << bits
+        num = min(n - bits, 8 - pos)
+        pos += num
+        bits += num
+        if pos == 8:
+            idx, pos = idx + 1, 0
+        state[:] = [idx, pos]
+    return value & ((1 << n) - 1)
+
+
+def unpack_quats(packed):
+    """Unity PackedQuatVector: per quaternion 3 flag bits (which component is left out, and
+    its sign), the other three in 9 or 10 bits; the left-out one rebuilt from |q| = 1."""
+    data, state, out = bytes(packed.m_Data), [0, 0], []
+    for _ in range(packed.m_NumItems):
+        flags = _bits(data, state, 3)
+        q, total = [0.0] * 4, 0.0
+        for j in range(4):
+            if (flags & 3) != j:
+                size = 9 if ((flags & 3) + 1) % 4 == j else 10
+                q[j] = _bits(data, state, size) / (0.5 * ((1 << size) - 1)) - 1.0
+                total += q[j] * q[j]
+        last = flags & 3
+        q[last] = float(np.sqrt(max(0.0, 1.0 - total)))
+        if flags & 4:
+            q[last] = -q[last]
+        out.append(q)
+    return out
+
+
+def compressed_rotation_keys(cv):
+    """A legacy clip's m_CompressedRotationCurves entry as keys sample_curve() reads: times
+    in hundredths of a second, quaternions, and 8 slopes (in, out) per key."""
+    from types import SimpleNamespace as NS
+    from UnityPy.helpers.PackedBitVector import unpack_ints, unpack_floats
+    times = unpack_ints(cv.m_Times)
+    quats = unpack_quats(cv.m_Values)
+    slopes = unpack_floats(cv.m_Slopes) if cv.m_Slopes.m_NumItems else []
+    keys = []
+    for j, (t, q) in enumerate(zip(times, quats)):
+        s = slopes[j * 8:j * 8 + 8] if len(slopes) >= j * 8 + 8 else [0.0] * 8
+        keys.append(NS(time=t * 0.01, value=NS(x=q[0], y=q[1], z=q[2], w=q[3]),
+                       inSlope=NS(x=s[0], y=s[1], z=s[2], w=s[3]), outSlope=NS(x=s[4], y=s[5], z=s[6], w=s[7])))
+    return keys
+
+
 def euler_to_quat(deg):
     """Unity euler angles (degrees, applied Z then X then Y) -> quaternions (x, y, z, w)."""
     r = np.radians(deg) / 2
@@ -326,6 +400,14 @@ def _export_clips(ex, a, root):
                 q = sample_curve(cv.curve.m_Curve, times, 4)
                 q /= np.maximum(np.linalg.norm(q, axis=1, keepdims=True), 1e-9)
                 add(node, "rotation", q * np.array([1, -1, -1, 1]), "VEC4")
+        # clips saved with rotation compression keep their rotations packed (Weapon119's Shoot)
+        for cv in getattr(clip, "m_CompressedRotationCurves", None) or []:
+            node = resolve(cv.m_Path)
+            keys = compressed_rotation_keys(cv) if node is not None else []
+            if keys:
+                q = sample_curve(keys, times, 4)
+                q /= np.maximum(np.linalg.norm(q, axis=1, keepdims=True), 1e-9)
+                add(node, "rotation", q * np.array([1, -1, -1, 1]), "VEC4")
         for cv in getattr(clip, "m_EulerCurves", None) or []:
             node = resolve(cv.path)
             if node is not None and cv.curve.m_Curve:
@@ -353,6 +435,10 @@ def clip_length(clip):
             keys = cv.curve.m_Curve
             if keys:
                 length = max(length, keys[-1].time)
+    for cv in getattr(clip, "m_CompressedRotationCurves", None) or []:
+        if cv.m_Times.m_NumItems:
+            from UnityPy.helpers.PackedBitVector import unpack_ints
+            length = max(length, unpack_ints(cv.m_Times)[-1] * 0.01)
     return length
 
 

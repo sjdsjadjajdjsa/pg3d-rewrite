@@ -55,6 +55,7 @@ python3 scripts/export_effects.py | grep -E '^effects'
 $PY scripts/export_profiles.py 2>/dev/null | grep -E '^profiles'
 python3 scripts/export_weapon_clips.py | grep -E '^weapon clips'
 python3 scripts/export_weapon_skins.py
+$PY scripts/export_crosshairs.py 2>/dev/null | grep -E '^crosshairs'
 echo "== rockets"
 [ -f private/index/rockets.tsv ] || $PY scripts/find_behaviours.py RocketSettings > private/index/rockets.tsv
 $PY scripts/export_rockets.py 2>/dev/null | grep -E '^model'
