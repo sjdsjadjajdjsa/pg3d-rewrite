@@ -63,6 +63,19 @@ const ACCEL: f32 = 22.0;
 /// Strafing tops out at this share of running speed.
 const STRAFE_MAX: f32 = 0.65;
 /// Weapons bots carry (exported primaries).
+/// How far a melee weapon reaches: WeaponContainer.Range -> the weapon's balance "_range",
+/// default 3 m (T_2003C6A .cctor; no weapon overrides it in the shipped data).
+pub const MELEE_RANGE: f32 = 3.0;
+
+/// The Player prefab's hit colliders, from the feet (its origin is 1 m up: CharacterController
+/// centre -0.1, height 1.8): BodyCollider capsule r 0.45 h 1.54 at -0.28, HeadCollider box
+/// 0.52 at +0.75.
+pub const BODY_RADIUS: f32 = 0.45;
+pub const BODY_HEIGHT: f32 = 1.54;
+pub const BODY_Y: f32 = 0.72;
+pub const HEAD_SIZE: f32 = 0.52;
+pub const HEAD_Y: f32 = 1.75;
+
 const BOT_WEAPONS: [&str; 4] = ["Weapon3", "Weapon2", "Weapon9", "Weapon1"];
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -242,6 +255,8 @@ pub struct PlayerBot {
     shoot_sound: Option<Handle<AudioSource>>,
     weapon: Option<Entity>,
     weapon_name: &'static str,
+    /// a knife and the like: only hits within MELEE_RANGE
+    melee: bool,
 }
 
 impl PlayerBot {
@@ -280,6 +295,8 @@ struct WeaponStats {
     isShotGun: i32,
     #[serde(default)]
     countShots: i32,
+    #[serde(default)]
+    isMelee: i32,
 }
 
 /// Bot names (the game's own bots use player-like nicks; these are ours).
@@ -404,11 +421,12 @@ fn spawn_bots(
                 shoot_sound: info.sounds.get("shoot").map(|r| assets.load(format!("weapons/{wname}/{r}"))),
                 weapon: None,
                 weapon_name: wname,
+                melee: ws.is_some_and(|w| w.isMelee != 0),
             };
             bot.turn_speed = tc.rotation_speed_min + (tc.rotation_speed_max - tc.rotation_speed_min) * bot.rand();
             // GUESS (for fun): mixed skill, each bot with its own favourite range
             bot.skill = 0.6 + 0.4 * bot.rand();
-            bot.fight_dist = 7.0 + 9.0 * bot.rand();
+            bot.fight_dist = if bot.melee { 1.2 } else { 7.0 + 9.0 * bot.rand() };
             let layers = if team == Team::Red {
                 // enemies: hit by your bullets
                 CollisionLayers::new(Layer::Enemy, LayerMask::ALL)
@@ -429,8 +447,13 @@ fn spawn_bots(
                 ))
                 .id();
             commands.entity(root).with_children(|c| {
-                c.spawn((BotPart(root), Collider::capsule(0.4, 1.0), Transform::from_xyz(0.0, 0.9, 0.0), layers));
+                c.spawn((BotPart(root), Collider::capsule(BODY_RADIUS, BODY_HEIGHT - 2.0 * BODY_RADIUS), Transform::from_xyz(0.0, BODY_Y, 0.0), layers));
+                c.spawn((BotPart(root), crate::bots::BotHead, Collider::cuboid(HEAD_SIZE, HEAD_SIZE, HEAD_SIZE), Transform::from_xyz(0.0, HEAD_Y, 0.0), layers));
             });
+            if team == Team::Red {
+                // your rockets' and grenades' blasts reach enemies
+                commands.entity(root).insert(crate::bots::BotMarker);
+            }
             let w = commands
                 .spawn((
                     Name::new(format!("bot weapon {wname}")),
@@ -860,7 +883,8 @@ fn brain(
                 b.yaw += diff.clamp(-b.turn_speed * dt, b.turn_speed * dt);
                 b.next_shot -= dt;
                 b.react -= dt;
-                if diff.abs() < 0.15 && b.next_shot <= 0.0 && b.react <= 0.0 {
+                let in_reach = !b.melee || to.length() <= MELEE_RANGE;
+                if diff.abs() < 0.15 && b.next_shot <= 0.0 && b.react <= 0.0 && in_reach {
                     b.next_shot = b.interval;
                     if let Some(w) = b.weapon {
                         bursts.write(crate::particles::Burst(w));
@@ -870,8 +894,8 @@ fn brain(
                     // hit chance (GUESS, tuned for fun): falls off with distance, worse
                     // while strafing, scaled by the bot's skill; the player is a bit harder
                     // to hit than bots so fights against you last
-                    let mut chance = (0.75 - to.length() * 0.018).clamp(0.2, 0.75) * b.skill;
-                    if b.strafe > 0.0 {
+                    let mut chance = if b.melee { 0.9 * b.skill } else { (0.75 - to.length() * 0.018).clamp(0.2, 0.75) * b.skill };
+                    if b.strafe > 0.0 && !b.melee {
                         chance *= 0.75;
                     }
                     if b.target == Some(Target::Player) {
@@ -881,6 +905,7 @@ fn brain(
                         match b.target {
                             Some(Target::Player) => {
                                 if stats.protected <= 0.0 {
+                                    debug!("{} hits you from {:.1} m (melee {})", b.weapon_name, to.length(), b.melee);
                                     stats.health -= b.damage;
                                     scores.last_hit_player = Some(e);
                                     hit.write(PlayerHit { from: pos });
@@ -1168,7 +1193,16 @@ fn movement(
             let d = to.length();
             let face = to.normalize_or_zero();
             let side = Vec3::new(face.z, 0.0, -face.x) * b.dodge_dir;
-            let approach = if d > b.fight_dist + 3.0 { 1.0 } else if d < b.fight_dist - 4.0 { -0.6 } else { 0.0 };
+            let approach = if b.melee {
+                // knives run right up to you
+                if d > b.fight_dist { 1.0 } else { 0.0 }
+            } else if d > b.fight_dist + 3.0 {
+                1.0
+            } else if d < b.fight_dist - 4.0 {
+                -0.6
+            } else {
+                0.0
+            };
             let path_dir = dir;
             dir = if approach > 0.0 { path_dir } else { face * approach };
             speed = RUN_SPEED * 0.7;

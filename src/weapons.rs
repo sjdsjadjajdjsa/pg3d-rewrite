@@ -92,6 +92,8 @@ pub struct WeaponDef {
     pub upKoofFire: f32,
     pub downKoof: f32,
     pub radiusRoundMelee: f32,
+    #[serde(default)]
+    pub isRoundMelee: i32,
     pub shootDistanceIfZoom: f32,
     /// pellets per shot for shotguns
     pub countShots: i32,
@@ -562,7 +564,13 @@ fn fire(
     let pellets = if w.def.isShotGun != 0 { w.def.countShots.max(1) as u32 } else { 1 };
     let base_damage = w.def.damageByTier.first().copied().unwrap_or(1.0);
     let (dmin, dmax) = (w.def.damageRange.x, w.def.damageRange.y);
-    let range = if melee { w.def.radiusRoundMelee.max(2.5) } else { 300.0 };
+    // melee reach: WeaponContainer.Range (balance "_range", default 3 m); round melee
+    // (isRoundMelee) hits everyone within radiusRoundMelee instead
+    let range = if melee {
+        if w.def.isRoundMelee != 0 { w.def.radiusRoundMelee.max(crate::tdm_bots::MELEE_RANGE) } else { crate::tdm_bots::MELEE_RANGE }
+    } else {
+        300.0
+    };
     // spread in degrees: base + accumulated recoil (GUESS: unit of tekKoof/upKoofFire)
     let spread_deg = w.def.tekKoof + w.spread + if pellets > 1 { 4.0 } else { 0.0 };
     w.spread += w.def.upKoofFire;

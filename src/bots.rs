@@ -761,7 +761,7 @@ fn player_death(
 /// PG3D_AUTOAIM=1 (automated tests): turn the camera to the nearest living bot
 /// (PG3D_AUTOAIM=head: to its head collider).
 fn auto_aim(
-    bots: Query<(&GlobalTransform, &Bot, Option<&Children>)>,
+    bots: Query<(&GlobalTransform, Option<&Bot>, Option<&Children>), With<BotMarker>>,
     heads: Query<&GlobalTransform, With<BotHead>>,
     bodies: Query<&GlobalTransform, (With<BotPart>, Without<BotHead>)>,
     mut camera: Single<&mut Transform, With<crate::camera::PlayerCamera>>,
@@ -770,7 +770,7 @@ fn auto_aim(
     let eye = camera.translation;
     let target = bots
         .iter()
-        .filter(|(_, b, _)| b.state != BotState::Dead)
+        .filter(|(_, b, _)| b.is_none_or(|b| b.state != BotState::Dead))
         .map(|(t, _, kids)| {
             let head = kids.and_then(|k| k.iter().find_map(|c| heads.get(c).ok()));
             let body = kids.and_then(|k| k.iter().find_map(|c| bodies.get(c).ok()));
