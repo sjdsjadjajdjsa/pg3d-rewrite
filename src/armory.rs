@@ -56,6 +56,9 @@ pub struct SavedLoadout {
     pub equipped: HashMap<i32, String>,
     /// weapons bought in the Armory (the starter weapons are always owned)
     pub owned: Vec<String>,
+    /// testing: every weapon counts as owned (set "unlock_all": true in loadout.json)
+    #[serde(default)]
+    pub unlock_all: bool,
 }
 
 impl SavedLoadout {
@@ -695,7 +698,7 @@ fn refresh(
 impl SavedLoadout {
     /// Starter weapons (the default loadout) and bought ones.
     pub fn owns(&self, weapon: &str) -> bool {
-        crate::weapons::DEFAULT_LOADOUT.contains(&weapon) || self.owned.iter().any(|w| w == weapon)
+        self.unlock_all || crate::weapons::DEFAULT_LOADOUT.contains(&weapon) || self.owned.iter().any(|w| w == weapon)
     }
 }
 

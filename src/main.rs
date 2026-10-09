@@ -20,6 +20,7 @@ mod bots;
 mod camera;
 mod controls;
 mod cursor;
+mod death_fx;
 mod explosives;
 mod hud;
 mod ingame_ui;
@@ -143,6 +144,7 @@ fn main() {
         .add_message::<beams::SpawnBeam>()
         .add_message::<bots::BotDamage>()
         .add_message::<bots::PlayerHit>()
+        .add_message::<death_fx::SpawnAngel>()
         .add_message::<particles::Burst>()
         .add_message::<projectiles::SpawnProjectile>()
         .add_message::<feel::ShotKick>()
@@ -175,7 +177,7 @@ fn game_scene(app: &mut scene::SceneBuilder) {
     ))
     .add_plugins((camera::CameraPlugin, screenshot::ScreenshotPlugin, sound::SoundPlugin, weapons::WeaponsPlugin, bots::BotsPlugin))
     .add_plugins((projectiles::ProjectilesPlugin, pickups::PickupsPlugin, ngui::NguiPlugin, pause::PausePlugin, results::ResultsPlugin))
-    .add_plugins((team_match::TeamMatchPlugin, tdm_bots::TdmBotsPlugin, mirrored_skins::MirroredSkinsPlugin))
+    .add_plugins((team_match::TeamMatchPlugin, tdm_bots::TdmBotsPlugin, mirrored_skins::MirroredSkinsPlugin, death_fx::DeathFxPlugin))
     .add_plugins((hud::HudPlugin, ingame_ui::InGameUiPlugin, explosives::ExplosivesPlugin, cursor::CursorPlugin, beams::BeamsPlugin))
     .add_plugins(feel::FeelPlugin)
     .add_systems(scene::Update, (menu::back_to_menu, menu::test_click, hide_hud));

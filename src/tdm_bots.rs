@@ -76,7 +76,44 @@ pub const BODY_Y: f32 = 0.72;
 pub const HEAD_SIZE: f32 = 0.52;
 pub const HEAD_Y: f32 = 1.75;
 
-const BOT_WEAPONS: [&str; 4] = ["Weapon3", "Weapon2", "Weapon9", "Weapon1"];
+/// The weapons bots may carry: every exported weapon that shoots plain bullets (no rockets,
+/// beams, flames or harpoons: bots only have hitscan shots), by category with the share of
+/// bots that take one (GUESS, for a mix that plays like a lobby): primary, backup, melee,
+/// sniper, heavy.
+const BOT_CATEGORIES: [(i32, f32); 5] = [(1, 0.4), (2, 0.15), (3, 0.15), (5, 0.15), (6, 0.15)];
+
+fn bot_weapon_pool(data: &std::path::Path, stats: &std::collections::HashMap<String, WeaponStats>) -> Vec<(i32, Vec<String>)> {
+    let mut pool: Vec<(i32, Vec<String>)> = BOT_CATEGORIES.iter().map(|(c, _)| (*c, vec![])).collect();
+    let Ok(dir) = std::fs::read_dir(data.join("weapons")) else { return pool };
+    let mut names: Vec<String> = dir.filter_map(|e| e.ok()).filter(|e| e.path().join("weapon.gltf").exists()).map(|e| e.file_name().to_string_lossy().into_owned()).collect();
+    names.sort();
+    for n in names {
+        let Some(w) = stats.get(&n) else { continue };
+        if w.bazooka != 0 || w.railgun != 0 || w.flamethrower != 0 || w.freezer != 0 || w.harpoon != 0 || w.campaignOnly != 0 {
+            continue;
+        }
+        if let Some(p) = pool.iter_mut().find(|p| p.0 == w.categoryNabor) {
+            p.1.push(n);
+        }
+    }
+    pool
+}
+
+/// Bot k's weapon: a category by BOT_CATEGORIES' shares, then one of its weapons.
+fn pick_bot_weapon(pool: &[(i32, Vec<String>)], k: usize) -> String {
+    let h = |salt: u32| ((k as u32).wrapping_mul(2_654_435_761).wrapping_add(salt.wrapping_mul(40_503)) >> 8) as f32 / (1u32 << 24) as f32;
+    let mut x = h(17) * BOT_CATEGORIES.iter().map(|c| c.1).sum::<f32>();
+    let mut cat = BOT_CATEGORIES[0].0;
+    for (c, share) in BOT_CATEGORIES {
+        if x < share {
+            cat = c;
+            break;
+        }
+        x -= share;
+    }
+    let list = pool.iter().find(|p| p.0 == cat && !p.1.is_empty()).or_else(|| pool.iter().find(|p| !p.1.is_empty()));
+    list.map_or_else(|| "Weapon2".to_string(), |p| p.1[(h(91) * p.1.len() as f32) as usize % p.1.len()].clone())
+}
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Team {
@@ -254,12 +291,16 @@ pub struct PlayerBot {
     interval: f32,
     shoot_sound: Option<Handle<AudioSource>>,
     weapon: Option<Entity>,
-    weapon_name: &'static str,
+    weapon_name: String,
     /// a knife and the like: only hits within MELEE_RANGE
     melee: bool,
     /// where it died, and which way the body tips sideways (-0.5 .. 0.5)
     fell_at: Vec3,
     fall_side: f32,
+    /// shotgun pellets per shot (damage is for all of them)
+    pellets: u32,
+    /// shots left in the current burst (automatic weapons)
+    burst_left: u32,
 }
 
 impl PlayerBot {
@@ -300,6 +341,20 @@ struct WeaponStats {
     countShots: i32,
     #[serde(default)]
     isMelee: i32,
+    #[serde(default)]
+    categoryNabor: i32,
+    #[serde(default)]
+    bazooka: i32,
+    #[serde(default)]
+    railgun: i32,
+    #[serde(default)]
+    flamethrower: i32,
+    #[serde(default)]
+    freezer: i32,
+    #[serde(default)]
+    harpoon: i32,
+    #[serde(default)]
+    campaignOnly: i32,
 }
 
 /// Bot names (the game's own bots use player-like nicks; these are ours).
@@ -365,6 +420,7 @@ fn spawn_bots(
         .ok()
         .and_then(|t| serde_json::from_str(&t).ok())
         .unwrap_or_default();
+    let pool = bot_weapon_pool(&data.0, &stats);
     let mut k = 0usize;
     let mut taken: Vec<Vec3> = player.iter().map(|(t, _)| t.translation).collect();
     for (team, n) in [(Team::Blue, TEAM_SIZE - 1), (Team::Red, TEAM_SIZE)] {
@@ -372,7 +428,8 @@ fn spawn_bots(
             let row = scores.rows.len();
             let name = NAMES[k % NAMES.len()].to_string();
             scores.rows.push(ScoreRow { name: name.clone(), team, kills: 0, deaths: 0, you: false });
-            let wname = BOT_WEAPONS[k % BOT_WEAPONS.len()];
+            let wname = pick_bot_weapon(&pool, k);
+            let wname = wname.as_str();
             let info: WeaponInfo = std::fs::read_to_string(data.0.join(format!("weapons/{wname}/info.json")))
                 .ok()
                 .and_then(|t| serde_json::from_str(&t).ok())
@@ -423,10 +480,12 @@ fn spawn_bots(
                 interval,
                 shoot_sound: info.sounds.get("shoot").map(|r| assets.load(format!("weapons/{wname}/{r}"))),
                 weapon: None,
-                weapon_name: wname,
+                weapon_name: wname.to_string(),
                 melee: ws.is_some_and(|w| w.isMelee != 0),
                 fell_at: Vec3::ZERO,
                 fall_side: 0.0,
+                pellets: pellets as u32,
+                burst_left: 0,
             };
             bot.turn_speed = tc.rotation_speed_min + (tc.rotation_speed_max - tc.rotation_speed_min) * bot.rand();
             // GUESS (for fun): mixed skill, each bot with its own favourite range
@@ -469,6 +528,7 @@ fn spawn_bots(
                 ))
                 .id();
             bot.weapon = Some(w);
+            info!("bot {name} ({team:?}): {wname}, {damage:.2} per {interval:.2} s");
             commands.entity(root).insert(bot);
             commands.spawn((
                 NameTag(root),
@@ -809,7 +869,7 @@ fn brain(
     time: Res<Time>,
     setup: Option<Res<BotSetup>>,
     mut bots: Query<(Entity, &Transform, &mut PlayerBot)>,
-    player: Query<&Transform, (With<Player>, Without<PlayerBot>)>,
+    player: Query<(&Transform, &Player), Without<PlayerBot>>,
     mut stats: ResMut<PlayerStats>,
     mut scores: ResMut<TdmScores>,
     mut hit: MessageWriter<PlayerHit>,
@@ -820,7 +880,8 @@ fn brain(
     let Some(setup) = setup else { return };
     let dt = time.delta_secs();
     let tu = &setup.tuning;
-    let player_pos = player.single().ok().map(|t| t.translation);
+    let player_pos = player.single().ok().map(|(t, _)| t.translation);
+    let player_speed = player.single().map_or(0.0, |(_, p)| Vec2::new(p.velocity.x, p.velocity.z).length());
     let player_alive = stats.health > 0.0;
     // positions of everyone this frame
     let everyone: Vec<(Entity, Vec3, Team, bool)> = bots.iter().map(|(e, t, b)| (e, t.translation, b.team, b.alive())).collect();
@@ -891,6 +952,18 @@ fn brain(
                 let in_reach = !b.melee || to.length() <= MELEE_RANGE;
                 if diff.abs() < 0.15 && b.next_shot <= 0.0 && b.react <= 0.0 && in_reach {
                     b.next_shot = b.interval;
+                    // automatic weapons in bursts of 3-7 with a short pause, like players
+                    // holding the trigger (GUESS: AIBotController cycleTime 0.2 / shoot
+                    // cycle 0.05 drive the original's shooting state, not recovered)
+                    if b.interval < 0.25 && !b.melee {
+                        if b.burst_left == 0 {
+                            b.burst_left = 3 + (b.rand() * 5.0) as u32;
+                        }
+                        b.burst_left -= 1;
+                        if b.burst_left == 0 {
+                            b.next_shot += 0.35 + 0.5 * b.rand();
+                        }
+                    }
                     if let Some(w) = b.weapon {
                         bursts.write(crate::particles::Burst(w));
                     }
@@ -906,12 +979,42 @@ fn brain(
                     if b.target == Some(Target::Player) {
                         chance *= 0.7;
                     }
-                    if b.rand() < chance && line_clear(&spatial, eye(pos), eye(tp)) {
+                    // at you: an aimed shot that misses by up to `err` degrees (GUESS: the
+                    // original's aim spread, AIBotController Min/maxRandomValueForAim,
+                    // comes from server config); it hits when it lands on your silhouette
+                    // (body capsule 0.9 m wide, 1.8 m tall), so moving and strafing make
+                    // you harder to hit and far shots miss more
+                    // (each shotgun pellet on its own, 4 degrees wider; damage by pellets in)
+                    let landed = if b.target == Some(Target::Player) && !b.melee {
+                        let moving = (player_speed / RUN_SPEED).min(1.5);
+                        let mut err = (4.5 + 4.0 * (1.0 - b.skill)) * (1.0 + 0.8 * moving);
+                        if b.strafe > 0.0 {
+                            err += 1.5;
+                        }
+                        if b.pellets > 1 {
+                            err += 4.0;
+                        }
+                        let n = b.pellets.max(1);
+                        let mut inside = 0;
+                        for _ in 0..n {
+                            let r = err.to_radians().tan() * to.length() * b.rand().sqrt();
+                            let a = b.rand() * std::f32::consts::TAU;
+                            if (r * a.cos()).abs() < BODY_RADIUS && (r * a.sin()).abs() < 0.9 {
+                                inside += 1;
+                            }
+                        }
+                        inside as f32 / n as f32
+                    } else if b.rand() < chance {
+                        1.0
+                    } else {
+                        0.0
+                    };
+                    if landed > 0.0 && line_clear(&spatial, eye(pos), eye(tp)) {
                         match b.target {
                             Some(Target::Player) => {
                                 if stats.protected <= 0.0 {
                                     debug!("{} hits you from {:.1} m (melee {})", b.weapon_name, to.length(), b.melee);
-                                    stats.health -= b.damage;
+                                    stats.health -= b.damage * landed;
                                     scores.last_hit_player = Some(e);
                                     hit.write(PlayerHit { from: pos });
                                 }
@@ -1043,9 +1146,20 @@ fn take_damage(
 }
 
 /// Your death counts for the red team and the bot that hit you last.
-fn player_killed(stats: Res<PlayerStats>, mut scores: ResMut<TdmScores>, bots: Query<&PlayerBot>, mut was_dead: Local<bool>) {
+fn player_killed(
+    stats: Res<PlayerStats>,
+    mut scores: ResMut<TdmScores>,
+    bots: Query<&PlayerBot>,
+    player: Query<(&Transform, &Player), Without<PlayerBot>>,
+    mut angels: MessageWriter<crate::death_fx::SpawnAngel>,
+    mut was_dead: Local<bool>,
+) {
     let dead = stats.health <= 0.0;
     if dead && !*was_dead {
+        // your angel, from your feet (the player's origin is 1 m above them)
+        if let Ok((t, p)) = player.single() {
+            angels.write(crate::death_fx::SpawnAngel { at: t.translation - Vec3::Y, yaw: p.yaw });
+        }
         scores.red += 1;
         info!("tdm kill: you died, score {} : {}", scores.blue, scores.red);
         if let Some(r) = scores.rows.get_mut(0) {
@@ -1667,20 +1781,27 @@ fn death_view(
 #[allow(clippy::type_complexity)]
 fn corpses(
     mut commands: Commands,
-    mut bots: Query<(&mut Transform, &PlayerBot)>,
+    mut bots: Query<(Entity, &mut Transform, &PlayerBot)>,
     parts: Query<(Entity, &BotPart, Has<ColliderDisabled>)>,
+    mut angels: MessageWriter<crate::death_fx::SpawnAngel>,
+    mut gone: Local<std::collections::HashSet<Entity>>,
 ) {
     for (e, part, off) in &parts {
-        let dead = bots.get(part.0).is_ok_and(|(_, b)| !b.alive());
+        let dead = bots.get(part.0).is_ok_and(|(_, _, b)| !b.alive());
         if dead && !off {
             commands.entity(e).insert(ColliderDisabled);
         } else if !dead && off {
             commands.entity(e).remove::<ColliderDisabled>();
         }
     }
-    for (mut t, b) in &mut bots {
+    for (e, mut t, b) in &mut bots {
         if b.alive() {
+            gone.remove(&e);
             continue;
+        }
+        // its angel rises out of it
+        if gone.insert(e) {
+            angels.write(crate::death_fx::SpawnAngel { at: b.fell_at, yaw: b.yaw });
         }
         let since = RESPAWN - b.respawn_in;
         let x = (since / 0.45).clamp(0.0, 1.0);
