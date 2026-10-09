@@ -234,6 +234,8 @@ pub struct PlayerBot {
     /// a push that moves it on top of walking (trampolines; like the player's ImpactReceiver)
     impact: Vec3,
     impact_fade: f32,
+    /// touched a solid DeadCollider
+    on_dead: bool,
     // weapon
     damage: f32,
     interval: f32,
@@ -386,6 +388,7 @@ fn spawn_bots(
                 settle: SETTLE,
                 impact: Vec3::ZERO,
                 impact_fade: crate::player::IMPACT_FADE,
+                on_dead: false,
                 air: 0.0,
                 hurt: 0.0,
                 strafe: 0.0,
@@ -1033,8 +1036,11 @@ fn respawn(
     let Some(setup) = setup else { return };
     let mut taken: Vec<Vec3> = player.iter().map(|t| t.translation).chain(bots.iter().filter(|(_, _, b)| b.alive()).map(|(_, t, _)| t.translation)).collect();
     for (e, mut t, mut b) in &mut bots {
-        // hopelessly stuck (inside a block): start again from a spawn point
-        if b.alive() && b.stuck > 6.0 {
+        // hopelessly stuck (inside a block), or fallen out of the map (still falling after
+        // 4 s, or on a DeadCollider): start again from a spawn point
+        if b.alive() && (b.stuck > 6.0 || b.air > 4.0 * crate::player::GRAVITY / crate::player::gravity() || b.on_dead) {
+            b.on_dead = false;
+            b.air = 0.0;
             let spawns = if b.team == Team::Blue { &setup.blue_spawns } else { &setup.red_spawns };
             let (r, r2) = (b.rand(), b.rand());
             if let Some(at) = free_spawn(spawns, &taken, r, r2) {
@@ -1247,6 +1253,7 @@ fn movement(
         }
         let mut grounded = false;
         let mut bounce = None;
+        let mut dead = false;
         let rot = Quat::from_rotation_y(b.yaw);
         let out = move_and_slide.move_and_slide(
             col,
@@ -1263,6 +1270,9 @@ fn movement(
                         bounce = Some(**hit.normal);
                     }
                 }
+                if surfaces.get(hit.entity).is_ok_and(|s| *s == crate::map::Surface::Dead) {
+                    dead = true;
+                }
                 MoveAndSlideHitResponse::Accept
             },
         );
@@ -1276,6 +1286,7 @@ fn movement(
         if push.y > 0.5 {
             grounded = false;
         }
+        b.on_dead |= dead;
         let before = t.translation;
         t.translation = out.position - off;
         // move-and-slide only reports the floor on frames it pushes into it: also count a
