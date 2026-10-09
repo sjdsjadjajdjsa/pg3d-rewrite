@@ -50,6 +50,9 @@ impl crate::scene::ScenePlugin for TdmBotsPlugin {
     }
 }
 
+/// How much bots light themselves (emissive, x their texture): the least they ever show.
+const VISIBLE_FLOOR: f32 = 0.2;
+
 /// Bots per team (the original's Team Fight is 5 against 5).
 const TEAM_SIZE: usize = 5;
 /// Seconds dead before respawning (as the player).
@@ -588,12 +591,24 @@ fn hook_up(
         // with UNLIT); on a body seen from outside they are lit like the body
         // (Character/BRCharakter), or they glow next to it. A copy, since the material is
         // shared with your own view model.
-        for d in std::iter::once(arms).chain(children.iter_descendants(arms)) {
-            if let Ok(m) = mats.get(d)
-                && let Some(lit) = materials.get(&m.0).filter(|m| m.unlit).cloned()
-            {
-                commands.entity(d).insert(MeshMaterial3d(materials.add(StandardMaterial { unlit: false, ..lit })));
+        // and every part of the bot (body, arms, gun) glows a little with its own colours, so
+        // a player stays easy to spot even in the darkest corner of a map (OUR CHOICE, not
+        // the original's: its characters can go nearly black in dark spots)
+        let arm_meshes: std::collections::HashSet<Entity> = std::iter::once(arms).chain(children.iter_descendants(arms)).collect();
+        for d in all.iter().copied().chain(wall.iter().copied()) {
+            let Ok(m) = mats.get(d) else { continue };
+            let Some(mut mat) = materials.get(&m.0).cloned() else { continue };
+            if arm_meshes.contains(&d) {
+                mat.unlit = false;
             }
+            if mat.unlit {
+                continue;
+            }
+            // PG3D_BOT_GLOW=x (tests): another floor
+            let f = std::env::var("PG3D_BOT_GLOW").ok().and_then(|v| v.parse().ok()).unwrap_or(VISIBLE_FLOOR);
+            mat.emissive = LinearRgba::rgb(f, f, f);
+            mat.emissive_texture = mat.base_color_texture.clone();
+            commands.entity(d).insert(MeshMaterial3d(materials.add(mat)));
         }
         for d in &all {
             if names.get(*d).is_ok_and(|n| n.as_str() == "rp_arms_mesh") {
