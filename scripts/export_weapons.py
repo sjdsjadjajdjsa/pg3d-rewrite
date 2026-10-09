@@ -35,6 +35,11 @@ DEFAULT_MODELS = [
     "Weapon96", "Weapon4", "Weapon17", "Weapon25", "Weapon52", "Weapon95", "Weapon164", "Weapon6", "Weapon19",
     "Weapon20", "Weapon31", "Weapon43", "Weapon90", "Weapon105", "Weapon178", "Weapon123", "Weapon77", "Weapon65",
     "Weapon67", "Weapon129", "Weapon188", "Weapon79", "Weapon82", "Weapon94", "Weapon99", "Weapon162", "Weapon137",
+    # third batch (scripts/add_weapons.sh): rifles, shotguns, pistols, blades, snipers, heavies
+    "Weapon97", "Weapon98", "Weapon118", "Weapon127", "Weapon167", "Weapon206", "Weapon258", "Weapon259", "Weapon555",
+    "Weapon371", "Weapon115", "Weapon119", "Weapon160", "Weapon223", "Weapon308", "Weapon386", "Weapon45", "Weapon116",
+    "Weapon130", "Weapon224", "Weapon392", "Weapon46", "Weapon209", "Weapon446", "Weapon550", "Weapon44", "Weapon161",
+    "Weapon212", "Weapon198", "Weapon368", "Weapon552", "Weapon389", "Weapon165",
 ]
 KEEP_LISTS = ("damageByTier", "dpses", "InShopEffects")
 KEEP_DICTS = ("damageRange", "gunPosition", "positionShop", "rotationShop")

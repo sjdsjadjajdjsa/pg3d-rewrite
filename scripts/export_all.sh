@@ -27,6 +27,7 @@ $PY scripts/export_ngui.py level17 MainMenuNGUI lobby 2>/dev/null | grep -E '^(l
 $PY scripts/export_map.py level17 --out lobby --skip MainMenuNGUI FriendsWindowGUI \
   --prefab slo_seasonlobby_autumn_fairytale_season:SeasonLobbyRoot 2>/dev/null | grep -E '^\{' | cut -c1-120
 $PY scripts/export_character.py 2>/dev/null | grep '^character' | cut -c1-120
+$PY scripts/export_death.py 2>/dev/null | grep '^angel' | cut -c1-120
 $PY scripts/export_ngui.py resources.assets AllModesView modes --graft=ModeSelectorHolder=ModeSelector_default --graft=MapSelectorHolder=MapSelector_grid --graft=ModeInfoHolder=ModeInfo_default 2>/dev/null | grep -E '^modes'
 $PY scripts/export_mode_icons.py | grep -E '^mode icons'
 $PY scripts/export_scene_info.py | grep -E '^scenes'
