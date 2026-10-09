@@ -518,9 +518,9 @@ fn play_profile(
             let all: Vec<Entity> = children.iter_descendants(w).collect();
             let inner = all.iter().copied().find(|e| names.get(*e).is_ok_and(|n| n.as_str().to_lowercase().ends_with("_inner")));
             let Some(inner) = inner else { continue };
-            let resolve = |path: &str| {
-                let mut node = inner;
-                for part in path.split('/').filter(|x| !x.is_empty()) {
+            let walk_from = |start: Entity, parts: &[&str]| {
+                let mut node = start;
+                for part in parts {
                     node = children
                         .get(node)
                         .into_iter()
@@ -529,6 +529,17 @@ fn play_profile(
                         .find(|c| names.get(*c).is_ok_and(|n| n.as_str().eq_ignore_ascii_case(part)))?;
                 }
                 Some(node)
+            };
+            let walk = |parts: &[&str]| walk_from(inner, parts);
+            // some clips were made for a differently nested prefab (Weapon79's profile
+            // keys "m59_1/FPS_PLAYER_Arm_left" where the model has the arms right under
+            // its model root, "grenade_launcher"): then the first part is taken to be whatever
+            // model sits under _Inner, or leading parts are dropped until it fits
+            let resolve = |path: &str| {
+                let parts: Vec<&str> = path.split('/').filter(|x| !x.is_empty()).collect();
+                walk(&parts)
+                    .or_else(|| children.get(inner).into_iter().flatten().find_map(|&m| walk_from(m, parts.get(1..).unwrap_or(&[]))))
+                    .or_else(|| (1..parts.len()).find_map(|k| walk(&parts[k..])))
             };
             let bound: std::collections::HashMap<String, Vec<(Entity, usize)>> = h
                 .clips
