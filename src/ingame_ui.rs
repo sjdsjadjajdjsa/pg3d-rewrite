@@ -369,18 +369,22 @@ fn wave_messages(
 ) {
     let Some(e) = hud.0 else { return };
     let Ok((mut s, n)) = screens.get_mut(e) else { return };
-    let between = wave.number > 0 && wave.left == 0 && wave.break_left > 0.0 && stats.health > 0.0;
+    // waves only exist in Arena: Team Fight and Sandbox spawn none, so their wave number
+    // stayed 0 and "Wave 1" never went away
+    let arena = !crate::team_match::team_mode() && std::env::var("PG3D_NOBOTS").is_err();
+    let between = arena && wave.number > 0 && wave.left == 0 && wave.break_left > 0.0 && stats.health > 0.0;
     let elapsed = crate::bots::WAVE_BREAK - wave.break_left;
     let done = between && elapsed < 5.0;
     let count = if between && !done { wave.break_left.ceil().clamp(1.0, 5.0) as u32 } else { 0 };
-    let new = wave.number > 1 && wave.break_left <= 0.0 && wave.age < 1.25 && stats.health > 0.0;
+    let new = arena && wave.number > 1 && wave.break_left <= 0.0 && wave.age < 1.25 && stats.health > 0.0;
     // "Wave 1" in the middle at the start of the match (OBSERVED: gone ~2 s in)
-    let first = wave.number == 0 && stats.health > 0.0;
+    let first = arena && wave.number == 0 && stats.health > 0.0;
     let key = format!("{done} {count} {new} {first}");
     if *last == key {
         return;
     }
     *last = key;
+    debug!("wave messages: done {done} count {count} new {new} first {first}");
     if let Some(i) = n.wave_done {
         s.set_active(i, done);
     }
