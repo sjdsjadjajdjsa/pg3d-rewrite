@@ -63,8 +63,22 @@ def export(map_name):
     n = min(len(pos), len(sh))
     pos, sh = pos[:n], sh[:n]
 
-    # grid over the probes' bounding box (in Unity space; X is mirrored at the end)
+    # grid over the probes' bounding box (in Unity space; X is mirrored at the end),
+    # stretched over everywhere characters can walk (the navmesh, 2 m above it): outside
+    # the grid Bevy has no indirect light at all and characters turn near black, where
+    # Unity would still light them from the nearest probes (as the blend below does)
     lo, hi = pos.min(0) - 1.0, pos.max(0) + 1.0
+    nav = out / "navmesh.json"
+    if nav.exists():
+        nv = json.loads(nav.read_text())
+        v = np.array(nv.get("vertices") or nv.get("verts") or [], dtype=np.float64).reshape(-1, 3)
+        if len(v):
+            v[:, 0] *= -1  # back to Unity space
+            # (a few stray navmesh bits far off the map are left out)
+            lo = np.minimum(lo, np.percentile(v, 0.5, 0) - [2.0, 1.0, 2.0])
+            hi = np.maximum(hi, np.percentile(v, 99.5, 0) + [2.0, 3.0, 2.0])
+            plo, phi = pos.min(0) - 1.0, pos.max(0) + 1.0
+            lo, hi = np.maximum(lo, plo - 15.0), np.minimum(hi, phi + 15.0)
     res = np.clip(np.ceil((hi - lo) / SPACING).astype(int) + 1, 2, MAX_RES)
     axes = [np.linspace(lo[a], hi[a], res[a]) for a in range(3)]
     gx, gy, gz = np.meshgrid(*axes, indexing="ij")
