@@ -7,7 +7,8 @@ cd "$(dirname "$0")/.."
 PY=tools/venv/bin/python
 MAPS=("$@")
 if [ ${#MAPS[@]} -eq 0 ]; then
-  MAPS=(arena hill ice_palace matrix arena_mine duelarenaspace arena_swamp new_start_map3 castle_campaign5 arena_castle arena_hockey arena_space arena2 arena_underwater)
+  MAPS=(arena hill ice_palace matrix arena_mine duelarenaspace arena_swamp new_start_map3 castle_campaign5 arena_castle arena_hockey arena_space arena2 arena_underwater
+        ants area52labs dust heaven nuclearcity pool sky_islands space)
 fi
 
 [ -f private/index/bundles.json ] || $PY scripts/bundle_index.py
