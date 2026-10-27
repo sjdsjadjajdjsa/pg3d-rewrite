@@ -1,0 +1,11 @@
+# Downloaded third-party binaries
+/tools/
+# Everything extracted/derived from the game (never commit)
+/private/
+# Local agent/editor state
+/.empryo/
+*.gpr
+*.rep/
+__pycache__/
+.venv/
+/helpers/*/target/
