@@ -7,7 +7,7 @@
 //!   * baked lightmaps are converted by the exporter (value^2.2) and attached per mesh
 //!   * ambient light / fog / sun come from the scene's RenderSettings and Lights
 //!   * moving things (zombies, weapons, pickups) are lit by the map's baked light probes,
-//!     resampled by ../pixel-gun-3d-re/scripts/export_probes.py into a Bevy irradiance
+//!     resampled by ../exporter/scripts/export_probes.py into a Bevy irradiance
 //!     volume (probes.json + probes.bin). Like Unity, they then get no flat ambient light.
 
 #[allow(unused_imports)]

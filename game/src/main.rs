@@ -6,7 +6,7 @@
 //!                                    first start, when nothing is exported yet;
 //!                                    PG3D_SETUP_AUTO=1 imports and starts without clicks)
 //! Data: assets are NOT part of this repo. They are exported from your own copy of the
-//!       game by ../pixel-gun-3d-re/scripts/export_map.py. Override the location with
+//!       game by ../exporter/scripts/export_map.py. Override the location with
 //!       PG3D_DATA=/path/to/export.
 //!
 //! Controls: click = capture mouse, Esc = pause, WASD move, Space jump,
@@ -57,7 +57,7 @@ use avian3d::prelude::*;
 use bevy::prelude::*;
 
 /// Default location of the exported game data, relative to this project folder.
-const DEFAULT_DATA: &str = "../pixel-gun-3d-re/private/export";
+const DEFAULT_DATA: &str = "../exporter/private/export";
 
 /// Where the exported data lives on disk (for files we read directly, like JSON).
 #[derive(Resource)]

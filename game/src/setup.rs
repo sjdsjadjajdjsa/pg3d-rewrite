@@ -1,6 +1,6 @@
 //! First start: no exported game data yet. Finds the player's own Pixel Gun 3D install (or
 //! lets them pick / drop its folder) and runs the exporter next door
-//! (../pixel-gun-3d-re/scripts/setup.py), showing its progress. `cargo run -- --setup`
+//! (../exporter/scripts/setup.py), showing its progress. `cargo run -- --setup`
 //! opens this screen again, e.g. after a game update.
 
 #[allow(unused_imports)]
@@ -15,7 +15,7 @@ use std::{
 
 /// The exporter project (PG3D_RE overrides it).
 pub fn exporter_dir() -> PathBuf {
-    std::env::var_os("PG3D_RE").map_or_else(|| PathBuf::from("../pixel-gun-3d-re"), PathBuf::from)
+    std::env::var_os("PG3D_RE").map_or_else(|| PathBuf::from("../exporter"), PathBuf::from)
 }
 
 /// Whether there is anything to play: at least one exported map.

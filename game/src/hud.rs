@@ -1,5 +1,5 @@
 //! In-match HUD, laid out like the original (reference clips in
-//! ../pixel-gun-3d-re/private/reference/, Arena mini-game):
+//! ../exporter/private/reference/, Arena mini-game):
 //!   * (health bar and weapon bar: the original sprites, see ingame_ui.rs)
 //!   * (top centre box with score / wave / zombies left: ingame_ui.rs, original sprites)
 //!   * damage: red screen edges that get stronger as health drops and flash on every

@@ -1,6 +1,6 @@
 //! Pickups ("bonuses"): health and ammo boxes at the map's BonusCreationZone points.
 //!
-//! Model and sounds: <data>/pickups/ from ../pixel-gun-3d-re/scripts/export_pickups.py
+//! Model and sounds: <data>/pickups/ from ../exporter/scripts/export_pickups.py
 //! (the original BonusGeneric prefab, which holds one child model per bonus type).
 
 #[allow(unused_imports)]

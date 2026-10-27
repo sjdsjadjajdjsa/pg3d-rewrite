@@ -1,7 +1,7 @@
 //! Campaign-style enemies ("bots"): zombies that spawn at the map's EnemyCreationZone
 //! markers, chase the player, hit them, take damage and die.
 //!
-//! Data: <data>/bots/ from ../pixel-gun-3d-re/scripts/export_bots.py
+//! Data: <data>/bots/ from ../exporter/scripts/export_bots.py
 //!   bots.json          the original BaseBot settings (health, damagePerHit, ...)
 //!   <Bot>/bot.gltf     model, skeleton and animations (Zombie_Walk, Zombie_Attack, ...)
 //!

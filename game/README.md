@@ -5,7 +5,7 @@ and [avian3d](https://github.com/avianphysics/avian) physics.
 
 **No game files are in this repo.** Maps and other assets are exported from your own
 installed copy of the game ("Pixel Gun 3D: PC Edition", free on Steam) by the project next
-door (`../pixel-gun-3d-re`) into `../pixel-gun-3d-re/private/export/`. Set `PG3D_DATA` to use
+door (`../exporter`) into `../exporter/private/export/`. Set `PG3D_DATA` to use
 another location, `PG3D_RE` for another exporter folder.
 
 ## Run
@@ -19,7 +19,7 @@ cargo run -- arena   # straight into a map
 cargo run -- --setup # import again, e.g. after a game update
 ```
 
-The import screen runs `../pixel-gun-3d-re/scripts/setup.py`; you can also run that by hand.
+The import screen runs `../exporter/scripts/setup.py`; you can also run that by hand.
 
 Default controls (change them in Settings → keyboard tab, saved in
 ~/.config/pixel-gun-3d-rs/controls.json): click = capture mouse, Esc = pause (settings, resume),

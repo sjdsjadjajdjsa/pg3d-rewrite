@@ -1,5 +1,5 @@
 //! End of an Arena / Campaign match, as in the original (reference clips in
-//! ../pixel-gun-3d-re/private/reference/): at zero health the game cuts straight to a
+//! ../exporter/private/reference/): at zero health the game cuts straight to a
 //! "Loading" screen over the blurred coliseum (LOADING_TIME), then the Results table
 //! (waves survived, monsters killed, score, best score) with a green "Again" button and
 //! the yellow back arrow. No death camera, no "You are zombified!" banner.

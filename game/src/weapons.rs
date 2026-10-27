@@ -1,6 +1,6 @@
 //! Weapons: loadout, first-person view model, shooting, reloading, HUD.
 //!
-//! Data comes from <data>/weapons/ written by ../pixel-gun-3d-re/scripts/export_weapons.py:
+//! Data comes from <data>/weapons/ written by ../exporter/scripts/export_weapons.py:
 //!   weapons.json          settings of every WeaponSounds prefab in the game
 //!   <Weapon>/weapon.gltf  first-person model (arms + gun, static pose for now)
 //!   <Weapon>/info.json    animation clip lengths (Shoot = fire interval, Reload = reload time)

@@ -3,7 +3,7 @@
 Offline, static study of Pixel Gun 3D (PC edition, IL2CPP; Unity 2022.3.76f1 until
 October 2026, Unity 6 since) to recover its code structure (classes, functions, game
 systems), and the exporters that turn your own install into files the Rust/Bevy rewrite
-in `../pixel-gun-3d-rs` plays.
+in `../game` plays.
 
 ## Quick start (Linux and Windows)
 
@@ -48,7 +48,7 @@ Windows).
 
 5. `tools/venv/bin/python scripts/bundle_index.py` → `private/index/bundles.json` (which bundle holds which internal file).
 6. `tools/venv/bin/python scripts/export_map.py <map>` → `private/export/maps/<map>/` (glTF + colliders + spawn
-   markers) for the Rust/Bevy rewrite in `../pixel-gun-3d-rs`. `--list` shows the 626 map names.
+   markers) for the Rust/Bevy rewrite in `../game`. `--list` shows the 626 map names.
 
 7. `tools/venv/bin/python scripts/find_behaviours.py WeaponSounds > private/index/weaponsounds.tsv`, then
    `tools/venv/bin/python scripts/export_weapons.py [Weapon2 ...]` → `private/export/weapons/` (stats of all

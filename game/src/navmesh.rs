@@ -1,5 +1,5 @@
 //! Path finding on the map's original navigation mesh (exported by
-//! ../pixel-gun-3d-re/scripts/export_navmesh.py into maps/<map>/navmesh.json).
+//! ../exporter/scripts/export_navmesh.py into maps/<map>/navmesh.json).
 //!
 //! A navigation mesh is a set of convex polygons covering everywhere an enemy can stand.
 //! To get from A to B we (1) find the polygons A and B are on, (2) search the polygon

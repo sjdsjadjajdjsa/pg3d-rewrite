@@ -1,5 +1,5 @@
 //! A small re-implementation of NGUI, the Unity UI plugin the original game uses for its
-//! menus. It draws a screen exported by ../pixel-gun-3d-re/scripts/export_ngui.py
+//! menus. It draws a screen exported by ../exporter/scripts/export_ngui.py
 //! (<data>/ui/<screen>/ui.json + atlases + fonts) with Bevy UI nodes.
 //!
 //! How NGUI places things (and what we copy):
