@@ -5,8 +5,7 @@ The Armory character holds the weapon prefab at its gun point and plays the weap
 profile clip on the prefab's arms (FPS_PLAYER_Arm_Left/Right and the gun bones under
 them): WeaponSounds.profileAnimationPath ("WeaponProfiles/Weapon2_profileanim") names a
 WeaponProfileAnimationObject asset (assets/editor/resources/weaponprofiles/...asset, in
-the bundles listed in private/index/weapon_profiles.tsv, made by scanning the bundles'
-containers) whose WeaponProfileAnimation field is a legacy AnimationClip.
+the bundles listed in private/index/bundle_containers.tsv, made by bundle_index.py) whose WeaponProfileAnimation field is a legacy AnimationClip.
 
 profile.json: {"length": s, "fps": n, "tracks": [{"path": clip path, "rotation": [[x,y,z,w]..],
 "translation": [[x,y,z]..], "scale": [..]}]} in glTF axes (same conversion as the weapon
@@ -61,7 +60,7 @@ def main():
     weapons = json.load(open(OUT / "weapons.json"))
     idx = json.loads(em.INDEX.read_text())
     where = {}
-    for line in open(ROOT / "private/index/weapon_profiles.tsv"):
+    for line in open(ROOT / "private/index/bundle_containers.tsv", encoding="utf-8"):
         b, key = line.rstrip("\n").split("\t")
         where[key] = b
     names = sys.argv[1:] or sorted(n for n in os.listdir(OUT) if (OUT / n / "weapon.gltf").exists())

@@ -1,7 +1,28 @@
 # Pixel Gun 3D — static reverse engineering
 
-Offline, static study of Pixel Gun 3D (PC edition, Unity 2022.3.76f1, IL2CPP)
-to recover its code structure (classes, functions, game systems).
+Offline, static study of Pixel Gun 3D (PC edition, IL2CPP; Unity 2022.3.76f1 until
+October 2026, Unity 6 since) to recover its code structure (classes, functions, game
+systems), and the exporters that turn your own install into files the Rust/Bevy rewrite
+in `../pixel-gun-3d-rs` plays.
+
+## Quick start (Linux and Windows)
+
+Needs Python 3.9+ and an installed "Pixel Gun 3D: PC Edition" (free on Steam).
+
+    python scripts/setup.py                  # finds the game, installs packages, exports everything
+    python scripts/setup.py --game <folder>  # a copy outside Steam's libraries
+
+The rewrite runs this for you on its first start (an import screen). Exports land in
+`private/export/`; a failed step is listed and the rest carries on.
+
+Since the Unity 6 update the game encrypts `global-metadata.dat`, so Cpp2IL can no longer
+read the script layouts: maps, weapons, bots, characters, map pictures and strings still
+export (their bundles carry type trees), the NGUI screens (lobby, HUD, settings, pause,
+results, armory), game sounds, weapon effects and crosshairs do not, and the rewrite uses
+its own simpler versions of those. The October 2026 build from before the update (Steam
+console: `download_depot 2524890 2524891 8917309360682204919`, then
+`python scripts/setup.py --game <the downloaded folder>`) exports everything, including all
+maps (it ships every map instead of downloading them on demand).
 
 ## Layout
 
@@ -12,8 +33,9 @@ to recover its code structure (classes, functions, game systems).
 | `scripts/` | Our own helper scripts                                      | yes     |
 | `notes/`   | Our own notes / findings                                    | yes     |
 
-Game install (read-only, never modify, never copy into git):
-`~/.local/share/Steam/steamapps/common/Pixel Gun 3D PC Edition/`
+Game install (read-only, never modify, never copy into git): found by `scripts/gamepaths.py`
+(`PG3D_GAME`, the folder saved by `setup.py --game`, then every Steam library on Linux and
+Windows).
 
 ## Pipeline
 
@@ -76,7 +98,8 @@ exporters write glTF NEAREST samplers for them (bilinear made everything blurry)
 Reference material from the real game (screenshots, clips, settings tabs) is in
 `private/reference/` (not in git).
 
-**Shortcut:** `scripts/export_all.sh [maps...]` runs all of the above (indexes only if missing).
+**Shortcut:** `scripts/export_all.py [maps...]` runs all of the above (indexes only if missing;
+every map in the install by default). `scripts/setup.py` sets up `tools/` and then runs it.
 
 Other helpers: `scripts/dump_behaviour.py` (any MonoBehaviour's fields as JSON), `scripts/find_text.py`
 (find a string in the asset files), `scripts/probe_settings.py` (colour space, physics, time settings).

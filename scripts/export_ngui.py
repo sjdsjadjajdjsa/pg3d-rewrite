@@ -18,6 +18,7 @@ and edge anchors. We write:
 import json
 import os
 import pathlib
+import shutil
 import sys
 
 import UnityPy
@@ -484,6 +485,13 @@ def main():
             node, prefab = a[len("--graft="):].split("=")
             ng.grafts[node] = prefab
     nodes = ng.export(root, out)
+    export_strings()
+    if not any("kind" in n for n in nodes):
+        # no widget could be read (the game's NGUI scripts carry no type trees and there
+        # are no Cpp2IL dummy DLLs): a screen of bare transforms would hide the game's
+        # own fallback UI, so write nothing
+        shutil.rmtree(out)
+        sys.exit(f"{name}: no NGUI widgets readable in {level} (needs Cpp2IL output of this game build)")
     (out / "ui.json").write_text(json.dumps(nodes))
     (out / "atlases.json").write_text(json.dumps({k: v for k, v in ng.atlases.items() if v}))
     (out / "fonts.json").write_text(json.dumps({k: v for k, v in ng.fonts.items() if v}))
