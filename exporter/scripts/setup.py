@@ -58,8 +58,8 @@ def game_build(install):
 
 def cpp2il(install):
     """Field layouts of the game's scripts (Cpp2IL dummy DLLs) make the menus, HUD and some
-    sounds readable. Newer game builds encrypt the metadata Cpp2IL needs: then this is
-    skipped and the rewrite uses its own simpler menus."""
+    sounds readable. Newer game builds encrypt the metadata Cpp2IL needs: then the layouts
+    saved in layouts.json (recorded from the October 2026 build) are used instead."""
     marker = ROOT / "private/cpp2il/build.txt"
     build = game_build(install)
     if marker.exists() and marker.read_text().strip() == build:
@@ -88,9 +88,9 @@ def cpp2il(install):
     except (OSError, subprocess.TimeoutExpired):
         pass
     if any(DUMMYDLL.glob("*.dll")):
-        say("script layouts ok: the original menus and HUD can be exported")
+        say("script layouts read from this game build")
     else:
-        say("this game build encrypts its script layouts: the original menus and HUD are skipped")
+        say("this game build encrypts its script layouts: using the saved ones (layouts.json)")
     marker.write_text(build)
 
 

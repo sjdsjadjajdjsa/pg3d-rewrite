@@ -8,6 +8,7 @@ Every script reads the game through INSTALL (the folder with "Pixel Gun 3D.exe")
     python scripts/gamepaths.py              print the install folder (exit 1: not found)
     python scripts/gamepaths.py <folder>     check a folder (the install, its _Data folder or the .exe)
 """
+import json
 import os
 import pathlib
 import re
@@ -114,16 +115,71 @@ def unity_version(data):
     return m.group().decode() if m else "2022.3.76f1"
 
 
+LAYOUTS = ROOT / "layouts.json"
+
+
+class SavedLayouts:
+    """Field layouts of the game's scripts from layouts.json, for builds whose Cpp2IL output
+    can't be made (Unity 6 builds encrypt global-metadata.dat). The layouts were recorded
+    from the October 2026 build; scripts that changed since fail to read and are skipped."""
+
+    def __init__(self):
+        raw = json.loads(LAYOUTS.read_text(encoding="utf-8")) if LAYOUTS.exists() else {}
+        self.layouts = raw.get("classes", {})
+        self.cache = {}
+
+    def get_nodes_up(self, assembly, fullname):
+        from UnityPy.helpers.TypeTreeNode import TypeTreeNode
+
+        key = f"{assembly.removesuffix('.dll')}/{fullname}"
+        if key not in self.cache:
+            nodes = self.layouts.get(key)
+            self.cache[key] = nodes and TypeTreeNode.from_list(
+                [TypeTreeNode(level, type_, name, 0, 0, m_MetaFlag=flag) for level, type_, name, flag in nodes]
+            )
+        return self.cache[key]
+
+
+def _record(gen):
+    """PG3D_RECORD_LAYOUTS=1: add every layout this run reads to layouts.json."""
+    import atexit
+
+    seen = {}
+    real = gen.get_nodes_up
+
+    def get_nodes_up(assembly, fullname):
+        node = real(assembly, fullname)
+        if node is not None:
+            seen[f"{assembly.removesuffix('.dll')}/{fullname}"] = [
+                [n.m_Level, n.m_Type, n.m_Name, n.m_MetaFlag or 0] for n in node.traverse()
+            ]
+        return node
+
+    def save():
+        if not seen:
+            return
+        data = json.loads(LAYOUTS.read_text(encoding="utf-8")) if LAYOUTS.exists() else {"classes": {}}
+        data["source"] = "Pixel Gun 3D PC Edition, Steam manifest 8917309360682204919 (October 2026)"
+        data["classes"].update(seen)
+        data["classes"] = dict(sorted(data["classes"].items()))
+        LAYOUTS.write_text(json.dumps(data, separators=(",", ":")).replace('],["', '],\n["'), encoding="utf-8")
+
+    gen.get_nodes_up = get_nodes_up
+    atexit.register(save)
+    return gen
+
+
 def typetree_generator():
-    """Reads MonoBehaviours whose files carry no type trees, from Cpp2IL's dummy DLLs when
-    they exist (older game builds; newer ones encrypt the metadata Cpp2IL needs)."""
+    """Reads MonoBehaviours whose files carry no type trees: from Cpp2IL's dummy DLLs when
+    they exist (older game builds), else from the saved layouts (layouts.json)."""
+    dlls = ROOT / "private/cpp2il/dummydll"
+    if not any(dlls.glob("*.dll")):
+        return SavedLayouts()
     from UnityPy.helpers.TypeTreeGenerator import TypeTreeGenerator
 
     gen = TypeTreeGenerator(unity_version(_require()[1]))
-    dlls = ROOT / "private/cpp2il/dummydll"
-    if any(dlls.glob("*.dll")):
-        gen.load_local_dll_folder(str(dlls))
-    return gen
+    gen.load_local_dll_folder(str(dlls))
+    return _record(gen) if os.environ.get("PG3D_RECORD_LAYOUTS") else gen
 
 
 _found = None

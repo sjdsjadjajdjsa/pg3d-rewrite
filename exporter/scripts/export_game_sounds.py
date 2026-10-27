@@ -84,7 +84,11 @@ def main():
         for (f, want, go_name), (group, pid) in picked.items():
             if f != fname:
                 continue
-            tree = sf.objects[pid].read_typetree()
+            try:
+                tree = sf.objects[pid].read_typetree()
+            except Exception as e:  # a script changed since layouts.json was recorded
+                print(f"  {want} on {go_name}: unreadable in this game build ({e!r})", file=sys.stderr)
+                continue
             (OUT / group).mkdir(parents=True, exist_ok=True)
             for field, objs in clips(tree, sf, files).items():
                 names = []

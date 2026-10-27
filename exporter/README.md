@@ -16,13 +16,18 @@ The rewrite runs this for you on its first start (an import screen). Exports lan
 `private/export/`; a failed step is listed and the rest carries on.
 
 Since the Unity 6 update the game encrypts `global-metadata.dat`, so Cpp2IL can no longer
-read the script layouts: maps, weapons, bots, characters, map pictures and strings still
-export (their bundles carry type trees), the NGUI screens (lobby, HUD, settings, pause,
-results, armory), game sounds, weapon effects and crosshairs do not, and the rewrite uses
-its own simpler versions of those. The October 2026 build from before the update (Steam
-console: `download_depot 2524890 2524891 8917309360682204919`, then
-`python scripts/setup.py --game <the downloaded folder>`) exports everything, including all
-maps (it ships every map instead of downloading them on demand).
+read the script layouts. `layouts.json` holds them instead: the serialized field layout
+(names and types only, no game data) of every script the exporters read, recorded from the
+October 2026 build with `PG3D_RECORD_LAYOUTS=1` while Cpp2IL output was present
+(`gamepaths.typetree_generator()` uses Cpp2IL's DLLs when there are some, else this file).
+With it the current build exports the menus and HUD too. Scripts whose layout changed since
+fail to read and are skipped: the player's movement sounds (`Player_move_c`); weapon effects
+need the metadata itself.
+
+The current build downloads most maps only when you play them, so a fresh install has a
+handful. The October 2026 build ships all of them (Steam console:
+`download_depot 2524890 2524891 8917309360682204919`, then
+`python scripts/setup.py --game <the downloaded folder>`).
 
 ## Layout
 
