@@ -20,7 +20,7 @@ The whole game loop is rebuilt from scratch in [Bevy](https://bevyengine.org): m
 - **Arena:** the zombie survival mode. Waves of 45 zombies, up to 10 at once, tougher types as the waves go on, with health and ammo pickups and TNT boxes.
 - **Team Fight:** you and a team of bots against a red team, five minutes, most kills wins.
 - **Sandbox:** any map with no enemies, to walk around and try weapons.
-- **22 maps:** Arena, Heaven Garden, Ice Palace, Nuclear City, Classic Pool, Area 52 Labs, Sky Islands and more, each with its original lighting, colliders and navigation mesh.
+- **Up to 22 maps:** Arena, Heaven Garden, Ice Palace, Nuclear City, Classic Pool, Area 52 Labs, Sky Islands and more, each with its original lighting, colliders and navigation mesh.
 - **The original menus:** lobby, game mode picker, Armory, settings (with key rebinding), pause and results screens, redrawn from the game's own layouts.
 - **Weapons from the real game:** stats for every weapon, first-person models and animations, sounds, crosshairs and rockets. Pick your loadout in the Armory.
 - **Saved progress:** level, XP, coins, gems and your loadout stay between sessions.
@@ -61,9 +61,9 @@ The first start opens an import screen. It finds Pixel Gun 3D in your Steam libr
 
 ### Game versions
 
-The current Steam build encrypts the data the menus and HUD are read from, and downloads most maps only when you play them. It still gives you the maps it has, the weapons and the zombies, and the rewrite draws simpler menus in place of the originals.
+The import works with the current Steam version: menus, HUD, weapons, zombies and the maps your install has. Pixel Gun 3D downloads most maps only when you play them, so a fresh install has about six (play a few modes in the real game to get more).
 
-For everything, including all 22 maps and the original menus, download the October 2026 build alongside your normal install. Open Steam's console (`steam steam://nav/console` on Linux, or paste `steam://nav/console` into a browser) and enter:
+For all 22 maps at once, download the October 2026 build alongside your normal install. Open Steam's console (`steam steam://nav/console` on Linux, or paste `steam://nav/console` into a browser) and enter:
 
 ```
 download_depot 2524890 2524891 8917309360682204919

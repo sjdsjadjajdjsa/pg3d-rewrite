@@ -799,6 +799,7 @@ pub fn back_to_menu(keys: Res<ButtonInput<KeyCode>>) {
 fn lobby_wallet(
     wallet: Res<crate::wallet::Wallet>,
     assets: Res<AssetServer>,
+    data: Res<DataDir>,
     mut screens: Query<&mut crate::ngui::NguiScreen>,
     mut done: Local<Option<crate::wallet::Wallet>>,
 ) {
@@ -817,10 +818,10 @@ fn lobby_wallet(
         }
         let Some(panel) = s.find("CurrencyPanelLayout") else { continue };
         *done = Some(*wallet);
-        for (cell, v, icon) in [("Currency (1)", wallet.coins, "coins_118d"), ("Currency", wallet.gems, "gems_118a")] {
+        for (cell, v, icon) in [("Currency (1)", wallet.coins, "coins"), ("Currency", wallet.gems, "gems")] {
             let Some(c) = s.find_in(panel, cell).filter(|&c| s.nodes[c].parent == Some(panel)) else { continue };
             if let Some(t) = s.find_in(c, "Texture") {
-                s.set_texture(t, assets.load(format!("ui/lobby/textures/{icon}.png")));
+                s.set_texture(t, assets.load(crate::ngui::texture_path(&data, "lobby", icon)));
             }
             if let Some(l) = s.find_in(c, "Label") {
                 // no thousands spaces here, unlike the match HUD (OBSERVED: "4376" "4797")

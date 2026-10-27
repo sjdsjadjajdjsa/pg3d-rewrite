@@ -480,6 +480,19 @@ struct Hit {
 #[derive(Component)]
 struct Glyphs;
 
+/// "ui/<screen>/textures/<name>_<id>.png" for a texture the exporter wrote under its asset
+/// id, which changes between game builds (`name` is the game's texture name).
+pub fn texture_path(data: &DataDir, screen: &str, name: &str) -> String {
+    let dir = format!("ui/{screen}/textures");
+    let prefix = format!("{name}_");
+    std::fs::read_dir(data.0.join(&dir))
+        .into_iter()
+        .flatten()
+        .filter_map(|e| e.ok()?.file_name().into_string().ok())
+        .find(|f| f.strip_prefix(&prefix).and_then(|r| r.strip_suffix(".png")).is_some_and(|id| !id.is_empty() && id.chars().all(|c| c.is_ascii_hexdigit())))
+        .map_or_else(|| format!("{dir}/{name}.png"), |f| format!("{dir}/{f}"))
+}
+
 pub fn spawn_screen(commands: &mut Commands, assets: &AssetServer, data: &DataDir, name: &str) -> Option<Entity> {
     let dir = data.0.join("ui").join(name);
     let read = |f: &str| std::fs::read_to_string(dir.join(f)).ok();

@@ -27,8 +27,8 @@ const SIZE_720: f32 = 34.0 * 256.0 / 240.0;
 #[derive(Resource)]
 struct RingSource(Handle<Image>);
 
-fn load(mut commands: Commands, assets: Res<AssetServer>) {
-    commands.insert_resource(RingSource(assets.load("ui/cursor/textures/GamepadCursor_1a20.png")));
+fn load(mut commands: Commands, assets: Res<AssetServer>, data: Res<crate::DataDir>) {
+    commands.insert_resource(RingSource(assets.load(crate::ngui::texture_path(&data, "cursor", "GamepadCursor"))));
 }
 
 /// Box-filter `src` (RGBA8) down to `n` x `n`.

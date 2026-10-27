@@ -303,7 +303,7 @@ fn refresh(
     let failures = if failed.is_empty() {
         String::new()
     } else {
-        format!("Not readable in this game version (the rewrite uses its own simpler versions): {}", failed.join(", "))
+        format!("Not readable in this game version (skipped): {}", failed.join(", "))
     };
     for (mut t, is_status, is_detail) in &mut texts {
         let want = if is_status { &status } else if is_detail { &detail } else { &failures };

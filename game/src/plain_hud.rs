@@ -1,5 +1,5 @@
-//! In-match HUD for game builds whose NGUI screens can't be exported (Unity 6 builds
-//! encrypt the script layouts, see ../exporter/README.md): health, ammo, weapon
+//! In-match HUD for when the original one could not be exported (a game build whose HUD
+//! layout changed past what ../exporter/layouts.json describes): health, ammo, weapon
 //! slots and the Arena box (score, wave, zombies left) drawn with plain Bevy UI, placed like
 //! the original. Only spawned when <data>/ui/ingame is missing (ingame_ui.rs draws the
 //! original otherwise).

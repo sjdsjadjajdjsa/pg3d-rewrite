@@ -410,6 +410,7 @@ fn reload_ring(
     hud: Res<Hud>,
     mut screens: Query<(&mut NguiScreen, &HudNodes)>,
     assets: Res<AssetServer>,
+    data: Res<DataDir>,
     mut images: ResMut<Assets<Image>>,
     mut src: Local<Option<Handle<Image>>>,
     mut steps: Local<Vec<Handle<Image>>>,
@@ -418,7 +419,7 @@ fn reload_ring(
     let Some(e) = hud.0 else { return };
     let Ok((mut s, n)) = screens.get_mut(e) else { return };
     if steps.is_empty() {
-        let h = src.get_or_insert_with(|| assets.load("ui/ingame/textures/loading_kruzhok_11d9.png")).clone();
+        let h = src.get_or_insert_with(|| assets.load(crate::ngui::texture_path(&data, "ingame", "loading_kruzhok"))).clone();
         let Some(img) = images.get(&h) else { return };
         let (w, ht) = (img.width() as usize, img.height() as usize);
         let Some(data) = img.data.clone() else { return };
