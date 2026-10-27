@@ -4,9 +4,10 @@ A method that uses a literal loads it from a .data slot holding the metadata-usa
 0xA0000000 | index << 1 | 1 until the runtime resolves it. `slots()` maps those slot
 addresses to their strings, `refs_in(rva, length)` lists, in code order, the literals a
 method loads and the small `mov r32, imm32` constants between them."""
-import glob, os, struct
+import glob, struct
+import gamepaths
 
-G = os.path.expanduser('~/.local/share/Steam/steamapps/common/Pixel Gun 3D PC Edition')
+G = str(gamepaths.INSTALL)
 _dll = open(f'{G}/GameAssembly.dll', 'rb').read()
 _meta = open(glob.glob(f'{G}/*_Data/il2cpp_data/Metadata/global-metadata.dat')[0], 'rb').read()
 

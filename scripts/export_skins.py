@@ -12,15 +12,15 @@ tools/venv/bin/python scripts/export_skins.py
 """
 import glob
 import json
-import os
 import pathlib
 import re
 
 import numpy as np
 import UnityPy
+import gamepaths
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
-GAME = os.path.expanduser("~/.local/share/Steam/steamapps/common/Pixel Gun 3D PC Edition/Pixel Gun 3D_Data")
+GAME = str(gamepaths.DATA)
 OUT = ROOT / "private/export/characters/skins"
 NAMES = re.compile(r"^(shablon_\d+|newskin_\d+|\w+Sett|\w+_skin|league_skin_\w+|multi_skin_\d+|skin810_\d+|easter_skin\d)$")
 

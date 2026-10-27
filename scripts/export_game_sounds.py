@@ -13,7 +13,6 @@ Writes private/export/sounds/... and sounds/index.json ({group: {field: [files]}
     tools/venv/bin/python scripts/export_game_sounds.py
 """
 import json
-import os
 import pathlib
 import sys
 
@@ -21,9 +20,10 @@ import UnityPy
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 import export_weapons as ew  # noqa: E402
+import gamepaths  # noqa: E402
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
-GAME = os.path.expanduser("~/.local/share/Steam/steamapps/common/Pixel Gun 3D PC Edition/Pixel Gun 3D_Data")
+GAME = str(gamepaths.DATA)
 OUT = ROOT / "private/export/sounds"
 
 # (group, asset file, script class, GameObject name)
@@ -65,10 +65,8 @@ def clips(tree, sf, files):
 
 def main():
     import subprocess
-    from UnityPy.helpers.TypeTreeGenerator import TypeTreeGenerator
     index = {}
-    gen = TypeTreeGenerator("2022.3.76f1")
-    gen.load_local_dll_folder(str(ROOT / "private/cpp2il/dummydll"))
+    gen = gamepaths.typetree_generator()
     classes = sorted({t[2] for t in TARGETS})
     rows = [l.split("\t") for l in subprocess.run([sys.executable, str(ROOT / "scripts/find_behaviours.py"), *classes],
                                                     capture_output=True, text=True).stdout.splitlines()]

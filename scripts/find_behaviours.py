@@ -11,8 +11,9 @@ import sys
 from concurrent.futures import ProcessPoolExecutor
 
 import UnityPy
+import gamepaths
 
-GAME = os.path.expanduser("~/.local/share/Steam/steamapps/common/Pixel Gun 3D PC Edition/Pixel Gun 3D_Data")
+GAME = str(gamepaths.DATA)
 TARGET = set(sys.argv[1:])
 
 

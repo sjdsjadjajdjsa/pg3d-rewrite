@@ -8,8 +8,9 @@ import os
 import sys
 
 import UnityPy
+import gamepaths
 
-GAME = os.path.expanduser("~/.local/share/Steam/steamapps/common/Pixel Gun 3D PC Edition/Pixel Gun 3D_Data")
+GAME = str(gamepaths.DATA)
 needle = sys.argv[1].encode()
 
 files = [f"{GAME}/resources.assets", f"{GAME}/globalgamemanagers.assets"] + sorted(glob.glob(f"{GAME}/sharedassets*.assets")) + sorted(glob.glob(f"{GAME}/level[0-9]*"))

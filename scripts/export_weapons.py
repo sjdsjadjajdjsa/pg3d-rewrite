@@ -19,10 +19,10 @@ import sys
 
 import numpy as np
 import UnityPy
-from UnityPy.helpers.TypeTreeGenerator import TypeTreeGenerator
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 import export_map as em  # noqa: E402
+import gamepaths  # noqa: E402
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 GAME = em.GAME_DATA
@@ -46,8 +46,7 @@ KEEP_DICTS = ("damageRange", "gunPosition", "positionShop", "rotationShop")
 
 
 def typetree_generator():
-    gen = TypeTreeGenerator("2022.3.76f1")
-    gen.load_local_dll_folder(str(ROOT / "private/cpp2il/dummydll"))
+    gen = gamepaths.typetree_generator()
     return gen
 
 

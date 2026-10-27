@@ -4,14 +4,13 @@ to private/export/ui/keys/<name>.png, e.g. kb_R.png, kb_MouseLeft.png, kb_LeftCo
 
     tools/venv/bin/python scripts/export_keys.py
 """
-import os
 import pathlib
 
 import UnityPy
+import gamepaths
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
-GAME = pathlib.Path(os.path.expanduser(
-    "~/.local/share/Steam/steamapps/common/Pixel Gun 3D PC Edition/Pixel Gun 3D_Data"))
+GAME = gamepaths.DATA
 OUT = ROOT / "private/export/ui/keys"
 
 

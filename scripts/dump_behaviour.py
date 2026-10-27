@@ -13,10 +13,10 @@ import pathlib
 import sys
 
 import UnityPy
-from UnityPy.helpers.TypeTreeGenerator import TypeTreeGenerator
+import gamepaths
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
-GAME = os.path.expanduser("~/.local/share/Steam/steamapps/common/Pixel Gun 3D PC Edition/Pixel Gun 3D_Data")
+GAME = str(gamepaths.DATA)
 
 
 def main():
@@ -27,8 +27,7 @@ def main():
     by_file = collections.defaultdict(list)
     for path, cls, go, pid in rows:
         by_file[path].append((go, int(pid)))
-    gen = TypeTreeGenerator("2022.3.76f1")
-    gen.load_local_dll_folder(str(ROOT / "private/cpp2il/dummydll"))
+    gen = gamepaths.typetree_generator()
     result = {}
     for path, items in by_file.items():
         assets = UnityPy.load(os.path.join(GAME, path))

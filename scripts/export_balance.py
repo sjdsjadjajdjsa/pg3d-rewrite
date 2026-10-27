@@ -13,9 +13,10 @@ with grades 0 and 1 using the "R" (rare) row. Writes private/export/weapons/bala
 import json
 import pathlib
 import re
+import gamepaths
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
-GAME = pathlib.Path.home() / ".local/share/Steam/steamapps/common/Pixel Gun 3D PC Edition/Pixel Gun 3D_Data"
+GAME = gamepaths.DATA
 OUT = ROOT / "private/export/weapons/balance.json"
 
 

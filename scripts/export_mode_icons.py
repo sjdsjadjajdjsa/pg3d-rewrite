@@ -6,13 +6,13 @@
 Writes private/export/ui/modes/modeart/<name>.png (z_mode_teamf = Team Fight,
 z_mode_wws, z_mode_frp, z_mode_random = the Random Map die, ...).
 """
-import os
 import pathlib
 
 import UnityPy
+import gamepaths
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
-GAME = os.path.expanduser("~/.local/share/Steam/steamapps/common/Pixel Gun 3D PC Edition/Pixel Gun 3D_Data")
+GAME = str(gamepaths.DATA)
 OUT = ROOT / "private/export/ui/modes/modeart"
 
 

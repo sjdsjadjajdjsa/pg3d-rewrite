@@ -12,9 +12,10 @@ import UnityPy
 
 sys.path.insert(0, os.path.dirname(__file__))
 import export_weapons as ew  # noqa: E402
+import gamepaths  # noqa: E402
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-G = os.path.expanduser("~/.local/share/Steam/steamapps/common/Pixel Gun 3D PC Edition/Pixel Gun 3D_Data")
+G = str(gamepaths.DATA)
 env = UnityPy.load(G + "/resources.assets")
 env.typetree_generator = ew.typetree_generator()
 S = json.load(open(f"{ROOT}/private/export/ui/strings_en-gb.json"))

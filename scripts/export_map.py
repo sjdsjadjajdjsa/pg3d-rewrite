@@ -26,10 +26,10 @@ import sys
 
 import numpy as np
 import UnityPy
+import gamepaths
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
-GAME_DATA = pathlib.Path(os.path.expanduser(
-    "~/.local/share/Steam/steamapps/common/Pixel Gun 3D PC Edition/Pixel Gun 3D_Data"))
+GAME_DATA = gamepaths.DATA
 INDEX = ROOT / "private/index/bundles.json"
 OUT_ROOT = ROOT / "private/export/maps"
 
@@ -986,7 +986,7 @@ class Exporter:
 
 # ---------------------------------------------------------------- small helpers
 
-BC6H_DECODER = ROOT / "helpers/bc6h-decode/target/release/bc6h-decode"
+BC6H_DECODER = ROOT / "helpers/bc6h-decode/target/release" / ("bc6h-decode.exe" if sys.platform == "win32" else "bc6h-decode")
 
 
 def decode_bc6h(raw, w, h):

@@ -1,11 +1,10 @@
 #!/usr/bin/env python3
 """Print project-wide Unity settings that matter for the rewrite (colour space, physics, time)."""
-import os
-
 import UnityPy
 
-GGM = os.path.expanduser(
-    "~/.local/share/Steam/steamapps/common/Pixel Gun 3D PC Edition/Pixel Gun 3D_Data/globalgamemanagers")
+import gamepaths
+
+GGM = str(gamepaths.DATA / "globalgamemanagers")
 
 assets = UnityPy.load(GGM)
 for o in assets.objects:

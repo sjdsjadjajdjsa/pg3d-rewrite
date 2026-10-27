@@ -13,7 +13,6 @@ character.gltf hierarchy.
     tools/venv/bin/python scripts/export_player_anims.py
 """
 import json
-import os
 import pathlib
 import struct
 import sys
@@ -24,9 +23,10 @@ import UnityPy
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 import export_weapons as ew  # noqa: E402
+import gamepaths  # noqa: E402
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
-GAME = os.path.expanduser("~/.local/share/Steam/steamapps/common/Pixel Gun 3D PC Edition/Pixel Gun 3D_Data")
+GAME = str(gamepaths.DATA)
 CHAR = ROOT / "private/export/characters/player_body"
 FPS = 30
 DIMS = {1: 3, 2: 4, 3: 3, 4: 3}  # position, rotation (quaternion), scale, euler

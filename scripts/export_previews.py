@@ -12,10 +12,10 @@ import pathlib
 import re
 
 import UnityPy
+import gamepaths
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
-BUNDLES = (pathlib.Path.home() / ".local/share/Steam/steamapps/common/Pixel Gun 3D PC Edition"
-           / "Pixel Gun 3D_Data/StreamingAssets/Cache/bundles")
+BUNDLES = gamepaths.DATA / "StreamingAssets/Cache/bundles"
 OUT = ROOT / "private/export/previews"
 
 

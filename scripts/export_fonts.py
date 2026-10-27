@@ -4,13 +4,13 @@ the players' NickLabel TextMesh) to private/export/fonts/<name>.ttf.
 
     tools/venv/bin/python scripts/export_fonts.py
 """
-import os
 import pathlib
 
 import UnityPy
+import gamepaths
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
-GAME = os.path.expanduser("~/.local/share/Steam/steamapps/common/Pixel Gun 3D PC Edition/Pixel Gun 3D_Data")
+GAME = str(gamepaths.DATA)
 
 
 def main():

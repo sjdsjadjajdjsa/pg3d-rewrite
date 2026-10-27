@@ -9,19 +9,17 @@ level, "C": ...}}}}. Written as private/export/maps/modes.json: {ModeName: [scen
     tools/venv/bin/python scripts/export_scene_modes.py
 """
 import json
-import os
 import pathlib
 
 import UnityPy
-from UnityPy.helpers.TypeTreeGenerator import TypeTreeGenerator
+import gamepaths
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
-GAME = os.path.expanduser("~/.local/share/Steam/steamapps/common/Pixel Gun 3D PC Edition/Pixel Gun 3D_Data")
+GAME = str(gamepaths.DATA)
 
 
 def main():
-    gen = TypeTreeGenerator("2022.3.76f1")
-    gen.load_local_dll_folder(str(ROOT / "private/cpp2il/dummydll"))
+    gen = gamepaths.typetree_generator()
     env = UnityPy.load(f"{GAME}/sharedassets1.assets")
     env.typetree_generator = gen
     for o in env.objects:
