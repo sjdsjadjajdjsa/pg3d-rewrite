@@ -80,6 +80,8 @@ impl SceneBuilder<'_> {
 /// Which scene to show.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Scene {
+    /// importing the game's files (setup.rs)
+    Setup,
     Menu,
     /// a match on this map; mode: PG3D_MODE ("teamfight"), sandbox: no enemies
     Game { map: String, mode: Option<String>, sandbox: bool },
@@ -97,6 +99,7 @@ pub fn request(scene: Scene) {
 /// The scenes' plugin lists (main.rs).
 #[derive(Resource)]
 pub struct SceneSets {
+    pub setup: fn(&mut SceneBuilder),
     pub menu: fn(&mut SceneBuilder),
     pub game: fn(&mut SceneBuilder),
 }
@@ -147,6 +150,7 @@ pub fn switch_scene(world: &mut World) {
     world.resource_mut::<Time<Virtual>>().unpause();
     // what the scene's plugins read from the environment (as for a freshly started copy)
     let title = match &scene {
+        Scene::Setup => "Pixel Gun 3D (Rust) - import".to_string(),
         Scene::Menu => {
             unsafe {
                 std::env::remove_var("PG3D_MODE");
@@ -181,7 +185,11 @@ pub fn switch_scene(world: &mut World) {
         c.visible = true;
     }
     let sets = world.resource::<SceneSets>();
-    let build = if scene == Scene::Menu { sets.menu } else { sets.game };
+    let build = match scene {
+        Scene::Setup => sets.setup,
+        Scene::Menu => sets.menu,
+        Scene::Game { .. } => sets.game,
+    };
     {
         let mut b = SceneBuilder { world };
         build(&mut b);

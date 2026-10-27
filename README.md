@@ -4,39 +4,22 @@ A from-scratch rewrite of Pixel Gun 3D in Rust using [Bevy](https://bevyengine.o
 and [avian3d](https://github.com/avianphysics/avian) physics.
 
 **No game files are in this repo.** Maps and other assets are exported from your own
-installed copy of the game by the research project next door
-(`../pixel-gun-3d-re`, see `scripts/export_map.py` there) into
-`../pixel-gun-3d-re/private/export/`. Set `PG3D_DATA` to use another location.
+installed copy of the game ("Pixel Gun 3D: PC Edition", free on Steam) by the project next
+door (`../pixel-gun-3d-re`) into `../pixel-gun-3d-re/private/export/`. Set `PG3D_DATA` to use
+another location, `PG3D_RE` for another exporter folder.
 
 ## Run
 
-```sh
-# once, in ../pixel-gun-3d-re (or simply: scripts/export_all.sh):
-tools/venv/bin/python scripts/export_map.py arena
-tools/venv/bin/python scripts/find_behaviours.py WeaponSounds > private/index/weaponsounds.tsv
-tools/venv/bin/python scripts/export_weapons.py
-tools/venv/bin/python scripts/find_behaviours.py MeleeBot ShootingBot FiringShotBot KamikadzeBot \
-    MeleeShootBot ShootingBossBot StalkerBot > private/index/bots.tsv
-tools/venv/bin/python scripts/export_bots.py
-tools/venv/bin/python scripts/export_navmesh.py arena
-# menu: lobby UI, lobby scene, character
-tools/venv/bin/python scripts/export_ngui.py level17 MainMenuNGUI lobby
-tools/venv/bin/python scripts/export_map.py level17 --out lobby --skip MainMenuNGUI FriendsWindowGUI \
-    --prefab slo_seasonlobby_current:SeasonLobbyRoot
-tools/venv/bin/python scripts/export_character.py
-tools/venv/bin/python scripts/export_ngui.py resources.assets AllModesView modes
-tools/venv/bin/python scripts/export_previews.py
-tools/venv/bin/python scripts/export_ngui.py resources.assets SettingsWindow settings
-tools/venv/bin/python scripts/export_pickups.py
-tools/venv/bin/python scripts/export_ngui.py resources.assets SettingsPanel pause
-tools/venv/bin/python scripts/export_ngui.py level6 "UI Root (2D)" results
-tools/venv/bin/python scripts/export_ngui.py resources.assets InGameGUI ingame
-tools/venv/bin/python scripts/export_probes.py arena hill   # light probes, per map
+Needs Rust and Python 3.9+, on Linux or Windows.
 
-# here:
-cargo run            # start menu: pick a map
+```sh
+cargo run            # first start: import screen (finds the game, or pick / drop its folder)
+                     # then the menu: pick a map
 cargo run -- arena   # straight into a map
+cargo run -- --setup # import again, e.g. after a game update
 ```
+
+The import screen runs `../pixel-gun-3d-re/scripts/setup.py`; you can also run that by hand.
 
 Default controls (change them in Settings → keyboard tab, saved in
 ~/.config/pixel-gun-3d-rs/controls.json): click = capture mouse, Esc = pause (settings, resume),
@@ -49,6 +32,7 @@ V = toggle walk / fly camera (fly: jump key/E up, Ctrl/Q down, Shift fast), F12 
 | File | What |
 |---|---|
 | `src/main.rs` | app setup, data location |
+| `src/setup.rs` | import screen: finds the game (or a picked / dropped folder), runs the exporter, shows its progress |
 | `src/map.rs` | loads `map.gltf` (visuals), `collision.gltf` + `colliders.json` (physics), `info.json` (spawn points) |
 | `src/player.rs` | first-person walking; constants say which values were recovered from the game and which are guesses |
 | `src/camera.rs` | mouse look, walk/fly camera |
@@ -80,4 +64,4 @@ Debug environment variables: `PG3D_TRACE=1` (log player position), `PG3D_AUTOWAL
 automatically), `PG3D_NOBOTS=1`, `PG3D_HUNT=1` (zombies always chase), `PG3D_SPAWN=x,y,z` (player start), `PG3D_PAUSE=1` (open the pause screen after 2 s), `PG3D_DIE=s` (die at s seconds), `PG3D_NOPROBES=1`, `PG3D_AUTOSHOT_TIME=s` (screenshot at s seconds), `PG3D_MENU_CLICK=a,b,..` (press these UI buttons, also in a match), `PG3D_REBIND_KEY=KeyF` (fake key for the key binding popup), `PG3D_BOTS=Enemy3_go,...` (only these bots),
 `PG3D_LOADOUT=Weapon2,Weapon61,...` (custom weapons), `PG3D_MENU_CLICK=BtnBattle_A` (press a lobby
 button after 2 s), `PG3D_CAM="x,y,z,tx,ty,tz"` (start in fly mode at a
-position looking at a target), `PG3D_AUTOSHOT=file.png` (screenshot after load, then quit).
+position looking at a target), `PG3D_AUTOSHOT=file.png` (screenshot after load, then quit), `PG3D_SETUP_AUTO=1` (import screen: import and start without clicks).

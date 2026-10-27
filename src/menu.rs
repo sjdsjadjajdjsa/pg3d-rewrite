@@ -37,6 +37,9 @@ struct MapButton(String);
 #[derive(Component)]
 struct QuitButton;
 
+#[derive(Component)]
+struct SetupButton;
+
 const NORMAL: Color = Color::srgb(0.18, 0.22, 0.3);
 const HOVER: Color = Color::srgb(0.28, 0.36, 0.5);
 
@@ -655,9 +658,7 @@ fn spawn_map_picker(commands: &mut Commands, data: &DataDir, assets: &AssetServe
                 TextColor(Color::srgb(0.7, 0.75, 0.85)),
             ));
             if maps.is_empty() {
-                root.spawn(Text::new(
-                    "No maps exported yet. Run scripts/export_all.sh in ../pixel-gun-3d-re",
-                ));
+                root.spawn(Text::new("No maps imported yet."));
             }
             // map buttons in a wrapping grid
             root.spawn(Node {
@@ -700,8 +701,12 @@ fn spawn_map_picker(commands: &mut Commands, data: &DataDir, assets: &AssetServe
                 root.spawn((Node { margin: UiRect::top(px(30.0)), ..button_node() }, BackgroundColor(NORMAL), Button, CloseButton))
                     .with_child((Text::new("Back"), TextFont { font_size: FontSize::Px(20.0), ..default() }));
             } else {
-                root.spawn((Node { margin: UiRect::top(px(30.0)), ..button_node() }, BackgroundColor(NORMAL), Button, QuitButton))
-                    .with_child((Text::new("Quit"), TextFont { font_size: FontSize::Px(20.0), ..default() }));
+                root.spawn(Node { column_gap: px(10.0), margin: UiRect::top(px(30.0)), ..default() }).with_children(|row| {
+                    row.spawn((button_node(), BackgroundColor(NORMAL), Button, SetupButton))
+                        .with_child((Text::new("Import game files"), TextFont { font_size: FontSize::Px(20.0), ..default() }));
+                    row.spawn((button_node(), BackgroundColor(NORMAL), Button, QuitButton))
+                        .with_child((Text::new("Quit"), TextFont { font_size: FontSize::Px(20.0), ..default() }));
+                });
             }
             root.spawn((
                 Text::new("In game: WASD move, Space jump, mouse aim/fire, right mouse zoom, R reload,\n1-9 weapons, V fly camera, F10 back to this menu"),
@@ -723,7 +728,7 @@ fn button_node() -> Node {
 }
 
 fn button_colors(
-    mut q: Query<(&Interaction, &mut BackgroundColor), (Changed<Interaction>, Or<(With<MapButton>, With<QuitButton>, With<CloseButton>)>)>,
+    mut q: Query<(&Interaction, &mut BackgroundColor), (Changed<Interaction>, Or<(With<MapButton>, With<QuitButton>, With<CloseButton>, With<SetupButton>)>)>,
 ) {
     for (i, mut bg) in &mut q {
         bg.0 = if *i == Interaction::None { NORMAL } else { HOVER };
@@ -734,6 +739,7 @@ fn button_clicks(
     maps: Query<(&Interaction, &MapButton), Changed<Interaction>>,
     quit: Query<&Interaction, (Changed<Interaction>, With<QuitButton>)>,
     close: Query<&Interaction, (Changed<Interaction>, With<CloseButton>)>,
+    setup: Query<&Interaction, (Changed<Interaction>, With<SetupButton>)>,
     pickers: Query<(Entity, &MapPicker)>,
     mut commands: Commands,
     mut exit: MessageWriter<AppExit>,
@@ -752,6 +758,9 @@ fn button_clicks(
     }
     if quit.iter().any(|i| *i == Interaction::Pressed) {
         exit.write(AppExit::Success);
+    }
+    if setup.iter().any(|i| *i == Interaction::Pressed) {
+        crate::scene::request(crate::scene::Scene::Setup);
     }
 }
 

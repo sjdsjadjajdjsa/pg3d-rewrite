@@ -2,6 +2,9 @@
 //!
 //! Run:  cargo run                   (start menu; menu and matches share one window)
 //!       cargo run -- arena          (straight into a map = folder in <data>/maps/)
+//!       cargo run -- --setup        (import the game's files again; also shown on the
+//!                                    first start, when nothing is exported yet;
+//!                                    PG3D_SETUP_AUTO=1 imports and starts without clicks)
 //! Data: assets are NOT part of this repo. They are exported from your own copy of the
 //!       game by ../pixel-gun-3d-re/scripts/export_map.py. Override the location with
 //!       PG3D_DATA=/path/to/export.
@@ -32,6 +35,7 @@ mod mode_select;
 mod ngui;
 mod navmesh;
 mod particles;
+mod plain_hud;
 mod pickups;
 mod player;
 mod projectiles;
@@ -43,6 +47,7 @@ mod scene;
 mod screenshot;
 mod settings;
 mod settings_ui;
+mod setup;
 mod pause;
 mod sound;
 mod wallet;
@@ -94,10 +99,15 @@ fn main() {
         default_hook(info);
     }));
     sound::set_sfx_volume(settings::Settings::load().sfx_volume());
+    // absolute: Bevy resolves a relative asset folder against the executable's folder when
+    // not started by cargo, while our own file reads resolve it against the working directory
     let data_dir = std::env::var("PG3D_DATA").unwrap_or_else(|_| DEFAULT_DATA.to_string());
+    let data_dir = std::path::absolute(&data_dir).map_or(data_dir, |p| p.to_string_lossy().into_owned());
     // a map name starts straight in a match, else the menu; both run in this one window
     // and switch between each other (scene.rs)
     let first = match std::env::args().nth(1) {
+        Some(arg) if arg == "--setup" => scene::Scene::Setup,
+        None if !setup::has_data(std::path::Path::new(&data_dir)) => scene::Scene::Setup,
         Some(map) => scene::Scene::Game {
             map,
             mode: std::env::var("PG3D_MODE").ok(),
@@ -159,7 +169,7 @@ fn main() {
         .insert_resource(controls::Controls::load())
         .insert_resource(wallet::Wallet::load())
         .insert_resource(map::CurrentMap("lobby".into()))
-        .insert_resource(scene::SceneSets { menu: menu_scene, game: game_scene })
+        .insert_resource(scene::SceneSets { setup: setup_scene, menu: menu_scene, game: game_scene })
         // messages every scene shares
         .add_message::<beams::SpawnBeam>()
         .add_message::<bots::BotDamage>()
@@ -182,6 +192,11 @@ fn main() {
     app.run();
 }
 
+/// Importing the game's files from the player's own install (first start, --setup).
+fn setup_scene(app: &mut scene::SceneBuilder) {
+    app.add_plugins((setup::SetupPlugin, screenshot::ScreenshotPlugin));
+}
+
 /// The start menu (lobby, Armory, Settings, mode picker).
 fn menu_scene(app: &mut scene::SceneBuilder) {
     app.add_plugins((menu::MenuPlugin, screenshot::ScreenshotPlugin, cursor::CursorPlugin, armory::ArmoryPlugin, mirrored_skins::MirroredSkinsPlugin));
@@ -200,7 +215,7 @@ fn game_scene(app: &mut scene::SceneBuilder) {
     .add_plugins((projectiles::ProjectilesPlugin, pickups::PickupsPlugin, ngui::NguiPlugin, pause::PausePlugin, results::ResultsPlugin))
     .add_plugins((team_match::TeamMatchPlugin, tdm_bots::TdmBotsPlugin, mirrored_skins::MirroredSkinsPlugin, death_fx::DeathFxPlugin))
     .add_plugins((hud::HudPlugin, ingame_ui::InGameUiPlugin, explosives::ExplosivesPlugin, cursor::CursorPlugin, beams::BeamsPlugin))
-    .add_plugins(feel::FeelPlugin)
+    .add_plugins((feel::FeelPlugin, plain_hud::PlainHudPlugin))
     .add_systems(scene::Update, (menu::back_to_menu, menu::test_click, hide_hud));
 }
 
