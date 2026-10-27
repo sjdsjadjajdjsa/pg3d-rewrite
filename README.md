@@ -1,28 +1,95 @@
+<div align="center">
+
 # pg3d-rewrite
 
-A fan-made rewrite of Pixel Gun 3D in Rust ([Bevy](https://bevyengine.org)). It plays with the
-maps, weapons, zombies and menus of **your own installed copy** of the game; this repository
-contains no game files.
+[![ci](https://img.shields.io/github/actions/workflow/status/sjdsjadjajdjsa/pg3d-rewrite/ci.yml?branch=main&label=ci&logo=github&logoColor=white)](https://github.com/sjdsjadjajdjsa/pg3d-rewrite/actions/workflows/ci.yml)
+[![license](https://img.shields.io/github/license/sjdsjadjajdjsa/pg3d-rewrite?color=green)](LICENSE)
+[![platform](https://img.shields.io/badge/platform-Linux%20%7C%20Windows-lightgrey)](#play)
+[![made with](https://img.shields.io/badge/made_with-Rust%20%2B%20Bevy-orange?logo=rust)](https://bevyengine.org)
 
-| Folder | What |
-|---|---|
-| `game/` | the rewrite (Rust / Bevy) |
-| `exporter/` | reads your Pixel Gun 3D install and exports what the rewrite plays (Python) |
+A fan-made rewrite of Pixel Gun 3D in Rust, played offline with the content of your own copy of the game.
+
+![The lobby: the player and the season scene, with Store, Armory, Pixel Pass and To Battle](docs/images/lobby.webp)
+
+</div>
+
+The whole game loop is rebuilt from scratch in [Bevy](https://bevyengine.org): movement, shooting, zombies, bots, menus and HUD. The maps, weapons, characters and screens are read from the Pixel Gun 3D you have installed, so this repository holds code only and no game files.
+
+## What you get
+
+- **Arena:** the zombie survival mode. Waves of 45 zombies, up to 10 at once, tougher types as the waves go on, with health and ammo pickups and TNT boxes.
+- **Team Fight:** you and a team of bots against a red team, five minutes, most kills wins.
+- **Sandbox:** any map with no enemies, to walk around and try weapons.
+- **22 maps:** Arena, Heaven Garden, Ice Palace, Nuclear City, Classic Pool, Area 52 Labs, Sky Islands and more, each with its original lighting, colliders and navigation mesh.
+- **The original menus:** lobby, game mode picker, Armory, settings (with key rebinding), pause and results screens, redrawn from the game's own layouts.
+- **Weapons from the real game:** stats for every weapon, first-person models and animations, sounds, crosshairs and rockets. Pick your loadout in the Armory.
+- **Saved progress:** level, XP, coins, gems and your loadout stay between sessions.
+
+## Screenshots
+
+| Arena | Team Fight |
+| --- | --- |
+| ![An Arena match at night: wave 1, score and zombies left at the top, the weapon bar below](docs/images/arena.webp) | ![A Team Fight match on Hill: team scores and the timer at the top](docs/images/teamfight.webp) |
+
+| Picking a map | Armory |
+| --- | --- |
+| ![The game mode hub with Team Fight, Arena and Sandbox tabs and the map pictures](docs/images/modes.webp) | ![The Armory with weapon cells, levels, prices and the character holding the equipped gun](docs/images/armory.webp) |
 
 ## Play
 
-Needs [Rust](https://rustup.rs), Python 3.9+ and "Pixel Gun 3D: PC Edition" from Steam (free).
-Linux and Windows.
+You need:
 
-```sh
-cd game
-cargo run
+- [Rust](https://rustup.rs)
+- [Python](https://www.python.org/downloads/) 3.9 or newer (on Windows, tick "Add python.exe to PATH")
+- **Pixel Gun 3D: PC Edition**, installed from [Steam](https://store.steampowered.com/app/2524890/) (it's free)
+
+On Linux you also need the usual Bevy libraries. On Debian or Ubuntu:
+
+```
+sudo apt install build-essential pkg-config libasound2-dev libudev-dev libwayland-dev libxkbcommon-dev
 ```
 
-The first start shows an import screen: it finds the game (or pick / drop its folder), imports
-in a few minutes, then opens the menu. `cargo run -- --setup` imports again.
+Then:
 
-The current Steam build encrypts the data the original menus and HUD are read from, so those
-use simpler stand-ins; the October 2026 build exports everything (see `exporter/README.md`).
+```
+git clone https://github.com/sjdsjadjajdjsa/pg3d-rewrite
+cd pg3d-rewrite/game
+cargo run --release
+```
 
-Not affiliated with or endorsed by Cubic Games, the makers of Pixel Gun 3D.
+The first start opens an import screen. It finds Pixel Gun 3D in your Steam libraries, or you pick or drop the game's folder on the window. Press **Import**, wait a few minutes, then **Play**. The import only reads the game's files and never changes them. `cargo run --release -- --setup` imports again, for example after a game update.
+
+### Game versions
+
+The current Steam build encrypts the data the menus and HUD are read from, and downloads most maps only when you play them. It still gives you the maps it has, the weapons and the zombies, and the rewrite draws simpler menus in place of the originals.
+
+For everything, including all 22 maps and the original menus, download the October 2026 build alongside your normal install. Open Steam's console (`steam steam://nav/console` on Linux, or paste `steam://nav/console` into a browser) and enter:
+
+```
+download_depot 2524890 2524891 8917309360682204919
+```
+
+When Steam says "Depot download complete", press **Choose folder...** on the import screen and pick the folder it names.
+
+## Controls
+
+| Where | Keys |
+| --- | --- |
+| **In a match** | `WASD` move, `Space` jump, mouse aims, left click fires, right click zooms, `R` reload |
+| **Weapons** | `1` to `9` or the mouse wheel |
+| **Anywhere** | `Esc` pause, `F10` back to the menu, `F12` screenshot, `V` free camera |
+
+Click the window once to capture the mouse. Every key can be changed in Settings, on the keyboard tab.
+
+## How it works
+
+| Folder | What |
+| --- | --- |
+| [`game/`](game) | the rewrite: Rust and Bevy, with [avian3d](https://github.com/avianphysics/avian) physics |
+| [`exporter/`](exporter) | Python scripts that read your install with [UnityPy](https://github.com/K0lb3/UnityPy) and write glTF models, textures, sounds and JSON |
+
+The import screen runs `exporter/scripts/setup.py`, which sets up its own Python environment in `exporter/tools/` and writes everything to `exporter/private/export/`. Both folders are ignored by git. [game/README.md](game/README.md) lists every part of the game and its debug options, and [exporter/README.md](exporter/README.md) every exporter.
+
+## License
+
+[MIT](LICENSE), for the code in this repository. Pixel Gun 3D and everything the import reads from it belong to Cubic Games. This is a fan project, not affiliated with or endorsed by Cubic Games.
