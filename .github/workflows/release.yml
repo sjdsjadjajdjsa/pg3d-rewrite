@@ -109,7 +109,10 @@ jobs:
           merge-multiple: true
       - name: Checksums
         run: sha256sum pg3d-rewrite-* | tee SHA256SUMS
+      # build provenance needs a public repository (or GitHub Enterprise); a private one
+      # still gets its release
       - uses: actions/attest@v4
+        if: github.event.repository.private == false
         with:
           subject-checksums: SHA256SUMS
       - name: Create the release
