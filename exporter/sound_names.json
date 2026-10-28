@@ -1,0 +1,281 @@
+{
+ "ExperienceController/ExperienceController": {
+  "Tierup": [
+   "Tierup"
+  ],
+  "exp_1": [
+   "exp_1"
+  ],
+  "exp_2": [
+   "exp_2"
+  ],
+  "exp_3": [
+   "Levelup"
+  ]
+ },
+ "InGameGUI/InGameGUI": {
+  "lowResourceBeep": [
+   "Beep1"
+  ],
+  "siegeSirenClip": [
+   "siege_siren"
+  ]
+ },
+ "LobbyMainMenuSounds/MainMenuNGUI": {
+  "arsenalLobbyButtonSound": [
+   "Arsenal_lobby_button_sound"
+  ],
+  "craftLobbyButtonSound": [
+   "Craft_lobby_button_sound"
+  ],
+  "friendsLobbyButtonSound": [
+   "Friends_lobby_button_sound"
+  ],
+  "newsLobbyButtonSound": [
+   "News_lobby_button_sound"
+  ],
+  "profileLobbyButtonSound": [
+   "Profile_lobby_button_sound"
+  ],
+  "settingsLobbyButtonSound": [
+   "Settings_lobby_button_sound"
+  ],
+  "socialLobbyButtonSound": [
+   "Social_lobby_button_sound"
+  ],
+  "topLobbyButtonSound": [
+   "Leaders_button_sound"
+  ]
+ },
+ "NetworkStartTableNGUIController/NetworkStartTableNGUI": {
+  "deadheatSound": [
+   "killstreak_sound"
+  ],
+  "looseSound": [
+   "Clans_lose_sound"
+  ],
+  "trophySound": [
+   "cup_zoom"
+  ],
+  "winSound": [
+   "Clans_wins_sound"
+  ]
+ },
+ "PlayerMovementsSoundsController/Player": {
+  "stepCrouchAudioClips": [
+   "crouch_step1",
+   "crouch_step2",
+   "crouch_step3",
+   "crouch_step4",
+   "crouch_step5",
+   "crouch_step6"
+  ],
+  "stepWalkAudioClips": [
+   "step_01",
+   "step_02",
+   "step_03",
+   "step_04",
+   "step_05",
+   "step_06",
+   "step_07",
+   "step_08",
+   "step_09"
+  ],
+  "stepWalkCrewAudioClips": [
+   "footsteps_peaceful_01",
+   "footsteps_peaceful_02",
+   "footsteps_peaceful_03",
+   "footsteps_peaceful_04",
+   "footsteps_peaceful_05",
+   "footsteps_peaceful_06",
+   "footsteps_peaceful_07"
+  ],
+  "stepWalkMonsterAudioClips": [
+   "footsteps_monster_01",
+   "footsteps_monster_02",
+   "footsteps_monster_03",
+   "footsteps_monster_04",
+   "footsteps_monster_05",
+   "footsteps_monster_06",
+   "footsteps_monster_07"
+  ],
+  "stepWaterAudioClips": [
+   "water_step",
+   "water_step_2",
+   "water_step_3",
+   "water_step_4",
+   "water_step_5"
+  ],
+  "walkMechBearAudioClip": [
+   "dater_bear_steps"
+  ]
+ },
+ "Player_move_c/PlayerMoveC": {
+  "ChangeGrenadeClip": [
+   "Pin_Grenade"
+  ],
+  "ChangeWeaponClip": [
+   "ammo_bonus"
+  ],
+  "ChangeWeaponClip_Backup": [
+   "back_up_weapon_swipe"
+  ],
+  "ChangeWeaponClip_Heavy": [
+   "heavy_weapon_swipe"
+  ],
+  "ChangeWeaponClip_Melee": [
+   "melee_weapon_swipe"
+  ],
+  "ChangeWeaponClip_Primary": [
+   "primary_weapon_swipe"
+  ],
+  "ChangeWeaponClip_Sniper": [
+   "sniper_weapon_swipe"
+  ],
+  "ChangeWeaponClip_Special": [
+   "special_weapon_swipe"
+  ],
+  "WeaponBonusClip": [
+   "weapon_bonus"
+  ],
+  "ammoUpSound": [
+   "ammo_bonus"
+  ],
+  "clickShop": [
+   "click_shop"
+  ],
+  "damageArmorPlayerSound": [
+   "player_armor_damage"
+  ],
+  "damagePlayerSound": [
+   "player_damage"
+  ],
+  "deadPlayerSound": [
+   "player_dead"
+  ],
+  "disablerActiveSound": [
+   "gadget_desabler_active"
+  ],
+  "disablerEffectSound": [
+   "gadget_desabler_deactive"
+  ],
+  "dragonWhistleSound": [
+   "gadget_dragonwhistle_active"
+  ],
+  "drumActiveSound": [
+   "gadget_leader_drum_active"
+  ],
+  "fallPlayerSound": [
+   "player_falling_down"
+  ],
+  "flagCaptureClip": [
+   "get_flag"
+  ],
+  "flagGetClip": [
+   "get_flag"
+  ],
+  "flagLostClip": [
+   "flag_alarm"
+  ],
+  "flagPointClip": [
+   "score_flag_point"
+  ],
+  "flagScoreEnemyClip": [
+   "flag_capture_fail"
+  ],
+  "flagScoreMyCommandClip": [
+   "flag_capture_success"
+  ],
+  "getWeaponBonusSound": [
+   "pickup_weapon"
+  ],
+  "headShotSound": [
+   "headshot"
+  ],
+  "healthUpSounds": [
+   "life_bonus"
+  ],
+  "invisibleActivSound": [
+   "gadget_stealthbracelet_sound"
+  ],
+  "invisibleDeactivSound": [
+   "gadget_stealthbracelet_off_sound"
+  ],
+  "jetpackActivSound": [
+   "Jetpack_start"
+  ],
+  "killedByMonster": [
+   "clock_bats"
+  ],
+  "killerInvisActivSound": [
+   "player_invis"
+  ],
+  "medkitSound": [
+   "gadget_medkit_sound"
+  ],
+  "monsterRoar": [
+   "monster_growl_01",
+   "monster_growl_02",
+   "monster_growl_03",
+   "monster_growl_04",
+   "monster_growl_05",
+   "monster_growl_06",
+   "monster_growl_07",
+   "monster_growl_08"
+  ],
+  "mushroomActivationSound": [
+   "gadget_firemushroom_eat"
+  ],
+  "mushroomShotSound": [
+   "gadget_firemushroom_fireball"
+  ],
+  "petBoosterActiveSound": [
+   "gadget_pet_booster_active"
+  ],
+  "portalSound": [
+   "teleportation"
+  ],
+  "potionSound": [
+   "Potion"
+  ],
+  "reflectorOffSound": [
+   "gadget_reflector_sound_off"
+  ],
+  "reflectorOnSound": [
+   "gadget_reflector_sound_on"
+  ],
+  "resurrectionSound": [
+   "gadget_resurrection_sound"
+  ],
+  "timeWatchSound": [
+   "gadget_time_machine_sound"
+  ]
+ },
+ "SkinName/Player": {
+  "cableCarAttachAudio": [
+   "player_cable_car_attach"
+  ],
+  "cableCarDetachAudio": [
+   "player_cable_car_detach"
+  ],
+  "cableCarSlidingAudio": [
+   "player_cable_car_sliding"
+  ],
+  "jumpAudio": [
+   "jump"
+  ],
+  "jumpDownAudio": [
+   "jump_end"
+  ],
+  "jumpSpeedrunAudio": [
+   "jump_1"
+  ],
+  "walkAudio": [
+   "step"
+  ],
+  "walkMechBear": [
+   "dater_bear_steps"
+  ]
+ },
+ "ZombieCreator/ArenaMode": {}
+}

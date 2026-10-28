@@ -1,0 +1,577 @@
+{
+ "0": {
+  "title": "Key_1391",
+  "desc": "Key_10714",
+  "icon": "shop_stats_auto"
+ },
+ "1": {
+  "title": "Key_1392",
+  "desc": "Key_10715",
+  "icon": "shop_stats_sngl"
+ },
+ "2": {
+  "title": "Key_1394",
+  "desc": "Key_10716",
+  "icon": "shop_stats_rkt"
+ },
+ "3": {
+  "title": "Key_1396",
+  "desc": "Key_10717",
+  "icon": "shop_stats_grav"
+ },
+ "4": {
+  "title": "Key_1393",
+  "desc": "Key_10718",
+  "icon": "shop_stats_lsr"
+ },
+ "5": {
+  "title": "Key_1390",
+  "desc": "Key_10719",
+  "icon": "shop_stats_shtgn"
+ },
+ "6": {
+  "title": "Key_1383",
+  "desc": "Key_10720",
+  "icon": "shop_stats_chain"
+ },
+ "7": {
+  "title": "Key_1387",
+  "desc": "Key_10721",
+  "icon": "shop_stats_fire"
+ },
+ "8": {
+  "title": "Key_1395",
+  "desc": "Key_10722",
+  "icon": "shop_stats_elctrc"
+ },
+ "9": {
+  "title": "Key_0402",
+  "desc": "Key_10723",
+  "icon": "shop_stats_no_wall"
+ },
+ "10": {
+  "title": "Key_0403",
+  "desc": "Key_10724",
+  "icon": "shop_stats_area_dmg"
+ },
+ "11": {
+  "title": "Key_0404",
+  "desc": "Key_10725",
+  "icon": "shop_stats_zoom"
+ },
+ "12": {
+  "title": "Key_1388",
+  "desc": "Key_10726",
+  "icon": "shop_stats_mtpl_enms"
+ },
+ "13": {
+  "title": "Key_1385",
+  "desc": "Key_10727",
+  "icon": "shop_stats_det"
+ },
+ "14": {
+  "title": "Key_1384",
+  "desc": "Key_10728",
+  "icon": "shop_stats_cntrl"
+ },
+ "15": {
+  "title": "Key_1389",
+  "desc": "Key_10729",
+  "icon": "shop_stats_refl"
+ },
+ "16": {
+  "title": "Key_1386",
+  "desc": "Key_10730",
+  "icon": "shop_stats_few"
+ },
+ "17": {
+  "title": "Key_1397",
+  "desc": "Key_10731",
+  "icon": "shop_stats_g_slnt"
+ },
+ "18": {
+  "title": "Key_1603",
+  "desc": "Key_10732",
+  "icon": "shop_stats_sandbox"
+ },
+ "19": {
+  "title": "Key_1759",
+  "desc": "Key_10733",
+  "icon": "shop_stats_slow_target"
+ },
+ "20": {
+  "title": "Key_2138",
+  "desc": "Key_10734",
+  "icon": "shop_stats_semi_auto"
+ },
+ "21": {
+  "title": "Key_2226",
+  "desc": "Key_10735",
+  "icon": "shop_stats_charging_shot"
+ },
+ "22": {
+  "title": "Key_2227",
+  "desc": "Key_10736",
+  "icon": "shop_stats_sticky_mines"
+ },
+ "23": {
+  "title": "Key_2228",
+  "desc": "Key_10737",
+  "icon": "shop_stats_damage_absorbtion"
+ },
+ "24": {
+  "title": "Key_2229",
+  "desc": "Key_10738",
+  "icon": "shop_stats_cahin_shot"
+ },
+ "25": {
+  "title": "Key_2230",
+  "desc": "Key_10739",
+  "icon": "shop_stats_auto_homing"
+ },
+ "26": {
+  "title": "Key_2424",
+  "desc": "Key_10740",
+  "icon": "shop_stats_dsphr"
+ },
+ "27": {
+  "title": "Key_2795",
+  "desc": "Key_10741",
+  "icon": "shop_stats_psn"
+ },
+ "28": {
+  "title": "Key_2423",
+  "desc": "Key_10742",
+  "icon": "shop_stats_txc"
+ },
+ "29": {
+  "title": "Key_2516",
+  "desc": "Key_10743",
+  "icon": "shop_stats_gravitation_force"
+ },
+ "30": {
+  "title": "Key_2517",
+  "desc": "Key_10744",
+  "icon": "shop_stats_healing"
+ },
+ "31": {
+  "title": "Key_10745",
+  "desc": "Key_2518",
+  "icon": "shop_stats_flying"
+ },
+ "32": {
+  "title": "Key_2519",
+  "desc": "Key_12351",
+  "icon": "shop_stats_radiation"
+ },
+ "33": {
+  "title": "Key_2520",
+  "desc": "Key_10747",
+  "icon": "shop_stats_damage_reflection"
+ },
+ "34": {
+  "title": "Key_2521",
+  "desc": "Key_10748",
+  "icon": "shop_stats_invis"
+ },
+ "35": {
+  "title": "Key_10749",
+  "desc": "Key_2522",
+  "icon": "shop_stats_resurrection"
+ },
+ "36": {
+  "title": "Key_2523",
+  "desc": "Key_10750",
+  "icon": "shop_stats_burning"
+ },
+ "37": {
+  "title": "Key_10751",
+  "desc": "Key_2531",
+  "icon": "shop_stats_time_shift"
+ },
+ "38": {
+  "title": "Key_2532",
+  "desc": "Key_10752",
+  "icon": "shop_stats_lifesteal"
+ },
+ "39": {
+  "title": "Key_2591",
+  "desc": "Key_10753",
+  "icon": "shop_stats_melee"
+ },
+ "40": {
+  "title": "Key_2601",
+  "desc": "Key_10754",
+  "icon": "shop_stats_lock_gadgets"
+ },
+ "41": {
+  "title": "Key_2590",
+  "desc": "Key_10755",
+  "icon": "shop_stats_area_of_effect"
+ },
+ "42": {
+  "title": "Key_2729",
+  "desc": "Key_10756",
+  "icon": "shop_stats_bleeding"
+ },
+ "43": {
+  "title": "Key_2730",
+  "desc": "Key_10757",
+  "icon": "shop_stats_crit"
+ },
+ "44": {
+  "title": "Key_10758",
+  "desc": "Key_2781",
+  "icon": "shop_stats_damage_boost"
+ },
+ "45": {
+  "title": "Key_10759",
+  "desc": "Key_2782",
+  "icon": "shop_stats_damage_transfer"
+ },
+ "46": {
+  "title": "Key_2783",
+  "desc": "Key_10760",
+  "icon": "shop_stats_disable_jump"
+ },
+ "47": {
+  "title": "Key_2959",
+  "desc": "Key_10761",
+  "icon": "shop_stats_charm"
+ },
+ "48": {
+  "title": "Key_3636",
+  "desc": "Key_10762",
+  "icon": "shop_stats_random"
+ },
+ "49": {
+  "title": "Key_3731",
+  "desc": "Key_10763",
+  "icon": "shop_stats_ghost"
+ },
+ "50": {
+  "title": "Key_3814",
+  "desc": "Key_10764",
+  "icon": "shop_stats_remote_control"
+ },
+ "51": {
+  "title": "Key_10765",
+  "desc": "Key_3974",
+  "icon": "shop_stats_area_dmg"
+ },
+ "52": {
+  "title": "Key_4188",
+  "desc": "Key_10766",
+  "icon": "shop_stats_armor_bonus"
+ },
+ "53": {
+  "title": "Key_4189",
+  "desc": "Key_10767",
+  "icon": "shop_stats_xray_vision"
+ },
+ "54": {
+  "title": "Key_4681",
+  "desc": "Key_10768",
+  "icon": "shop_stats_cluster_bomb"
+ },
+ "55": {
+  "title": "Key_0378",
+  "desc": "Key_10769",
+  "icon": "shop_stats_double_jump"
+ },
+ "56": {
+  "title": "Key_6807",
+  "desc": "Key_10770",
+  "icon": "shop_stats_mini"
+ },
+ "57": {
+  "title": "Key_7345",
+  "desc": "Key_10771",
+  "icon": "shop_stats_mateheal"
+ },
+ "58": {
+  "title": "Key_7346",
+  "desc": "Key_10772",
+  "icon": "shop_stats_harpoon"
+ },
+ "59": {
+  "title": "Key_7347",
+  "desc": "Key_10773",
+  "icon": "shop_stats_teleportation"
+ },
+ "60": {
+  "title": "Key_7461",
+  "desc": "Key_10774",
+  "icon": "shop_stats_spray"
+ },
+ "61": {
+  "title": "Key_7595",
+  "desc": "Key_10775",
+  "icon": "shop_stats_enemy_detector"
+ },
+ "62": {
+  "title": "Key_7602",
+  "desc": "Key_10776",
+  "icon": "shop_stats_curse"
+ },
+ "63": {
+  "title": "Key_7604",
+  "desc": "Key_10777",
+  "icon": "shop_stats_polymorph"
+ },
+ "64": {
+  "title": "Key_8763",
+  "desc": "Key_10778",
+  "icon": "shop_stats_polymorph_bug"
+ },
+ "65": {
+  "title": "Key_7605",
+  "desc": "Key_10779",
+  "icon": "shop_stats_reloading_damage"
+ },
+ "66": {
+  "title": "Key_7647",
+  "desc": "Key_10780",
+  "icon": "shop_stats_random_rockets"
+ },
+ "67": {
+  "title": "Key_7594",
+  "desc": "Key_10781",
+  "icon": "shop_stats_nothing"
+ },
+ "68": {
+  "title": "Key_7875",
+  "desc": "Key_10782",
+  "icon": "shop_stats_burn_protection"
+ },
+ "69": {
+  "title": "Key_7877",
+  "desc": "Key_10783",
+  "icon": "shop_stats_marking_the_enemies"
+ },
+ "70": {
+  "title": "Key_7881",
+  "desc": "Key_10784",
+  "icon": "shop_stats_boost_damage_teammate"
+ },
+ "71": {
+  "title": "Key_7880",
+  "desc": "Key_10785",
+  "icon": "shop_stats_sequential_explosione"
+ },
+ "72": {
+  "title": "Key_7876",
+  "desc": "Key_10786",
+  "icon": "shop_stats_increase_head"
+ },
+ "73": {
+  "title": "Key_7879",
+  "desc": "Key_10787",
+  "icon": "shop_stats_super_kick"
+ },
+ "74": {
+  "title": "Key_7884",
+  "desc": "Key_10788",
+  "icon": "shop_stats_shield"
+ },
+ "75": {
+  "title": "Key_7878",
+  "desc": "Key_10789",
+  "icon": "shop_stats_spurt"
+ },
+ "76": {
+  "title": "Key_8139",
+  "desc": "Key_10790",
+  "icon": "shop_stats_healing_area"
+ },
+ "77": {
+  "title": "Key_8761",
+  "desc": "Key_10791",
+  "icon": "shop_stats_killed_target_explode"
+ },
+ "78": {
+  "title": "Key_10792",
+  "desc": "Key_8988",
+  "icon": "shop_stats_invis"
+ },
+ "79": {
+  "title": "Key_10793",
+  "desc": "Key_8989",
+  "icon": "shop_stats_denied"
+ },
+ "80": {
+  "title": "Key_10794",
+  "desc": "Key_8990",
+  "icon": "shop_stats_time_shift"
+ },
+ "81": {
+  "title": "Key_10795",
+  "desc": "Key_2532",
+  "icon": "shop_stats_lifesteal"
+ },
+ "82": {
+  "title": "Key_9146",
+  "desc": "Key_10796",
+  "icon": "shop_stats_stream_beam"
+ },
+ "83": {
+  "title": "Key_9147",
+  "desc": "Key_10797",
+  "icon": "shop_stats_boomerang"
+ },
+ "84": {
+  "title": "Key_9137",
+  "desc": "Key_10798",
+  "icon": "shop_stats_series_impacts"
+ },
+ "85": {
+  "title": "Key_9161",
+  "desc": "Key_10799",
+  "icon": "shop_stats_coin_drop"
+ },
+ "86": {
+  "title": "Key_9619",
+  "desc": "Key_10800",
+  "icon": "shop_stats_damage_reduction"
+ },
+ "87": {
+  "title": "Key_9627",
+  "desc": "Key_10801",
+  "icon": "shop_stats_blind"
+ },
+ "88": {
+  "title": "Key_9628",
+  "desc": "Key_10802",
+  "icon": "shop_stats_plasma_rocket"
+ },
+ "89": {
+  "title": "Key_9629",
+  "desc": "Key_10803",
+  "icon": "shop_stats_ammo_restore"
+ },
+ "90": {
+  "title": "Key_9648",
+  "desc": "Key_10804",
+  "icon": "shop_stats_water_cannon"
+ },
+ "91": {
+  "title": "Key_10117",
+  "desc": "Key_10805",
+  "icon": "shop_stats_invis"
+ },
+ "92": {
+  "title": "Key_10152",
+  "desc": "Key_10806",
+  "icon": "shop_stats_armor_bonus"
+ },
+ "93": {
+  "title": "Key_10807",
+  "desc": "Key_10702",
+  "icon": "shop_stats_unlimited_ammo"
+ },
+ "94": {
+  "title": "Key_10703",
+  "desc": "Key_10808",
+  "icon": "shop_stats_no_self_damage"
+ },
+ "95": {
+  "title": "Key_10704",
+  "desc": "Key_10809",
+  "icon": "shop_stats_bonus_points_revenge"
+ },
+ "96": {
+  "title": "Key_10705",
+  "desc": "Key_10810",
+  "icon": "shop_stats_shields_penetration"
+ },
+ "97": {
+  "title": "Key_11042",
+  "desc": "Key_10994",
+  "icon": "shop_stats_reloading_disable_gadgets"
+ },
+ "98": {
+  "title": "Key_11041",
+  "desc": "Key_11040",
+  "icon": "shop_stats_xray_vision"
+ },
+ "99": {
+  "title": "Key_11155",
+  "desc": "Key_10773",
+  "icon": "shop_stats_teleportation"
+ },
+ "100": {
+  "title": "Key_11342",
+  "desc": "Key_11343",
+  "icon": "shop_stats shield_reloading"
+ },
+ "101": {
+  "title": "Key_11492",
+  "desc": "Key_11496",
+  "icon": "shop_stats_bonus_points_revenge"
+ },
+ "102": {
+  "title": "Key_11493",
+  "desc": "Key_11497",
+  "icon": "shop_stats_bonus_points_revenge"
+ },
+ "103": {
+  "title": "Key_11494",
+  "desc": "Key_11498",
+  "icon": "shop_stats_ammo_steal"
+ },
+ "104": {
+  "title": "Key_11495",
+  "desc": "Key_11499",
+  "icon": "shop_stats_super_burn"
+ },
+ "105": {
+  "title": "Key_12352",
+  "desc": "Key_12353",
+  "icon": "shop_stats_invis"
+ },
+ "106": {
+  "title": "Key_12349",
+  "desc": "Key_12350",
+  "icon": "shop_stats_super_rocket_jump"
+ },
+ "107": {
+  "title": "Key_12639",
+  "desc": "Key_12640",
+  "icon": "shop_stats_polymorph_mutant"
+ },
+ "108": {
+  "title": "Key_12923",
+  "desc": "Key_12924",
+  "icon": "shop_stats_slow_target"
+ },
+ "109": {
+  "title": "Key_12956",
+  "desc": "Key_12957",
+  "icon": "shop_stats_reloading_healing"
+ },
+ "110": {
+  "title": "Key_7878",
+  "desc": "Key_13073",
+  "icon": "shop_stats_spurt"
+ },
+ "111": {
+  "title": "Key_13161",
+  "desc": "Key_13162",
+  "icon": "shop_stats_reloading_teammate_healing"
+ },
+ "112": {
+  "title": "Key_13282",
+  "desc": "Key_13283",
+  "icon": "shop_stats dmg_boost"
+ },
+ "113": {
+  "title": "Key_13282",
+  "desc": "Key_13283",
+  "icon": "shop_stats headshot_dmg_boost"
+ },
+ "150": {
+  "title": "Key_13241",
+  "desc": "Key_13242",
+  "icon": "shop_stats shotgun_laser"
+ }
+}

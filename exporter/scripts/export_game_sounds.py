@@ -13,6 +13,7 @@ Writes private/export/sounds/... and sounds/index.json ({group: {field: [files]}
     tools/venv/bin/python scripts/export_game_sounds.py
 """
 import json
+import os
 import pathlib
 import sys
 
@@ -25,6 +26,9 @@ import gamepaths  # noqa: E402
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 GAME = str(gamepaths.DATA)
 OUT = ROOT / "private/export/sounds"
+# script field -> the names of its AudioClips, recorded from the October 2026 build with
+# PG3D_RECORD_LAYOUTS=1: finds the sounds again when a script's layout changed
+NAMES = ROOT / "sound_names.json"
 
 # (group, asset file, script class, GameObject name)
 TARGETS = [
@@ -63,9 +67,24 @@ def clips(tree, sf, files):
     return out
 
 
+def by_name(env, fields):
+    """field -> AudioClip objects with the recorded names, from every loaded file."""
+    clips_by_name = {}
+    for o in env.objects:
+        if o.type.name == "AudioClip":
+            clips_by_name.setdefault(o.peek_name(), o)
+    out = {}
+    for field, names in fields.items():
+        objs = [clips_by_name[n] for n in names if n in clips_by_name]
+        if objs:
+            out[field] = objs
+    return out
+
+
 def main():
     import subprocess
-    index = {}
+    index, saved_names = {}, {}
+    known_names = json.loads(NAMES.read_text(encoding="utf-8")) if NAMES.exists() else {}
     gen = gamepaths.typetree_generator()
     classes = sorted({t[2] for t in TARGETS})
     rows = [l.split("\t") for l in subprocess.run([sys.executable, str(ROOT / "scripts/find_behaviours.py"), *classes],
@@ -84,13 +103,18 @@ def main():
         for (f, want, go_name), (group, pid) in picked.items():
             if f != fname:
                 continue
+            key = f"{want}/{go_name}"
             try:
-                tree = sf.objects[pid].read_typetree()
-            except Exception as e:  # a script changed since layouts.json was recorded
-                print(f"  {want} on {go_name}: unreadable in this game build ({e!r})", file=sys.stderr)
-                continue
+                found = clips(sf.objects[pid].read_typetree(), sf, files)
+                saved_names[key] = {k: [o.peek_name() for o in v] for k, v in found.items()}
+            except Exception as e:  # the script changed since layouts.json was recorded
+                if key not in known_names:
+                    print(f"  {want} on {go_name}: unreadable in this game build ({e!r})", file=sys.stderr)
+                    continue
+                found = by_name(env, known_names[key])
+                print(f"  {want} on {go_name}: layout changed, {len(found)} sounds found by name", file=sys.stderr)
             (OUT / group).mkdir(parents=True, exist_ok=True)
-            for field, objs in clips(tree, sf, files).items():
+            for field, objs in found.items():
                 names = []
                 for n, c in enumerate(objs):
                     clip = c.read()
@@ -114,6 +138,8 @@ def main():
                 break
             break
     (OUT / "index.json").write_text(json.dumps(index, indent=1))
+    if os.environ.get("PG3D_RECORD_LAYOUTS") and saved_names:
+        NAMES.write_text(json.dumps(saved_names, indent=1, sort_keys=True), encoding="utf-8")
     print("sounds: " + ", ".join(f"{g} {len(v)}" for g, v in index.items()) + f" -> {OUT}")
 
 
