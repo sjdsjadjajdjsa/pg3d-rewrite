@@ -129,6 +129,24 @@ def build_bc6h():
     subprocess.run(["cargo", "build", "--release", "-q"], cwd=BC6H, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
 
+def report_layouts():
+    """What layout_repair.py did this run: game scripts that changed since layouts.json
+    was recorded and were lined up again, and the ones it couldn't read."""
+    if not gamepaths.REPORT.exists():
+        return
+    import json
+
+    r = json.loads(gamepaths.REPORT.read_text(encoding="utf-8"))
+    short = lambda keys: ", ".join(sorted(k.rsplit("/", 1)[-1].rsplit(".", 1)[-1] for k in keys))
+    if r.get("adjusted"):
+        print(f"adjusted: {len(r['adjusted'])} game scripts changed in this version and were read anyway: "
+              f"{short(r['adjusted'])}", flush=True)
+    if r.get("unsure"):
+        print(f"unsure: some values may be off in {short(r['unsure'])}", flush=True)
+    if r.get("unreadable"):
+        print(f"unreadable: {short(r['unreadable'])}", flush=True)
+
+
 def main():
     INDEX.mkdir(parents=True, exist_ok=True)
     build_bc6h()
@@ -139,6 +157,7 @@ def main():
     if not maps:
         sys.exit("no maps found in the game install")
     todo = steps(maps)
+    gamepaths.REPORT.unlink(missing_ok=True)
     env = dict(os.environ, PYTHONIOENCODING="utf-8")
     failed, maps_ok = [], 0
     for i, (label, step) in enumerate(todo, 1):
@@ -160,6 +179,7 @@ def main():
                 step["out"].unlink()
             failed.append(label)
             print(f"      FAILED  {last_line(stderr) or last_line(stdout)}", flush=True)
+    report_layouts()
     print(f"done: {len(todo) - len(failed)} of {len(todo)} steps ok, {maps_ok} maps -> {EXPORT}", flush=True)
     if failed:
         print("failed: " + ", ".join(failed), flush=True)

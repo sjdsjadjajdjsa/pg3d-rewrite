@@ -20,9 +20,16 @@ read the script layouts. `layouts.json` holds them instead: the serialized field
 (names and types only, no game data) of every script the exporters read, recorded from the
 October 2026 build with `PG3D_RECORD_LAYOUTS=1` while Cpp2IL output was present
 (`gamepaths.typetree_generator()` uses Cpp2IL's DLLs when there are some, else this file).
-With it the current build exports the menus and HUD too. Scripts whose layout changed since
-fail to read and are skipped: the player's movement sounds (`Player_move_c`); weapon effects
-need the metadata itself.
+With it the current build exports the menus and HUD too.
+
+When an update changes a script (adds, removes or changes a field), `layout_repair.py` lines
+the saved fields up with the new bytes again: it tries dropping saved fields and skipping
+added ones, keeps only readings that are plausible in a sample of the script's objects, and
+ranks them by how many fields read as values they had in the recorded build (`layouts.json`
+also holds a hash of up to 64 values per field, no values themselves). The import lists the
+scripts it adjusted, the ones where some values may be off, and the ones it couldn't read.
+`scripts/check_layout_repair.py` measures it on the October build: it changes saved layouts
+the way updates do and compares the repaired reading with the real one.
 
 The current build downloads most maps only when you play them, so a fresh install has a
 handful. The October 2026 build ships all of them (Steam console:

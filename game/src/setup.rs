@@ -51,6 +51,9 @@ struct Shared {
     phase: Phase,
     /// export steps that failed
     failed: Vec<String>,
+    /// the exporter's notes on game scripts that changed since the saved layouts
+    /// ("adjusted: ...", "unsure: ...", "unreadable: ...")
+    notes: Vec<String>,
     /// the running setup.py (its own process group on Unix)
     pid: Option<u32>,
 }
@@ -165,6 +168,7 @@ fn import(job: Job, game: PathBuf) {
     if let Ok(mut s) = job.0.lock() {
         s.phase = Phase::Importing { step: 0, steps: 0, what: "starting".into() };
         s.failed.clear();
+        s.notes.clear();
     }
     std::thread::spawn(move || {
         let Some(py) = python() else { return job.set(Phase::NoPython) };
@@ -213,6 +217,12 @@ fn on_line(job: &Job, line: &str, summary: &mut String) {
     }
     if t.starts_with("done:") {
         *summary = t.to_string();
+    } else if let Some(rest) = t.strip_prefix("adjusted: ") {
+        s.notes.push(format!("Read anyway, adjusted to this game version: {rest}"));
+    } else if let Some(rest) = t.strip_prefix("unsure: ") {
+        s.notes.push(format!("Might show a few wrong values: {rest}"));
+    } else if let Some(rest) = t.strip_prefix("unreadable: ") {
+        s.notes.push(format!("Not readable in this game version: {rest}"));
     } else if t.starts_with("FAILED")
         && let Phase::Importing { what, .. } = &s.phase
     {
@@ -266,8 +276,8 @@ fn refresh(
     mut fill: Query<&mut Node, (With<BarFill>, Without<Action>)>,
     mut buttons: Query<(&Action, &mut Node), Without<BarFill>>,
 ) {
-    let (phase, failed) = match job.0.lock() {
-        Ok(s) => (s.phase.clone(), s.failed.clone()),
+    let (phase, failed, notes) = match job.0.lock() {
+        Ok(s) => (s.phase.clone(), s.failed.clone(), s.notes.clone()),
         Err(_) => return,
     };
     let steam = "Install \"Pixel Gun 3D: PC Edition\" from Steam (it is free), then press Search again. \
@@ -300,11 +310,14 @@ fn refresh(
         Phase::Finished { ok: true, summary } => ("Import finished".into(), summary.clone(), Some(1.0), &[Action::Play, Action::Choose]),
         Phase::Finished { ok: false, summary } => ("Import failed".into(), summary.clone(), None, &[Action::Choose, Action::Search]),
     };
-    let failures = if failed.is_empty() {
-        String::new()
-    } else {
-        format!("Not readable in this game version (skipped): {}", failed.join(", "))
-    };
+    let mut lines = notes;
+    if !failed.is_empty() {
+        lines.push(format!("Skipped: {}", failed.join(", ")));
+    }
+    if !lines.is_empty() && matches!(phase, Phase::Finished { .. }) {
+        lines.push("The October 2026 game version reads everything: see the README.".into());
+    }
+    let failures = lines.join("\n");
     for (mut t, is_status, is_detail) in &mut texts {
         let want = if is_status { &status } else if is_detail { &detail } else { &failures };
         if t.0 != *want {

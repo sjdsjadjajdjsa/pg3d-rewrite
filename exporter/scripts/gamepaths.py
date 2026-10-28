@@ -116,17 +116,35 @@ def unity_version(data):
 
 
 LAYOUTS = ROOT / "layouts.json"
+REPORT = ROOT / "private/index/layout_report.json"
+MAX_VALUES = 64      # recorded value fingerprints per field
+
+
+def _script_key(obj):
+    """"Assembly/Namespace.Class" of a MonoBehaviour's script, the key in layouts.json."""
+    s = obj.parse_monobehaviour_head().m_Script.deref_parse_as_object()
+    full = f"{s.m_Namespace}.{s.m_ClassName}" if s.m_Namespace else s.m_ClassName
+    return f"{s.m_AssemblyName.removesuffix('.dll')}/{full}"
 
 
 class SavedLayouts:
     """Field layouts of the game's scripts from layouts.json, for builds whose Cpp2IL output
     can't be made (Unity 6 builds encrypt global-metadata.dat). The layouts were recorded
-    from the October 2026 build; scripts that changed since fail to read and are skipped."""
+    from the October 2026 build. A script that changed since is lined up again by
+    layout_repair.py (see repaired())."""
 
     def __init__(self):
         raw = json.loads(LAYOUTS.read_text(encoding="utf-8")) if LAYOUTS.exists() else {}
         self.layouts = raw.get("classes", {})
+        self.values = raw.get("values", {})
         self.cache = {}
+        self.index = None
+        self.plans = {}
+        self.scripts = {}
+        self.report = {"adjusted": {}, "unsure": [], "unreadable": {}}
+        _install_repair()
+        import atexit
+        atexit.register(self._save_report)
 
     def get_nodes_up(self, assembly, fullname):
         from UnityPy.helpers.TypeTreeNode import TypeTreeNode
@@ -139,21 +157,157 @@ class SavedLayouts:
             )
         return self.cache[key]
 
+    def _same_script(self, obj):
+        """Every MonoBehaviour in obj's file with obj's script (matched on the m_Script
+        reference in the header's bytes 16-28)."""
+        sf = obj.assets_file
+        if id(sf) not in self.scripts:
+            groups = {}
+            for o in sf.objects.values():
+                if o.type.name == "MonoBehaviour":
+                    try:
+                        groups.setdefault(bytes(o.get_raw_data()[16:28]), []).append(o)
+                    except Exception:
+                        pass
+            self.scripts[id(sf)] = groups
+        return self.scripts[id(sf)].get(bytes(obj.get_raw_data()[16:28]), [obj])
+
+    def repaired(self, obj, read):
+        """A layout that reads obj when its saved one doesn't (the game changed the script),
+        or None. read(node) reads obj with a layout, raising when it doesn't fit."""
+        import layout_repair as lr
+        from UnityPy.helpers.TypeTreeNode import TypeTreeNode
+
+        try:
+            key = _script_key(obj)
+        except Exception:
+            return None
+        assembly, fullname = key.split("/", 1)
+        saved = self.get_nodes_up(assembly, fullname)
+        if saved is None:  # a script no exporter needed when the layouts were recorded
+            return None
+        if self.index is None:
+            self.index = lr.field_index(self.layouts)
+        sf = obj.assets_file
+        files_key = (id(sf), key)
+        if files_key not in self.plans:
+            files = lr.Files(sf, self.index)
+            same = self._same_script(obj)
+            step = max(1, len(same) // (lr.SAMPLE * 2))
+            samples = [lr.Data(o.get_raw_data(), files) for o in ([obj] + same[::step])[:lr.SAMPLE]]
+            known = {k: set(v) for k, v in self.values.get(key, {}).items()}
+            rep = lr.Repair(saved, known)
+            plan, unsure = rep.plan(samples)
+            self.plans[files_key] = (rep, plan, files)
+            if unsure and key not in self.report["unsure"]:
+                self.report["unsure"].append(key)
+        rep, plan, files = self.plans[files_key]
+
+        def reads(edits):
+            try:
+                read(rep.node(edits, TypeTreeNode))
+                return True
+            except Exception:
+                return False
+
+        edits = rep.edits_for(lr.Data(obj.get_raw_data(), files), plan, reads)
+        bucket = "adjusted" if edits is not None else "unreadable"
+        self.report[bucket][key] = self.report[bucket].get(key, 0) + 1
+        return None if edits is None else rep.node(edits, TypeTreeNode)
+
+    def _save_report(self):
+        if not any(self.report.values()):
+            return
+        old = json.loads(REPORT.read_text(encoding="utf-8")) if REPORT.exists() else {}
+        for bucket in ("adjusted", "unreadable"):
+            merged = old.get(bucket, {})
+            for k, n in self.report[bucket].items():
+                merged[k] = merged.get(k, 0) + n
+            old[bucket] = merged
+        old["unsure"] = sorted(set(old.get("unsure", [])) | set(self.report["unsure"]))
+        REPORT.parent.mkdir(parents=True, exist_ok=True)
+        REPORT.write_text(json.dumps(old, indent=1), encoding="utf-8")
+
+
+_installed = False
+
+
+def _install_repair():
+    """Every MonoBehaviour read that fails with a saved layout gets a repaired one."""
+    global _installed
+    if _installed:
+        return
+    _installed = True
+    from UnityPy.files.ObjectReader import ObjectReader
+
+    original = ObjectReader.read_typetree
+
+    def read_typetree(self, nodes=None, wrap=False, check_read=True):
+        try:
+            return original(self, nodes, wrap, check_read)
+        except Exception:
+            gen = getattr(getattr(self.assets_file, "environment", None), "typetree_generator", None)
+            if nodes is not None or self.type.name != "MonoBehaviour" or not isinstance(gen, SavedLayouts):
+                raise
+            node = gen.repaired(self, lambda n: original(self, n, False, True))
+            if node is None:
+                raise
+            return original(self, node, wrap, check_read)
+
+    ObjectReader.read_typetree = read_typetree
+
 
 def _record(gen):
-    """PG3D_RECORD_LAYOUTS=1: add every layout this run reads to layouts.json."""
+    """PG3D_RECORD_LAYOUTS=1: add every layout this run reads to layouts.json, and
+    fingerprints of the values each field had (they tell a repaired layout's right reading
+    from a shifted one)."""
     import atexit
 
-    seen = {}
+    import layout_repair as lr
+    from UnityPy.files.ObjectReader import ObjectReader
+
+    seen, values, keys = {}, {}, {}
     real = gen.get_nodes_up
 
     def get_nodes_up(assembly, fullname):
         node = real(assembly, fullname)
         if node is not None:
-            seen[f"{assembly.removesuffix('.dll')}/{fullname}"] = [
-                [n.m_Level, n.m_Type, n.m_Name, n.m_MetaFlag or 0] for n in node.traverse()
-            ]
+            key = f"{assembly.removesuffix('.dll')}/{fullname}"
+            seen[key] = [[n.m_Level, n.m_Type, n.m_Name, n.m_MetaFlag or 0] for n in node.traverse()]
+            keys[id(node)] = key
         return node
+
+    original = ObjectReader.read_typetree
+
+    class NoChecks:
+        externals, ids = 1 << 30, None
+
+        def __init__(self, sf):
+            self.externals, self.ids = len(sf.externals), sf.objects.keys()
+
+        def check(self, ptype, pid):
+            return 0
+
+        def external_ids(self, fid):
+            return None
+
+    def read_typetree(self, nodes=None, wrap=False, check_read=True):
+        out = original(self, nodes, wrap, check_read)
+        if nodes is None and self.type.name == "MonoBehaviour":
+            try:
+                node = self._get_typetree_node()
+                key = keys.get(id(node))
+                if key:
+                    fields = values.setdefault(key, {})
+                    for name, f in lr.values(node, lr.Data(self.get_raw_data(), NoChecks(self.assets_file))).items():
+                        s = fields.setdefault(name, set())
+                        if len(s) < MAX_VALUES:
+                            s.add(f)
+            except Exception:
+                pass
+        return out
+
+    ObjectReader.read_typetree = read_typetree
 
     def save():
         if not seen:
@@ -162,7 +316,14 @@ def _record(gen):
         data["source"] = "Pixel Gun 3D PC Edition, Steam manifest 8917309360682204919 (October 2026)"
         data["classes"].update(seen)
         data["classes"] = dict(sorted(data["classes"].items()))
-        LAYOUTS.write_text(json.dumps(data, separators=(",", ":")).replace('],["', '],\n["'), encoding="utf-8")
+        old = data.get("values", {})
+        for key, fields in values.items():
+            mine = old.setdefault(key, {})
+            for name, s in fields.items():
+                mine[name] = sorted(set(mine.get(name, [])) | s)[:MAX_VALUES]
+        data["values"] = dict(sorted(old.items()))
+        text = json.dumps({k: data[k] for k in ("source", "classes", "values") if k in data}, separators=(",", ":"))
+        LAYOUTS.write_text(text.replace('],["', '],\n["'), encoding="utf-8")
 
     gen.get_nodes_up = get_nodes_up
     atexit.register(save)
