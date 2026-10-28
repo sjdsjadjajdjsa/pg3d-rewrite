@@ -34,7 +34,7 @@ fn arena_map(m: &str) -> bool {
 fn mode_lists() -> &'static std::collections::HashMap<String, Vec<String>> {
     static MODES: std::sync::OnceLock<std::collections::HashMap<String, Vec<String>>> = std::sync::OnceLock::new();
     MODES.get_or_init(|| {
-        let dir = std::env::var("PG3D_DATA").unwrap_or_else(|_| crate::DEFAULT_DATA.to_string());
+        let dir = crate::data_dir();
         std::fs::read_to_string(std::path::Path::new(&dir).join("maps/modes.json"))
             .ok()
             .and_then(|t| serde_json::from_str(&t).ok())
@@ -55,7 +55,7 @@ fn team_fight_map(m: &str) -> bool {
     if arena_map(m) || lists.values().flatten().any(|x| x.eq_ignore_ascii_case(m)) {
         return false;
     }
-    let dir = std::env::var("PG3D_DATA").unwrap_or_else(|_| crate::DEFAULT_DATA.to_string());
+    let dir = crate::data_dir();
     std::fs::read_to_string(std::path::Path::new(&dir).join(format!("maps/{m}/info.json")))
         .is_ok_and(|t| t.contains("MultyPlayerCreateZoneCommand1") && t.contains("MultyPlayerCreateZoneCommand2"))
 }
@@ -139,7 +139,7 @@ pub fn pretty(map: &str) -> String {
     }
     static NAMES: std::sync::OnceLock<std::collections::HashMap<String, Scene>> = std::sync::OnceLock::new();
     let names = NAMES.get_or_init(|| {
-        let dir = std::env::var("PG3D_DATA").unwrap_or_else(|_| crate::DEFAULT_DATA.to_string());
+        let dir = crate::data_dir();
         std::fs::read_to_string(std::path::Path::new(&dir).join("maps/scenes.json"))
             .ok()
             .and_then(|t| serde_json::from_str(&t).ok())

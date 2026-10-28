@@ -1,7 +1,8 @@
 //! First start: no exported game data yet. Finds the player's own Pixel Gun 3D install (or
 //! lets them pick / drop its folder) and runs the exporter next door
 //! (../exporter/scripts/setup.py), showing its progress. `cargo run -- --setup`
-//! opens this screen again, e.g. after a game update.
+//! opens this screen again; it also opens on its own when Pixel Gun 3D was updated since the
+//! last import.
 
 #[allow(unused_imports)]
 use crate::scene::{FixedUpdate, PostStartup, PostUpdate, PreStartup, Startup, Update};
@@ -13,9 +14,41 @@ use std::{
     sync::{Arc, Mutex},
 };
 
-/// The exporter project (PG3D_RE overrides it).
+/// The exporter project: PG3D_RE, else ../exporter from the working folder (`cargo run` in
+/// game/), else exporter/ next to the program (the release downloads).
 pub fn exporter_dir() -> PathBuf {
-    std::env::var_os("PG3D_RE").map_or_else(|| PathBuf::from("../exporter"), PathBuf::from)
+    static DIR: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
+    DIR.get_or_init(|| {
+        if let Some(dir) = std::env::var_os("PG3D_RE") {
+            return PathBuf::from(dir);
+        }
+        let exe = std::env::current_exe().ok().and_then(|p| p.parent().map(Path::to_path_buf));
+        let candidates = [Some(PathBuf::from("../exporter")), exe.map(|d| d.join("exporter"))];
+        let found = candidates.into_iter().flatten().find(|d| d.join("scripts/setup.py").is_file());
+        let dir = found.unwrap_or_else(|| PathBuf::from("../exporter"));
+        std::path::absolute(&dir).unwrap_or(dir)
+    })
+    .clone()
+}
+
+/// The game install the files were imported from, when it has changed since (a Pixel Gun 3D
+/// update): setup.py saves the install folder and its build ("<install> <unity version>
+/// <GameAssembly.dll size>"), and an update changes GameAssembly.dll.
+pub fn game_updated() -> Option<PathBuf> {
+    let private = exporter_dir().join("private");
+    let install = PathBuf::from(std::fs::read_to_string(private.join("game_path.txt")).ok()?.trim());
+    let stamp = std::fs::read_to_string(private.join("game_build.txt")).ok()?;
+    let size: u64 = stamp.trim().rsplit(' ').next()?.parse().ok()?;
+    let now = std::fs::metadata(install.join("GameAssembly.dll")).ok()?.len();
+    let dismissed = std::fs::read_to_string(private.join("update_dismissed.txt")).ok().and_then(|s| s.trim().parse().ok());
+    (now != size && dismissed != Some(now)).then_some(install)
+}
+
+/// "Play" on the update notice: don't ask again until the game changes again.
+fn dismiss_update(install: &Path) {
+    if let Ok(m) = std::fs::metadata(install.join("GameAssembly.dll")) {
+        let _ = std::fs::write(exporter_dir().join("private/update_dismissed.txt"), m.len().to_string());
+    }
 }
 
 /// Whether there is anything to play: at least one exported map.
@@ -42,6 +75,8 @@ enum Phase {
     NoPython,
     NotFound(String),
     Found(PathBuf),
+    /// the game was updated since the last import
+    Updated(PathBuf),
     Importing { step: usize, steps: usize, what: String },
     Finished { ok: bool, summary: String },
 }
@@ -119,18 +154,30 @@ impl Drop for StopImportOnExit {
     }
 }
 
-/// Python 3 on this computer: the Windows launcher first, then the usual names.
-fn python() -> Option<Vec<&'static str>> {
-    let candidates: &[&[&str]] = if cfg!(windows) { &[&["py", "-3"], &["python"], &["python3"]] } else { &[&["python3"], &["python"]] };
-    candidates.iter().find_map(|c| {
-        let out = Command::new(c[0]).args(&c[1..]).arg("--version").output().ok()?;
-        let version = String::from_utf8_lossy(&out.stdout).to_string() + &String::from_utf8_lossy(&out.stderr);
-        (out.status.success() && version.contains("Python 3")).then(|| c.to_vec())
+/// Python 3: the one bundled with the release downloads (exporter/python), else the Windows
+/// launcher, else the usual names.
+fn python() -> Option<Vec<String>> {
+    let bundled = exporter_dir().join(if cfg!(windows) { "python/python.exe" } else { "python/bin/python3" });
+    let mut candidates: Vec<Vec<String>> = vec![vec![bundled.to_string_lossy().into_owned()]];
+    let names: &[&[&str]] = if cfg!(windows) { &[&["py", "-3"], &["python"], &["python3"]] } else { &[&["python3"], &["python"]] };
+    candidates.extend(names.iter().map(|c| c.iter().map(|s| s.to_string()).collect()));
+    candidates.into_iter().find(|c| {
+        let mut cmd = Command::new(&c[0]);
+        cmd.args(&c[1..]).arg("--version");
+        #[cfg(windows)]
+        {
+            use std::os::windows::process::CommandExt;
+            cmd.creation_flags(0x0800_0000);
+        }
+        cmd.output().is_ok_and(|out| {
+            let version = String::from_utf8_lossy(&out.stdout).to_string() + &String::from_utf8_lossy(&out.stderr);
+            out.status.success() && version.contains("Python 3")
+        })
     })
 }
 
-fn setup_command(py: &[&str]) -> Command {
-    let mut c = Command::new(py[0]);
+fn setup_command(py: &[String]) -> Command {
+    let mut c = Command::new(&py[0]);
     c.args(&py[1..]).arg("scripts/setup.py").current_dir(exporter_dir()).env("PYTHONIOENCODING", "utf-8");
     #[cfg(unix)]
     {
@@ -232,7 +279,10 @@ fn on_line(job: &Job, line: &str, summary: &mut String) {
 }
 
 fn search(job: Res<Job>) {
-    find(job.clone(), None);
+    match game_updated() {
+        Some(install) => job.set(Phase::Updated(install)),
+        None => find(job.clone(), None),
+    }
 }
 
 fn spawn(mut commands: Commands) {
@@ -295,6 +345,12 @@ fn refresh(
             &[Action::Search],
         ),
         Phase::NotFound(why) => ("Pixel Gun 3D not found".into(), format!("{why} {steam}").trim().to_string(), None, &[Action::Choose, Action::Search]),
+        Phase::Updated(p) => (
+            "Pixel Gun 3D was updated".into(),
+            format!("{}\nImport again so the rewrite uses the new version, or play with the files you have.", p.display()),
+            None,
+            &[Action::Import, Action::Play],
+        ),
         Phase::Found(p) => (
             "Found Pixel Gun 3D".into(),
             format!("{}\nImport only reads the game's files and takes a few minutes.", p.display()),
@@ -350,11 +406,16 @@ fn clicks(job: Res<Job>, q: Query<(&Interaction, &Action), Changed<Interaction>>
         match a {
             Action::Search => find(job.clone(), None),
             Action::Import => {
-                if let Phase::Found(p) = job.phase() {
+                if let Phase::Found(p) | Phase::Updated(p) = job.phase() {
                     import(job.clone(), p);
                 }
             }
-            Action::Play => crate::scene::request(crate::scene::Scene::Menu),
+            Action::Play => {
+                if let Phase::Updated(p) = job.phase() {
+                    dismiss_update(&p);
+                }
+                crate::scene::request(crate::scene::Scene::Menu);
+            }
             Action::Choose => {
                 let job = job.clone();
                 job.set(Phase::Searching);

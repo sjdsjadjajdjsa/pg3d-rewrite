@@ -43,13 +43,14 @@ struct SetupButton;
 const NORMAL: Color = Color::srgb(0.18, 0.22, 0.3);
 const HOVER: Color = Color::srgb(0.28, 0.36, 0.5);
 
-/// Maps that have been exported: <data>/maps/<name>/map.gltf
+/// Playable maps that have been exported: <data>/maps/<name>/ with map.gltf and a
+/// navigation mesh (scene bundles that aren't maps, like scriptlevelart, have none)
 pub fn exported_maps(data: &std::path::Path) -> Vec<String> {
     let mut maps: Vec<String> = std::fs::read_dir(data.join("maps"))
         .into_iter()
         .flatten()
         .filter_map(|e| e.ok())
-        .filter(|e| e.path().join("map.gltf").exists())
+        .filter(|e| e.path().join("map.gltf").exists() && e.path().join("navmesh.json").exists())
         .filter_map(|e| e.file_name().into_string().ok())
         .filter(|m| !m.starts_with("lobby"))
         .collect();

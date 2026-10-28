@@ -56,8 +56,14 @@ mod weapons;
 use avian3d::prelude::*;
 use bevy::prelude::*;
 
-/// Default location of the exported game data, relative to this project folder.
-const DEFAULT_DATA: &str = "../exporter/private/export";
+/// The exported game data: PG3D_DATA, else the exporter's private/export. Absolute: Bevy
+/// resolves a relative asset folder against the executable's folder when not started by
+/// cargo, while our own file reads resolve it against the working directory.
+pub fn data_dir() -> String {
+    let dir = std::env::var("PG3D_DATA")
+        .unwrap_or_else(|_| setup::exporter_dir().join("private/export").to_string_lossy().into_owned());
+    std::path::absolute(&dir).map_or(dir, |p| p.to_string_lossy().into_owned())
+}
 
 /// Where the exported data lives on disk (for files we read directly, like JSON).
 #[derive(Resource)]
@@ -99,15 +105,13 @@ fn main() {
         default_hook(info);
     }));
     sound::set_sfx_volume(settings::Settings::load().sfx_volume());
-    // absolute: Bevy resolves a relative asset folder against the executable's folder when
-    // not started by cargo, while our own file reads resolve it against the working directory
-    let data_dir = std::env::var("PG3D_DATA").unwrap_or_else(|_| DEFAULT_DATA.to_string());
-    let data_dir = std::path::absolute(&data_dir).map_or(data_dir, |p| p.to_string_lossy().into_owned());
+    let data_dir = data_dir();
     // a map name starts straight in a match, else the menu; both run in this one window
     // and switch between each other (scene.rs)
     let first = match std::env::args().nth(1) {
         Some(arg) if arg == "--setup" => scene::Scene::Setup,
         None if !setup::has_data(std::path::Path::new(&data_dir)) => scene::Scene::Setup,
+        None if !automated() && setup::game_updated().is_some() => scene::Scene::Setup,
         Some(map) => scene::Scene::Game {
             map,
             mode: std::env::var("PG3D_MODE").ok(),

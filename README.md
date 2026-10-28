@@ -3,6 +3,7 @@
 # pg3d-rewrite
 
 [![ci](https://img.shields.io/github/actions/workflow/status/sjdsjadjajdjsa/pg3d-rewrite/ci.yml?branch=main&label=ci&logo=github&logoColor=white)](https://github.com/sjdsjadjajdjsa/pg3d-rewrite/actions/workflows/ci.yml)
+[![release](https://img.shields.io/github/v/release/sjdsjadjajdjsa/pg3d-rewrite?color=ff7a00)](https://github.com/sjdsjadjajdjsa/pg3d-rewrite/releases/latest)
 [![license](https://img.shields.io/github/license/sjdsjadjajdjsa/pg3d-rewrite?color=green)](LICENSE)
 [![platform](https://img.shields.io/badge/platform-Linux%20%7C%20Windows-lightgrey)](#play)
 [![made with](https://img.shields.io/badge/made_with-Rust%20%2B%20Bevy-orange?logo=rust)](https://bevyengine.org)
@@ -37,27 +38,18 @@ The whole game loop is rebuilt from scratch in [Bevy](https://bevyengine.org): m
 
 ## Play
 
-You need:
+You need **Pixel Gun 3D: PC Edition**, installed from [Steam](https://store.steampowered.com/app/2524890/) (it's free).
 
-- [Rust](https://rustup.rs)
-- [Python](https://www.python.org/downloads/) 3.9 or newer (on Windows, tick "Add python.exe to PATH")
-- **Pixel Gun 3D: PC Edition**, installed from [Steam](https://store.steampowered.com/app/2524890/) (it's free)
+Then download the newest version from [Releases](https://github.com/sjdsjadjajdjsa/pg3d-rewrite/releases/latest):
 
-On Linux you also need the usual Bevy libraries. On Debian or Ubuntu:
+| | Download | Run |
+| --- | --- | --- |
+| **Linux** | `pg3d-rewrite-linux-x86_64.tar.gz` | Unpack it and run `./pg3d-rewrite` from inside the folder. Needs glibc 2.35 or newer (Ubuntu 22.04, Fedora 36, Arch and so on). |
+| **Windows** | `pg3d-rewrite-setup-x86_64.exe` | Run it. Installs for your user only, with no admin rights, and adds a Start menu entry. |
 
-```
-sudo apt install build-essential pkg-config libasound2-dev libudev-dev libwayland-dev libxkbcommon-dev
-```
+Windows will say the publisher is unknown, as the program isn't signed: click "More info", then "Run anyway". `pg3d-rewrite-windows-x86_64.zip` is the same without an installer. Both downloads bring their own Python for the import, so there's nothing else to install.
 
-Then:
-
-```
-git clone https://github.com/sjdsjadjajdjsa/pg3d-rewrite
-cd pg3d-rewrite/game
-cargo run --release
-```
-
-The first start opens an import screen. It finds Pixel Gun 3D in your Steam libraries, or you pick or drop the game's folder on the window. Press **Import**, wait a few minutes, then **Play**. The import only reads the game's files and never changes them. `cargo run --release -- --setup` imports again, for example after a game update.
+The first start opens an import screen. It finds Pixel Gun 3D in your Steam libraries, or you pick or drop the game's folder on the window. Press **Import**, wait about ten minutes, then **Play**. The import only reads the game's files and never changes them, and it needs the internet once, for its Python packages. When Pixel Gun 3D updates, the import screen comes back on the next start and offers to import again.
 
 ### Game versions
 
@@ -70,6 +62,24 @@ download_depot 2524890 2524891 8917309360682204919
 ```
 
 When Steam says "Depot download complete", press **Choose folder...** on the import screen and pick the folder it names.
+
+## Build it yourself
+
+Needs [Rust](https://rustup.rs) and [Python](https://www.python.org/downloads/) 3.9 or newer (on Windows, tick "Add python.exe to PATH"). On Linux you also need the usual Bevy libraries. On Debian or Ubuntu:
+
+```
+sudo apt install build-essential pkg-config libasound2-dev libudev-dev libwayland-dev libxkbcommon-dev python3-venv
+```
+
+Then:
+
+```
+git clone https://github.com/sjdsjadjajdjsa/pg3d-rewrite
+cd pg3d-rewrite/game
+cargo run --release
+```
+
+`cargo run --release -- --setup` opens the import screen again.
 
 ## Controls
 

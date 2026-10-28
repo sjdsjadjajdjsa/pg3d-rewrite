@@ -34,9 +34,15 @@ DEFAULT_MAPS = ["arena", "hill", "ice_palace", "matrix", "arena_mine", "duelaren
                 "area52labs", "dust", "heaven", "nuclearcity", "pool", "sky_islands", "space"]
 
 
+# scene bundles that aren't playable maps (scriptlevelart: decoration the game streams into
+# scripted levels; it has no navigation mesh or spawn points)
+NOT_MAPS = {"scriptlevelart"}
+
+
 def installed_maps():
     r = subprocess.run(py("export_map.py", "--list")["cmd"], cwd=ROOT, capture_output=True, text=True)
-    names = [m.strip() for m in r.stdout.splitlines() if m.strip() and not m.strip().endswith(" maps")]
+    names = [m.strip() for m in r.stdout.splitlines()
+             if m.strip() and not m.strip().endswith(" maps") and m.strip() not in NOT_MAPS]
     if r.returncode != 0:
         return []
     known = [m for m in DEFAULT_MAPS if m in names]

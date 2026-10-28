@@ -17,3 +17,7 @@ opt-level = 1
 
 [profile.dev.package."*"]
 opt-level = 3
+
+# the release downloads: no debug symbols (they doubled the program's size)
+[profile.release]
+strip = true
