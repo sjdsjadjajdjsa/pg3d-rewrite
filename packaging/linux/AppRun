@@ -1,0 +1,5 @@
+#!/bin/sh
+# AppImage entry point. The game sits next to its exporter, which it copies to
+# ~/.local/share/pg3d-rewrite on the first start (the AppImage itself is read-only).
+HERE="$(dirname "$(readlink -f "$0")")"
+exec "$HERE/pg3d-rewrite" "$@"

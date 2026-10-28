@@ -15,7 +15,8 @@ use std::{
 };
 
 /// The exporter project: PG3D_RE, else ../exporter from the working folder (`cargo run` in
-/// game/), else exporter/ next to the program (the release downloads).
+/// game/), else exporter/ next to the program (the release downloads). The import writes
+/// into it, so a read-only copy (the AppImage) is copied to the user's data folder first.
 pub fn exporter_dir() -> PathBuf {
     static DIR: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
     DIR.get_or_init(|| {
@@ -26,9 +27,64 @@ pub fn exporter_dir() -> PathBuf {
         let candidates = [Some(PathBuf::from("../exporter")), exe.map(|d| d.join("exporter"))];
         let found = candidates.into_iter().flatten().find(|d| d.join("scripts/setup.py").is_file());
         let dir = found.unwrap_or_else(|| PathBuf::from("../exporter"));
-        std::path::absolute(&dir).unwrap_or(dir)
+        let dir = std::path::absolute(&dir).unwrap_or(dir);
+        if std::env::var_os("APPIMAGE").is_some()
+            && let Some(copy) = writable_copy(&dir)
+        {
+            return copy;
+        }
+        dir
     })
     .clone()
+}
+
+/// The AppImage's exporter in ~/.local/share/pg3d-rewrite/exporter (or $XDG_DATA_HOME), copied
+/// again when this version differs from the copy's. The import's own files (private/,
+/// tools/) stay.
+fn writable_copy(bundled: &Path) -> Option<PathBuf> {
+    let base = std::env::var_os("XDG_DATA_HOME")
+        .map(PathBuf::from)
+        .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".local/share")))?;
+    let dest = base.join("pg3d-rewrite/exporter");
+    let stamp = dest.join("version.txt");
+    let version = env!("CARGO_PKG_VERSION");
+    if std::fs::read_to_string(&stamp).ok().as_deref() == Some(version) {
+        return Some(dest);
+    }
+    info!("copying the exporter to {}", dest.display());
+    let entries = std::fs::read_dir(bundled).ok()?;
+    for e in entries.flatten() {
+        let name = e.file_name();
+        let target = dest.join(&name);
+        if target.exists() {
+            let _ = if target.is_dir() { std::fs::remove_dir_all(&target) } else { std::fs::remove_file(&target) };
+        }
+        copy_tree(&e.path(), &target).ok()?;
+    }
+    std::fs::write(&stamp, version).ok()?;
+    Some(dest)
+}
+
+/// Copies a file or folder (symbolic links as links, permissions kept).
+fn copy_tree(from: &Path, to: &Path) -> std::io::Result<()> {
+    let meta = std::fs::symlink_metadata(from)?;
+    if let Some(parent) = to.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    if meta.file_type().is_symlink() {
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(std::fs::read_link(from)?, to)?;
+        return Ok(());
+    }
+    if meta.is_dir() {
+        std::fs::create_dir_all(to)?;
+        for e in std::fs::read_dir(from)? {
+            let e = e?;
+            copy_tree(&e.path(), &to.join(e.file_name()))?;
+        }
+        return Ok(());
+    }
+    std::fs::copy(from, to).map(|_| ())
 }
 
 /// The game install the files were imported from, when it has changed since (a Pixel Gun 3D

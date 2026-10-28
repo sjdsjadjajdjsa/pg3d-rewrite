@@ -44,7 +44,7 @@ Then download the newest version from [Releases](https://github.com/sjdsjadjajdj
 
 | | Download | Run |
 | --- | --- | --- |
-| **Linux** | `pg3d-rewrite-linux-x86_64.tar.gz` | Unpack it and run `./pg3d-rewrite` from inside the folder. Needs glibc 2.35 or newer (Ubuntu 22.04, Fedora 36, Arch and so on). |
+| **Linux** | `pg3d-rewrite-x86_64.AppImage` | Mark it executable (right-click, Properties, or `chmod +x`) and run it. Needs glibc 2.35 or newer (Ubuntu 22.04, Fedora 36, Arch and so on). It keeps the imported files in `~/.local/share/pg3d-rewrite`. `pg3d-rewrite-linux-x86_64.tar.gz` is the same as a plain folder. |
 | **Windows** | `pg3d-rewrite-setup-x86_64.exe` | Run it. Installs for your user only, with no admin rights, and adds a Start menu entry. |
 
 Windows will say the publisher is unknown, as the program isn't signed: click "More info", then "Run anyway". `pg3d-rewrite-windows-x86_64.zip` is the same without an installer. Both downloads bring their own Python for the import, so there's nothing else to install.

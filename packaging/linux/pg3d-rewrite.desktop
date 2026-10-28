@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=pg3d-rewrite
+Comment=Fan-made Pixel Gun 3D rewrite, played with your own copy of the game
+Exec=pg3d-rewrite
+Icon=pg3d-rewrite
+Terminal=false
+Categories=Game;ActionGame;

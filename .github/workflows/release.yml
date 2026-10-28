@@ -25,7 +25,9 @@ jobs:
           - os: ubuntu-24.04
             container: ubuntu:22.04
             python: x86_64-unknown-linux-gnu
-            assets: pg3d-rewrite-linux-x86_64.tar.gz
+            assets: |
+              pg3d-rewrite-x86_64.AppImage
+              pg3d-rewrite-linux-x86_64.tar.gz
           - os: windows-latest
             python: x86_64-pc-windows-msvc
             assets: |
@@ -40,7 +42,7 @@ jobs:
         if: runner.os == 'Linux'
         env:
           DEBIAN_FRONTEND: noninteractive
-        run: apt-get update && apt-get install -y --no-install-recommends ca-certificates curl git build-essential pkg-config libasound2-dev libudev-dev libwayland-dev libxkbcommon-dev
+        run: apt-get update && apt-get install -y --no-install-recommends ca-certificates curl git file build-essential pkg-config libasound2-dev libudev-dev libwayland-dev libxkbcommon-dev
       - uses: actions/checkout@v7
         with:
           persist-credentials: false
@@ -81,7 +83,15 @@ jobs:
           tar xzf python.tar.gz -C $ex
       - name: Pack (Linux)
         if: runner.os == 'Linux'
-        run: tar czf pg3d-rewrite-linux-x86_64.tar.gz -C dist pg3d-rewrite
+        run: |
+          tar czf pg3d-rewrite-linux-x86_64.tar.gz -C dist pg3d-rewrite
+          app=dist/AppDir
+          cp -a dist/pg3d-rewrite $app
+          cp packaging/linux/AppRun packaging/linux/pg3d-rewrite.desktop packaging/linux/pg3d-rewrite.png $app/
+          ln -s pg3d-rewrite.png $app/.DirIcon
+          curl -fsSL -o appimagetool https://github.com/AppImage/appimagetool/releases/download/continuous/appimagetool-x86_64.AppImage
+          chmod +x appimagetool
+          APPIMAGE_EXTRACT_AND_RUN=1 ARCH=x86_64 ./appimagetool --no-appstream $app pg3d-rewrite-x86_64.AppImage
       - name: Pack (Windows)
         if: runner.os == 'Windows'
         shell: pwsh
